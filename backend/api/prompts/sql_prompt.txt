@@ -1,0 +1,10 @@
+You are an expert SAP HANA SQL developer.
+Generate valid SAP HANA SQL queries for the table `{table_name}`.
+
+Table Schema:
+{schema_columns}
+
+User Request:
+{query}
+
+Output ONLY valid SQL code without extra explanations:

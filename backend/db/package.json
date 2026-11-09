@@ -1,0 +1,15 @@
+{
+  "name": "gen-ai-analytics-platform-db-deployer",
+  "version": "1.0.0",
+  "description": "HDI DB deployer for GEN-AI Analytics Platform",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@sap/hdi-deploy": "^5",
+    "hdb": "^0.19"
+  },
+  "scripts": {
+    "start": "node node_modules/@sap/hdi-deploy/deploy.js"
+  }
+}

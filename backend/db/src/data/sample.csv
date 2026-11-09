@@ -1,0 +1,6 @@
+Order_ID,Order_Date,Region,Country,Item_Type,Sales_Channel,Order_Priority,Units_Sold,Unit_Price,Unit_Cost,Total_Revenue,Total_Cost,Total_Profit
+10001,2024-01-15,North America,United States,Cosmetics,Online,H,500,150.00,90.00,75000.00,45000.00,30000.00
+10002,2024-01-18,Europe,Germany,Clothes,Offline,M,400,120.00,70.00,48000.00,28000.00,20000.00
+10003,2024-02-02,Asia Pacific,Japan,Office Supplies,Online,L,800,65.00,35.00,52000.00,28000.00,24000.00
+10004,2024-02-14,North America,Canada,Beverages,Online,C,1200,40.00,22.00,48000.00,26400.00,21600.00
+10005,2024-03-01,Latin America,Brazil,Household,Offline,H,350,210.00,140.00,73500.00,49000.00,24500.00

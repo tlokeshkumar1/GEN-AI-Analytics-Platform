@@ -1,0 +1,6 @@
+{
+  "name": "NEOVATIC GEN-AI - SAP HANA & AI Core",
+  "description": "Executive sales and analytics intelligence suite powered by SAP HANA Vector & AI Core with Graph Studio, RAG Chat, Dataset Ingestion, and Text-to-SQL Analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

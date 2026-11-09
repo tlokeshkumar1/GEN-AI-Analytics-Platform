@@ -1,0 +1,11 @@
+venv/
+.venv/
+api/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+db/
+preprocessing/input/
+preprocessing/output/

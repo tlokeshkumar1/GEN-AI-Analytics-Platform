@@ -1,0 +1,98 @@
+{
+  "xsappname": "gen-ai-analytics-platform",
+  "tenant-mode": "dedicated",
+  "description": "Security configuration for GEN-AI Analytics Platform",
+  "scopes": [
+    {
+      "name": "$XSAPPNAME.Member",
+      "description": "Member"
+    },
+    {
+      "name": "$XSAPPNAME.Admin",
+      "description": "Administrator"
+    },
+    {
+      "name": "uaa.user",
+      "description": "UAA"
+    }
+  ],
+  "attributes": [],
+  "foreign-scope-references": [
+    "xs_user.read",
+    "xs_authorization.read"
+  ],
+  "role-templates": [
+    {
+      "name": "Member",
+      "description": "Member",
+      "scope-references": [
+        "$XSAPPNAME.Member"
+      ],
+      "attribute-references": []
+    },
+    {
+      "name": "Admin",
+      "description": "Administrator",
+      "scope-references": [
+        "$XSAPPNAME.Admin"
+      ],
+      "attribute-references": []
+    },
+    {
+      "name": "UserManagementReader",
+      "description": "Read project users and their role collections",
+      "scope-references": [
+        "xs_user.read",
+        "xs_authorization.read"
+      ],
+      "attribute-references": []
+    },
+    {
+      "name": "Token_Exchange",
+      "description": "UAA Token Exchange",
+      "scope-references": [
+        "uaa.user"
+      ],
+      "attribute-references": []
+    }
+  ],
+  "role-collections": [
+    {
+      "name": "GEN-AI Analytics Platform Member (dev)",
+      "description": "Member Access",
+      "role-template-references": [
+        "$XSAPPNAME.Member",
+        "$XSAPPNAME.Token_Exchange"
+      ]
+    },
+    {
+      "name": "GEN-AI Analytics Platform Administrator (dev)",
+      "description": "Administrator Access",
+      "role-template-references": [
+        "$XSAPPNAME.Admin",
+        "$XSAPPNAME.Token_Exchange"
+      ]
+    },
+    {
+      "name": "GEN-AI Analytics Platform User Management (dev)",
+      "description": "Read-only directory permissions for platform administrators",
+      "role-template-references": [
+        "$XSAPPNAME.UserManagementReader"
+      ]
+    }
+  ],
+  "oauth2-configuration": {
+    "token-validity": 900,
+    "redirect-uris": [
+      "https://*.hana.ondemand.com/**",
+      "https://*.applicationstudio.cloud.sap/**",
+      "http*://*.cfapps.*.hana.ondemand.com/**",
+      "http://*.localhost:3000/**",
+      "http://localhost:3000/**"
+    ],
+    "credential-types": [
+      "binding-secret",
+      "x509"
+    ]
+  }
+}
