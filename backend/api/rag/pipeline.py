@@ -556,28 +556,35 @@ class RAGPipeline:
         if not order_data:
             return None
 
-        base_qty = params.get('base_qty') or int(order_data.get('Quantity') or 1)
-        revenue = float(order_data.get('NetRevenueUSD') or 0)
-        cost = float(order_data.get('TotalCostUSD', order_data.get('CostUSD', 0)) or 0)
-        margin = float(order_data.get('GrossMarginUSD') or (revenue - cost))
+        base_qty = params.get('base_qty') or int(order_data.get('Quantity') or order_data.get('Units') or order_data.get('Volume') or 1)
+        rev_val = order_data.get('NetRevenueUSD') or order_data.get('Revenue') or order_data.get('Sales') or order_data.get('TotalAmount')
+        cost_val = order_data.get('TotalCostUSD') or order_data.get('CostUSD') or order_data.get('Cost') or order_data.get('TotalCost')
+        margin_val = order_data.get('GrossMarginUSD') or order_data.get('Profit') or order_data.get('Margin')
 
-        unit_price = revenue / base_qty if base_qty > 0 else float(order_data.get('NetUnitPriceUSD') or 0)
-        unit_cost = cost / base_qty if base_qty > 0 else float(order_data.get('UnitCostUSD') or 0)
+        if rev_val is None and cost_val is None:
+            return None
+
+        revenue = float(rev_val or 0)
+        cost = float(cost_val or 0)
+        margin = float(margin_val or (revenue - cost))
+
+        unit_price = revenue / base_qty if base_qty > 0 else float(order_data.get('NetUnitPriceUSD') or order_data.get('UnitPrice') or 0)
+        unit_cost = cost / base_qty if base_qty > 0 else float(order_data.get('UnitCostUSD') or order_data.get('UnitCost') or 0)
 
         sim_revenue = unit_price * new_qty
         sim_cost = unit_cost * new_qty
         sim_margin = sim_revenue - sim_cost
         sim_margin_pct = (sim_margin / sim_revenue * 100.0) if sim_revenue > 0 else 0.0
 
-        base_margin_pct = float(order_data.get('GrossMarginPercent') or (margin / revenue * 100.0 if revenue > 0 else 0.0))
+        base_margin_pct = float(order_data.get('GrossMarginPercent') or order_data.get('MarginPercent') or (margin / revenue * 100.0 if revenue > 0 else 0.0))
         delta_rev = sim_revenue - revenue
         delta_cost = sim_cost - cost
         delta_margin = sim_margin - margin
         delta_qty = new_qty - base_qty
 
-        product = order_data.get('ProductName', 'N/A')
-        customer = order_data.get('CustomerName', 'N/A')
-        country = order_data.get('Country', 'N/A')
+        product = order_data.get('ProductName') or order_data.get('Product') or order_data.get('Item') or 'N/A'
+        customer = order_data.get('CustomerName') or order_data.get('Customer') or order_data.get('Client') or 'N/A'
+        country = order_data.get('Country') or order_data.get('Region') or 'N/A'
 
         def fmt_curr(val):
             return f"${val:,.2f}"
@@ -625,25 +632,36 @@ class RAGPipeline:
         return None
 
     def _compute_margin_drivers(self, year: Optional[int]) -> Optional[Dict[str, Any]]:
-        """Calculate primary margin drivers directly in SAP HANA Cloud."""
+        """Calculate primary margin drivers directly in SAP HANA Cloud if appropriate columns exist."""
         from api.database.hana_client import hana_client
+        from api.database.hana_table_service import hana_table_service
         from api.platform.datasets_metadata_repository import datasets_metadata_repo
         target_year = year or 2024
         from api.models.execution_context import current_selection
         sel = current_selection.get()
         hint = sel.entry.get("physical_table_name") or sel.entry.get("name") if sel and sel.entry else None
         target_table = datasets_metadata_repo._resolve_physical_table(hint)
+
+        # Verify table has required columns for this specific calculation; otherwise fall through to general query planner
+        cols = {c["name"].upper() for c in hana_table_service.get_table_columns(target_table)}
+        if not {"CATEGORY", "NETREVENUEUSD", "GROSSMARGINUSD"}.issubset(cols):
+            return None
+
+        has_year = "YEAR" in cols
+        where_clause = "WHERE YEAR = ?" if has_year else ""
+        query_params = (target_year,) if has_year else ()
+
         sql = f'''
             SELECT CATEGORY, 
                    ROUND(SUM(NETREVENUEUSD), 2) AS REVENUE, 
                    ROUND(SUM(GROSSMARGINUSD), 2) AS MARGIN, 
                    ROUND(SUM(GROSSMARGINUSD) * 100.0 / NULLIF(SUM(NETREVENUEUSD), 0), 2) AS MARGIN_PCT 
             FROM "{target_table}" 
-            WHERE YEAR = ?
+            {where_clause}
             GROUP BY CATEGORY 
             ORDER BY MARGIN DESC
         '''
-        rows = hana_client.execute_query(sql, (target_year,))
+        rows = hana_client.execute_query(sql, query_params)
         if not rows:
             return None
 
@@ -695,18 +713,26 @@ class RAGPipeline:
         return any(p in q for p in patterns)
 
     def _compute_product_catalog(self) -> Optional[Dict[str, Any]]:
-        """Fetch distinct product catalog grouped by category from SAP HANA Cloud."""
+        """Fetch distinct product catalog grouped by category from SAP HANA Cloud if applicable."""
         from api.database.hana_client import hana_client
+        from api.database.hana_table_service import hana_table_service
         from api.platform.datasets_metadata_repository import datasets_metadata_repo
         from api.models.execution_context import current_selection
         sel = current_selection.get()
         hint = sel.entry.get("physical_table_name") or sel.entry.get("name") if sel and sel.entry else None
         target_table = datasets_metadata_repo._resolve_physical_table(hint)
+
+        cols = {c["name"].upper() for c in hana_table_service.get_table_columns(target_table)}
+        if not {"CATEGORY", "PRODUCTNAME"}.issubset(cols):
+            return None
+
+        revenue_col = "ROUND(SUM(NETREVENUEUSD), 2) AS TOTAL_REVENUE" if "NETREVENUEUSD" in cols else "COUNT(*) AS TOTAL_REVENUE"
+        order_col = "TOTAL_REVENUE DESC" if "NETREVENUEUSD" in cols else "ORDER_COUNT DESC"
         sql = f'''
-            SELECT CATEGORY, PRODUCTNAME, COUNT(*) AS ORDER_COUNT, ROUND(SUM(NETREVENUEUSD), 2) AS TOTAL_REVENUE
+            SELECT CATEGORY, PRODUCTNAME, COUNT(*) AS ORDER_COUNT, {revenue_col}
             FROM "{target_table}"
             GROUP BY CATEGORY, PRODUCTNAME
-            ORDER BY CATEGORY, TOTAL_REVENUE DESC
+            ORDER BY CATEGORY, {order_col}
         '''
         rows = hana_client.execute_query(sql)
         if not rows:
@@ -837,28 +863,35 @@ class RAGPipeline:
         if not order_data:
             return None
 
-        base_qty = params.get('base_qty') or int(order_data.get('Quantity') or 1)
-        revenue = float(order_data.get('NetRevenueUSD') or 0)
-        cost = float(order_data.get('TotalCostUSD', order_data.get('CostUSD', 0)) or 0)
-        margin = float(order_data.get('GrossMarginUSD') or (revenue - cost))
+        base_qty = params.get('base_qty') or int(order_data.get('Quantity') or order_data.get('Units') or order_data.get('Volume') or 1)
+        rev_val = order_data.get('NetRevenueUSD') or order_data.get('Revenue') or order_data.get('Sales') or order_data.get('TotalAmount')
+        cost_val = order_data.get('TotalCostUSD') or order_data.get('CostUSD') or order_data.get('Cost') or order_data.get('TotalCost')
+        margin_val = order_data.get('GrossMarginUSD') or order_data.get('Profit') or order_data.get('Margin')
 
-        unit_price = revenue / base_qty if base_qty > 0 else float(order_data.get('NetUnitPriceUSD') or 0)
-        unit_cost = cost / base_qty if base_qty > 0 else float(order_data.get('UnitCostUSD') or 0)
+        if rev_val is None and cost_val is None:
+            return None
+
+        revenue = float(rev_val or 0)
+        cost = float(cost_val or 0)
+        margin = float(margin_val or (revenue - cost))
+
+        unit_price = revenue / base_qty if base_qty > 0 else float(order_data.get('NetUnitPriceUSD') or order_data.get('UnitPrice') or 0)
+        unit_cost = cost / base_qty if base_qty > 0 else float(order_data.get('UnitCostUSD') or order_data.get('UnitCost') or 0)
 
         sim_revenue = unit_price * new_qty
         sim_cost = unit_cost * new_qty
         sim_margin = sim_revenue - sim_cost
         sim_margin_pct = (sim_margin / sim_revenue * 100.0) if sim_revenue > 0 else 0.0
 
-        base_margin_pct = float(order_data.get('GrossMarginPercent') or (margin / revenue * 100.0 if revenue > 0 else 0.0))
+        base_margin_pct = float(order_data.get('GrossMarginPercent') or order_data.get('MarginPercent') or (margin / revenue * 100.0 if revenue > 0 else 0.0))
         delta_rev = sim_revenue - revenue
         delta_cost = sim_cost - cost
         delta_margin = sim_margin - margin
         delta_qty = new_qty - base_qty
 
-        product = order_data.get('ProductName', 'N/A')
-        customer = order_data.get('CustomerName', 'N/A')
-        country = order_data.get('Country', 'N/A')
+        product = order_data.get('ProductName') or order_data.get('Product') or order_data.get('Item') or 'N/A'
+        customer = order_data.get('CustomerName') or order_data.get('Customer') or order_data.get('Client') or 'N/A'
+        country = order_data.get('Country') or order_data.get('Region') or 'N/A'
 
         def fmt_curr(val):
             return f"${val:,.2f}"

@@ -724,13 +724,14 @@ class HANATableService:
         from_id: Optional[str] = None,
         to_id: Optional[str] = None,
         condition: Optional[str] = None,
+        key_values: Optional[Dict[str, List[Any]]] = None,
     ) -> Dict[str, Any]:
         """
-        Delete a specified range of records from a SAP HANA Cloud table.
+        Delete a specified range of records from a SAP HANA Cloud table safely with parameterized SQL.
         Supports:
         - row_range: delete rows from row N to row M (e.g. from row 1 to row 50)
         - id_range: delete rows where ID >= from_id and ID <= to_id
-        - condition: delete rows matching a safe WHERE expression
+        - key_values: delete rows matching parameterized column values (no raw SQL injection)
         """
         clean_table = self.sanitize_identifier(table_name)
         conn = db_manager.get_connection()
@@ -800,24 +801,50 @@ class HANATableService:
                 deleted_count = cursor.rowcount if cursor.rowcount >= 0 else 0
                 conn.commit()
 
-            elif mode == "condition":
-                if not condition or not condition.strip():
-                    raise ValueError("Condition cannot be empty.")
-                cond_clean = condition.strip().rstrip(";")
-                if ";" in cond_clean or "--" in cond_clean or "/*" in cond_clean:
-                    raise ValueError("Multiple statements or SQL comments not allowed in condition.")
+            elif mode in ("key_values", "condition"):
+                where_clauses = []
+                params = []
+                if key_values:
+                    for col_key, val_list in key_values.items():
+                        matched_col = next((c for c in col_names if c.upper() == col_key.upper()), None)
+                        if not matched_col:
+                            raise ValueError(f"Unknown column '{col_key}' in deletion filter.")
+                        clean_col = matched_col.replace('"', '""')
+                        if isinstance(val_list, list) and val_list:
+                            placeholders = ", ".join(["?"] * len(val_list))
+                            where_clauses.append(f'"{clean_col}" IN ({placeholders})')
+                            params.extend(val_list)
+                        elif val_list is not None:
+                            where_clauses.append(f'"{clean_col}" = ?')
+                            params.append(val_list)
+                elif condition:
+                    # Parse simple equality condition safely (e.g. "STATUS = 'archived'" or "YEAR = 2023")
+                    cond_clean = condition.strip().rstrip(";")
+                    # Block any dangerous SQL keywords or comment syntax
+                    if ";" in cond_clean or "--" in cond_clean or "/*" in cond_clean:
+                        raise ValueError("Comments or statement terminators are not permitted in condition.")
+                    m = re.match(r'^["\']?([A-Za-z0-9_]+)["\']?\s*(=|!=|>|<|>=|<=)\s*["\']?([^"\']+)["\']?$', cond_clean)
+                    if not m:
+                        raise ValueError("Conditions must use simple parameterized comparisons (e.g. COLUMN = VALUE) or keyValues.")
+                    c_col, c_op, c_val = m.groups()
+                    matched_col = next((c for c in col_names if c.upper() == c_col.upper()), None)
+                    if not matched_col:
+                        raise ValueError(f"Unknown column '{c_col}' in condition.")
+                    clean_col = matched_col.replace('"', '""')
+                    where_clauses.append(f'"{clean_col}" {c_op} ?')
+                    params.append(c_val)
+                else:
+                    raise ValueError("Either 'keyValues' or a simple equality 'condition' must be specified.")
 
-                forbidden = [r"\bDROP\b", r"\bALTER\b", r"\bTRUNCATE\b", r"\bEXEC\b", r"\bGRANT\b"]
-                for p in forbidden:
-                    if re.search(p, cond_clean, flags=re.IGNORECASE):
-                        raise ValueError(f"Forbidden keyword in condition: {p}")
+                if not where_clauses:
+                    raise ValueError("No valid deletion criteria provided.")
 
-                delete_sql = f'DELETE FROM "{clean_table}" WHERE {cond_clean}'
-                cursor.execute(delete_sql)
+                delete_sql = f'DELETE FROM "{clean_table}" WHERE {" AND ".join(where_clauses)}'
+                cursor.execute(delete_sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount >= 0 else 0
                 conn.commit()
             else:
-                raise ValueError(f"Unsupported delete mode '{mode}'. Choose 'row_range', 'id_range', or 'condition'.")
+                raise ValueError(f"Unsupported delete mode '{mode}'. Choose 'row_range', 'id_range', or 'key_values'.")
 
             # Fetch updated total row count
             cursor.execute(f'SELECT COUNT(*) FROM "{clean_table}"')

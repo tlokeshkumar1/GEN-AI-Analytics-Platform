@@ -43,10 +43,12 @@ def startup_init_chat_tables():
         logging.getLogger("app").warning(f"Chat history table init skipped: {e}")
 
 # CORS configuration
+allowed_origins_list = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
 app.add_middleware(DatasetContextMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins_list,
+    allow_origin_regex=r"^https:\/\/.*(?:\.hana\.ondemand\.com|\.applicationstudio\.cloud\.sap|\.cfapps\..*\.hana\.ondemand\.com)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

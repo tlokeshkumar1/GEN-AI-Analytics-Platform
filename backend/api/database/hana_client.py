@@ -13,6 +13,7 @@ class HANAClient:
             logger.error("HANA Database connection is not active.")
             return []
         
+        cursor = None
         try:
             cursor = conn.cursor()
             cursor.execute(sql, params)
@@ -33,14 +34,20 @@ class HANAClient:
             else:
                 results = []
             conn.commit()
-            cursor.close()
-            # Return connection to pool instead of closing
-            db_manager.return_connection(conn)
             return results
         except Exception as e:
             logger.error(f"Error executing SQL in HANA: {e}")
-            # Return connection to pool even on error
-            db_manager.return_connection(conn)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             raise e
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            db_manager.return_connection(conn)
 
 hana_client = HANAClient()

@@ -21,6 +21,7 @@ export interface ChatResponse {
   chart_type?: string;
   insights?: string;
   intent?: string;
+  cosine_score?: number | string;
   processing?: ProcessingStep[];
   records_matched?: number;
   type?: string;

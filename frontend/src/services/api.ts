@@ -25,6 +25,8 @@ export function setAuthToken(token: string | null) {
   }
 }
 
+let cachedCsrfToken: string | null = null;
+
 api.interceptors.request.use((config) => {
   Object.entries(contextHeaders()).forEach(([key, value]) => {
     if (config.headers && typeof (config.headers as any).set === 'function') {
@@ -41,11 +43,34 @@ api.interceptors.request.use((config) => {
       config.headers['Authorization'] = `Bearer ${token}`;
     }
   }
+
+  // AppRouter CSRF Token Handling for state-changing requests
+  const method = (config.method || 'get').toLowerCase();
+  if (method === 'get' || method === 'head') {
+    if (config.headers && typeof (config.headers as any).set === 'function') {
+      (config.headers as any).set('x-csrf-token', 'Fetch');
+    } else {
+      config.headers['x-csrf-token'] = 'Fetch';
+    }
+  } else if (cachedCsrfToken) {
+    if (config.headers && typeof (config.headers as any).set === 'function') {
+      (config.headers as any).set('x-csrf-token', cachedCsrfToken);
+    } else {
+      config.headers['x-csrf-token'] = cachedCsrfToken;
+    }
+  }
+
   return config;
 });
 
 api.interceptors.response.use(
   (response) => {
+    // Capture CSRF token from response headers if AppRouter supplies one
+    const csrfToken = response.headers['x-csrf-token'];
+    if (csrfToken && csrfToken !== 'Required') {
+      cachedCsrfToken = csrfToken;
+    }
+
     if (typeof response.data === 'string' &&
         (String(response.headers['content-type']).includes('text/html') || /^\s*<(?:!doctype|html)/i.test(response.data))) {
       const message = 'SAP returned a sign-in page instead of API data. Sign in again; if this repeats, check the application router API destination.';

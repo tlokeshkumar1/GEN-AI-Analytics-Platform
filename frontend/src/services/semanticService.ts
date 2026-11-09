@@ -54,14 +54,14 @@ export interface AnalyticsDefinition {
 
 export interface ExecutionResult {
   success: boolean;
-  status: string;
+  status?: string;
   data: Record<string, unknown>[];
   summary: Record<string, unknown>;
   records_matched: number;
-  records_total: number;
+  records_total?: number;
   execution_time_ms: number;
   error?: string;
-  context: Record<string, unknown>;
+  context?: Record<string, unknown>;
   execution_backend: string;
 }
 

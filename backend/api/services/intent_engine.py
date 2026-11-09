@@ -276,10 +276,10 @@ class IntentEngine:
                 for c in candidates:
                     if re.search(r'\b' + re.escape(c) + r'\b', p):
                         return f.name
-            if any(k in p for k in ["total", "sum", "average", "avg", "trend", "overall"]):
-                measures = [f.name for f in active_model.fields if f.role == "measure"]
-                if measures:
-                    return measures[0]
+            # Only default to single measure if the dataset strictly has exactly one measure
+            measures = [f.name for f in active_model.fields if f.role == "measure"]
+            if len(measures) == 1 and any(k in p for k in ["total", "sum", "average", "avg", "trend", "overall"]):
+                return measures[0]
 
         target_df = df
         if target_df is None:
@@ -296,7 +296,8 @@ class IntentEngine:
                 clean_no_usd = clean_col.replace('usd', '').replace('eur', '').replace('inr', '')
                 if clean_col in p or clean_no_usd in p or clean_col.replace('_', ' ') in p:
                     return col
-            if nums and any(k in p for k in ["total", "sum", "average", "avg", "how much", "cost", "salary", "revenue", "price", "rate"]):
+            # Only default if exactly one numeric metric exists
+            if len(nums) == 1 and any(k in p for k in ["total", "sum", "average", "avg", "how much", "cost", "salary", "revenue", "price", "rate"]):
                 return nums[0]
 
         return None

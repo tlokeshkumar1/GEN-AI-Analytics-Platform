@@ -276,8 +276,12 @@ class AnalyticsEngine:
                     row_dict[alias] = json_value(val)
                 clean_rows.append(row_dict)
 
-            result.records_total = 20000
-            result.records_matched = len(clean_rows) if plan.dimensions else 20000
+            # Determine actual records in target HANA table dynamically
+            count_rows = hana_client.execute_query(f'SELECT COUNT(*) AS CNT FROM "{target_table}"')
+            total_in_db = int(count_rows[0].get("CNT") or 0) if count_rows else len(clean_rows)
+
+            result.records_total = total_in_db
+            result.records_matched = len(clean_rows) if plan.dimensions else total_in_db
             result.data = clean_rows
             result.success = True
             result.status = "success"

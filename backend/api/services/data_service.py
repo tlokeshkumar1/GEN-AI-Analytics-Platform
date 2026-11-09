@@ -179,11 +179,15 @@ class DataService:
                     nums = [c for c in df.select_dtypes(include=['number']).columns if not c.lower().endswith(('id', 'code', 'key'))]
                     if date_cols and nums:
                         t_col, m_col = date_cols[0], nums[0]
-                        grouped = df.groupby(t_col)[m_col].sum().reset_index().head(12)
+                        profit_col = next((c for c in nums if any(k in c.lower() for k in ["profit", "margin", "grossmargin", "gain"])), None)
+                        agg_dict = {m_col: "sum"}
+                        if profit_col and profit_col != m_col:
+                            agg_dict[profit_col] = "sum"
+                        grouped = df.groupby(t_col).agg(agg_dict).reset_index().head(12)
                         return [{
                             "month": str(r[t_col]),
                             "revenue": round(float(r[m_col]), 2),
-                            "profit": round(float(r[m_col]) * 0.3, 2)
+                            "profit": round(float(r[profit_col]), 2) if (profit_col and profit_col in r and pd.notna(r[profit_col])) else None
                         } for _, r in grouped.iterrows()]
         except Exception as exc:
             logger.debug(f"Dynamic trend fallback check: {exc}")

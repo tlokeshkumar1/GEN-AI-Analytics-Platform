@@ -12,6 +12,7 @@ logger = get_logger("services.excel_dataset_service")
 class ExcelDatasetService:
     def __init__(self):
         self._df: Optional[pd.DataFrame] = None
+        self._records_count: Optional[int] = None
         self._data_as_of: Optional[datetime] = None
         self._file_mtime: Optional[float] = None
         self._last_load_time: Optional[datetime] = None
@@ -46,20 +47,26 @@ class ExcelDatasetService:
                 hint = sel.entry.get("physical_table_name") or sel.entry.get("name")
             target_table = datasets_metadata_repo._resolve_physical_table(hint)
 
-            rows = hana_client.execute_query(f'SELECT * FROM "{target_table}"')
+            # Query actual total count safely from HANA
+            cnt_rows = hana_client.execute_query(f'SELECT COUNT(*) AS CNT FROM "{target_table}"')
+            self._records_count = int(cnt_rows[0].get("CNT") or 0) if cnt_rows else None
+
+            # Bounded sample (e.g. 2000 rows) for schema introspection without OOM on Cloud Foundry
+            rows = hana_client.execute_query(f'SELECT * FROM "{target_table}" LIMIT 2000')
             if rows:
                 self._df = pd.DataFrame(rows)
                 self._loaded_path = None
                 self._file_mtime = None
                 self._data_as_of = datetime.now(timezone.utc)
                 self._last_load_time = datetime.now(timezone.utc)
-                logger.info(f"Loaded {len(self._df)} rows directly from SAP HANA Cloud table '{target_table}'.")
+                logger.info(f"Loaded schema sample of {len(self._df)} rows (Total: {self._records_count}) from SAP HANA Cloud table '{target_table}'.")
                 return self._df
         except Exception as e:
             logger.warning(f"Could not load directly from SAP HANA Cloud: {e}")
 
         logger.warning("Returning empty DataFrame until active in SAP HANA Cloud.")
         self._df = pd.DataFrame()
+        self._records_count = 0
         self._data_as_of = None
         self._file_mtime = None
         self._last_load_time = datetime.now(timezone.utc)
@@ -89,7 +96,10 @@ class ExcelDatasetService:
 
     def get_records_in_source(self) -> int:
         """Return the total number of records in the source dataset."""
-        return len(self.get_df())
+        if self._records_count is not None:
+            return self._records_count
+        df = self.get_df()
+        return len(df) if df is not None else 0
 
     def get_dataset_path(self) -> Path:
         return self._resolve_dataset_path()

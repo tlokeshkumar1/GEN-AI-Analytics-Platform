@@ -56,8 +56,10 @@ def validate_token(token: str, credentials: dict | None = None) -> tuple:
     if not credentials or not credentials.get("clientid") or not credentials.get("xsappname"):
         raise HTTPException(503, "A complete project XSUAA application binding is required.")
 
-    # Local development token bypass
-    if (os.getenv("APP_ENV", "development") == "development" or not os.getenv("VCAP_APPLICATION")) and token.startswith("dev-token-"):
+    # Local development token bypass (Strictly prohibited in production / Cloud Foundry)
+    is_dev = os.getenv("APP_ENV", "").lower() == "development" and not os.getenv("VCAP_APPLICATION")
+    if is_dev and token.startswith("dev-token-"):
+        logger.warning("Local development mock token used. This is strictly prohibited in production.")
         class LocalDevSecurityContext:
             def check_local_scope(self, scope: str) -> bool:
                 return True

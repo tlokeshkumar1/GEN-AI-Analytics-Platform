@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Optional, Literal
 from fastapi import APIRouter, HTTPException, Query, Body
 from pydantic import BaseModel, Field
 from api.database.hana_table_service import hana_table_service
+from api.models.execution_context import require_admin
 from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/api/hanaadmin", tags=["HANA Cloud Admin"])
@@ -15,6 +16,7 @@ class QueryPayload(BaseModel):
 @router.get("")
 async def hana_admin_overview():
     """HANA Cloud Admin Overview: Database connection status, stats, and live tables."""
+    require_admin()
     try:
         stats = await run_in_threadpool(hana_table_service.get_database_stats)
         tables = await run_in_threadpool(hana_table_service.list_user_tables, include_internal=True)
@@ -32,6 +34,7 @@ async def hana_admin_overview():
 @router.get("/stats")
 async def get_stats():
     """Get SAP HANA Cloud database instance statistics and schema details."""
+    require_admin()
     try:
         stats = await run_in_threadpool(hana_table_service.get_database_stats)
         return stats
@@ -45,6 +48,7 @@ async def list_tables(include_internal: bool = Query(True, description="Include 
     List all tables currently existing in the configured SAP HANA Cloud schema.
     Dynamically and automatically detects any newly created or future tables.
     """
+    require_admin()
     try:
         tables = await run_in_threadpool(hana_table_service.list_user_tables, include_internal=include_internal)
         return {
@@ -59,6 +63,7 @@ async def list_tables(include_internal: bool = Query(True, description="Include 
 @router.get("/tables/{table_name}")
 async def get_table_details(table_name: str):
     """Get metadata, row count, and column schemas for a specific table."""
+    require_admin()
     try:
         exists = await run_in_threadpool(hana_table_service.table_exists, table_name)
         if not exists:
@@ -86,6 +91,7 @@ async def get_table_details(table_name: str):
 @router.get("/tables/{table_name}/schema")
 async def get_table_schema(table_name: str):
     """Get detailed column definitions and types for a table."""
+    require_admin()
     try:
         cols = await run_in_threadpool(hana_table_service.get_table_columns, table_name)
         if not cols:
@@ -116,6 +122,7 @@ async def get_table_data(
     Retrieve paginated records from a HANA Cloud table with search filtering and sorting.
     Automatically handles any existing or future table.
     """
+    require_admin()
     try:
         result = await run_in_threadpool(
             hana_table_service.get_table_data,
@@ -142,6 +149,7 @@ async def execute_sql_query(payload: QueryPayload):
     Execute a read-only SQL SELECT / WITH query against SAP HANA Cloud.
     Safe execution with keyword validation and max row limits.
     """
+    require_admin()
     try:
         result = await run_in_threadpool(
             hana_table_service.execute_read_only_query,
@@ -156,21 +164,22 @@ async def execute_sql_query(payload: QueryPayload):
 
 
 class DeleteRangePayload(BaseModel):
-    mode: Literal["row_range", "id_range", "condition"] = "row_range"
+    mode: Literal["row_range", "id_range", "key_values"] = "row_range"
     fromRow: Optional[int] = Field(None, ge=1, description="Starting row number (1-based)")
     toRow: Optional[int] = Field(None, ge=1, description="Ending row number (1-based)")
     idColumn: Optional[str] = Field(None, description="Identifier column name")
     fromId: Optional[str] = Field(None, description="Starting ID")
     toId: Optional[str] = Field(None, description="Ending ID")
-    condition: Optional[str] = Field(None, description="Custom SQL WHERE condition")
+    keyValues: Optional[Dict[str, List[Any]]] = Field(None, description="Map of column name to values for parameterized deletion")
 
 
 @router.post("/tables/{table_name}/delete-range")
 async def delete_table_range(table_name: str, payload: DeleteRangePayload):
     """
     Delete a range of records from a table in SAP HANA Cloud.
-    Supports row index range (from row X to row Y), ID range, or WHERE condition.
+    Supports row index range (from row X to row Y), ID range, or safe parameterized key-values.
     """
+    require_admin()
     try:
         result = await run_in_threadpool(
             hana_table_service.delete_table_records_range,
@@ -181,7 +190,7 @@ async def delete_table_range(table_name: str, payload: DeleteRangePayload):
             id_col=payload.idColumn,
             from_id=payload.fromId,
             to_id=payload.toId,
-            condition=payload.condition,
+            key_values=payload.keyValues,
         )
         return result
     except ValueError as ve:

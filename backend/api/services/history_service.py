@@ -172,12 +172,28 @@ class ChatHistoryService:
         with self._cursor("list sessions") as cursor:
             cursor.execute("SELECT SESSION_ID, SUBJECT, CREATED_AT, UPDATED_AT FROM CHAT_SESSIONS WHERE USER_ID = ? ORDER BY UPDATED_AT DESC", (user_id,))
             sessions = self._rows(cursor)
+            if not sessions:
+                return []
+
+            # Batch load system context metadata to prevent N+1 query roundtrips
+            session_ids = [s["SESSION_ID"] for s in sessions]
+            placeholders = ", ".join(["?"] * len(session_ids))
+            meta_query = f"SELECT SESSION_ID, METADATA FROM CHAT_MESSAGES WHERE SESSION_ID IN ({placeholders}) AND ROLE = 'system'"
+            cursor.execute(meta_query, tuple(session_ids))
+            meta_map = {}
+            for r in cursor.fetchall():
+                sess_id, meta_raw = r[0], r[1]
+                if sess_id not in meta_map and meta_raw:
+                    try:
+                        meta_map[sess_id] = json.loads(meta_raw).get("context")
+                    except Exception:
+                        meta_map[sess_id] = None
+
+            for session in sessions:
+                session["DATASET_CONTEXT"] = meta_map.get(session["SESSION_ID"])
+
             from api.models.execution_context import current_selection
             selection = current_selection.get()
-            for session in sessions:
-                cursor.execute("SELECT METADATA FROM CHAT_MESSAGES WHERE SESSION_ID = ? AND ROLE = 'system' ORDER BY TIMESTAMP LIMIT 1", (session["SESSION_ID"],))
-                row = cursor.fetchone()
-                session["DATASET_CONTEXT"] = json.loads(row[0]).get("context") if row and row[0] else None
             if selection is not None:
                 return [session for session in sessions if session["DATASET_CONTEXT"] == selection.context.model_dump()]
             return sessions

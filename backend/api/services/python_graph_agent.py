@@ -692,12 +692,53 @@ Generate complete Python code only. No explanation."""
         return code.strip()
 
     def _is_valid_code(self, code: str) -> bool:
-        return (
-            bool(code)
-            and "import pandas" in code
-            and "plt.savefig" in code
-            and "matplotlib.use" in code
-        )
+        """
+        Validate that generated code contains essential visualization commands
+        and strictly passes AST security screening (zero unauthorized imports/calls).
+        """
+        if not code or "plt.savefig" not in code:
+            return False
+
+        import ast
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            logger.warning("[Graph Agent] Code validation failed: SyntaxError in generated script.")
+            return False
+
+        FORBIDDEN_MODULES = {
+            "os", "sys", "subprocess", "shutil", "socket", "urllib", "requests",
+            "http", "posix", "nt", "pty", "commands", "builtins",
+            "importlib", "pickle", "shelve", "ftplib", "smtplib", "multiprocessing"
+        }
+        FORBIDDEN_CALLS = {
+            "eval", "exec", "__import__", "compile", "open", "input"
+        }
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root_mod = alias.name.split(".")[0].lower()
+                    if root_mod in FORBIDDEN_MODULES:
+                        logger.warning(f"[Graph Agent] Security sandbox blocked import: {alias.name}")
+                        return False
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    root_mod = node.module.split(".")[0].lower()
+                    if root_mod in FORBIDDEN_MODULES:
+                        logger.warning(f"[Graph Agent] Security sandbox blocked from-import: {node.module}")
+                        return False
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    if node.func.id in FORBIDDEN_CALLS:
+                        logger.warning(f"[Graph Agent] Security sandbox blocked call: {node.func.id}")
+                        return False
+                elif isinstance(node.func, ast.Attribute):
+                    if node.func.attr in ("system", "popen", "spawn", "exec", "eval"):
+                        logger.warning(f"[Graph Agent] Security sandbox blocked attribute call: {node.func.attr}")
+                        return False
+
+        return True
 
     def _generate_python_code(
         self, prompt: str, output_img_path: str, fallback_mode: bool = False,

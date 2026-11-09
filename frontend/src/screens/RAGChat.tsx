@@ -45,7 +45,7 @@ export interface ChatMessage {
   text?: string;
   agentMeta?: {
     latency: string;
-    cosineSim: string;
+    cosineSim?: string;
     model: string;
   };
   chartData?: {
@@ -138,7 +138,7 @@ export const getTimeGreeting = (date: Date = new Date()): string => {
  * the username portion is cleanly formatted.
  */
 export const resolveUserName = (
-  user?: { name?: string; email?: string; user_id?: string; [key: string]: any } | null,
+  user?: { name?: string; email?: string; user_id?: string;[key: string]: any } | null,
   fallbackName?: string
 ): string => {
   if (fallbackName && typeof fallbackName === 'string' && fallbackName.trim()) {
@@ -1114,8 +1114,8 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                         <div
                           key={thread.id}
                           className={`group relative flex items-center justify-between rounded-xl px-2.5 py-2 transition-all cursor-pointer ${isCurrent
-                              ? 'bg-white border border-slate-200/90 shadow-xs text-slate-900'
-                              : 'hover:bg-white/80 text-slate-600 hover:text-slate-900 border border-transparent'
+                            ? 'bg-white border border-slate-200/90 shadow-xs text-slate-900'
+                            : 'hover:bg-white/80 text-slate-600 hover:text-slate-900 border border-transparent'
                             }`}
                           onClick={() => handleSelectThread(thread.id)}
                         >

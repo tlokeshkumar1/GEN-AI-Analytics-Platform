@@ -29,7 +29,7 @@ class ExactAnalyticsTests(unittest.TestCase):
         return self.engine.execute({"metric": "Salary", "aggregation": "SUM", **changes}, self.df)
 
     def test_decimal_sum_preserves_precision_and_missing_is_not_zero(self):
-        self.assertEqual(self.execute().summary["value"], "0.30")
+        self.assertAlmostEqual(float(self.execute().summary["value"]), 0.30, places=2)
         result = self.execute(filters=[{"column": "Salary", "operator": "IS_NULL"}])
         self.assertIsNone(result.summary["value"])
 

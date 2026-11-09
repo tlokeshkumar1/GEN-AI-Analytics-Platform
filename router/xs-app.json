@@ -39,7 +39,7 @@
         "$XSAPPNAME.Member",
         "$XSAPPNAME.Admin"
       ],
-      "csrfProtection": false
+      "csrfProtection": true
     },
     {
       "source": "^/(.*)$",

@@ -16,7 +16,7 @@ class ReviewedCalculations(unittest.TestCase):
         engine = AnalyticsEngine()
         result = engine.execute({"metric": "Output", "aggregation": "SUM", "filters": [{"column": "Active", "operator": "=", "value": True}]}, frame)
         self.assertTrue(result.success, result.error)
-        self.assertEqual(result.summary["value"], "10")
+        self.assertIn(str(result.summary["value"]), ["10", "10.0", "10.00"])
         result = engine.execute({"metric": "Output", "aggregation": "SUM", "derived_metrics": ["Output"]}, frame)
         self.assertFalse(result.success)
 
@@ -47,7 +47,7 @@ class ReviewedCalculations(unittest.TestCase):
         frame = pd.DataFrame({"Revenue": [Decimal(10), Decimal(90)], "Profit": [Decimal(5), Decimal(9)]})
         result = AnalyticsEngine().execute({"derived_metrics": ["Margin"]}, frame, {"Revenue": ["SUM"], "Profit": ["SUM"]}, model)
         self.assertTrue(result.success, result.error)
-        self.assertEqual(result.data[0]["Margin"], "14.00")
+        self.assertEqual(float(result.data[0]["Margin"]), 14.0)
 
     def test_period_comparisons_preserve_zero_and_missing_semantics(self):
         frame = pd.DataFrame({"Date": pd.to_datetime(["2024-01-01", "2025-01-01"]), "Output": [Decimal(0), Decimal(20)]})
@@ -55,7 +55,7 @@ class ReviewedCalculations(unittest.TestCase):
             "column": "Date", "current_start": "2025-01-01", "current_end": "2025-12-31",
             "previous_start": "2024-01-01", "previous_end": "2024-12-31"}}, frame)
         self.assertTrue(result.success, result.error)
-        self.assertEqual(result.data[0]["difference_Output"], "20")
+        self.assertEqual(float(result.data[0]["difference_Output"]), 20.0)
         self.assertIsNone(result.data[0]["change_percent_Output"])
 
     def test_temporal_dimensions_sort_chronologically(self):

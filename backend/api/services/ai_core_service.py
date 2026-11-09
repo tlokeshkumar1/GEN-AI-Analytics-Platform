@@ -117,7 +117,7 @@ class AICoreService:
                         c_tokens = usage.get("completion_tokens", 0)
                         if p_tokens or c_tokens:
                             try:
-                                from calculate_token_usage import record_token_usage
+                                from api.utils.calculate_token_usage import record_token_usage
                                 record_token_usage(
                                     "AI Core Graph",
                                     f"gpt-4o-mini ({deploy_id or 'default'})",
@@ -181,7 +181,7 @@ class AICoreService:
                     result = data["choices"][0]["message"]["content"]
                     if result and result.strip():
                         try:
-                            from calculate_token_usage import record_token_usage
+                            from api.utils.calculate_token_usage import record_token_usage
                             record_token_usage(
                                 "Intent Engine",
                                 model_name,
@@ -189,23 +189,6 @@ class AICoreService:
                                 data.get("usage", {}).get("completion_tokens", 0),
                                 latency_ms=elapsed_ms
                             )
-                        except ImportError:
-                            try:
-                                import sys
-                                from pathlib import Path
-                                root_p = str(Path(__file__).resolve().parents[3])
-                                if root_p not in sys.path:
-                                    sys.path.insert(0, root_p)
-                                from calculate_token_usage import record_token_usage
-                                record_token_usage(
-                                    "Intent Engine",
-                                    model_name,
-                                    data.get("usage", {}).get("prompt_tokens", 0),
-                                    data.get("usage", {}).get("completion_tokens", 0),
-                                    latency_ms=elapsed_ms
-                                )
-                            except Exception:
-                                pass
                         except Exception:
                             pass
                         self.last_used_model = model_name

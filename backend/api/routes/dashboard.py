@@ -106,11 +106,16 @@ def get_dashboard(refresh: bool = False):
         raise HTTPException(409, "Select a dataset version.")
 
     context = selection.context
+    namespace = semantic_registry.namespace(selection.entry, context.version, f"dashboard:{context.semantic_revision}")
+    publication = semantic_registry.store.get(namespace, "published")
+    pub_revision = publication.get("revision", 0) if publication else 0
+
     cache_key = (
         context.workspace_id,
         context.dataset_id,
         context.version,
         context.semantic_revision,
+        pub_revision,
     )
 
     if not refresh:
@@ -123,9 +128,6 @@ def get_dashboard(refresh: bool = False):
         model = semantic_registry.get(selection.entry, context.version, context.semantic_revision)
     except Exception:
         model = None
-
-    namespace = semantic_registry.namespace(selection.entry, context.version, f"dashboard:{context.semantic_revision}")
-    publication = semantic_registry.store.get(namespace, "published")
 
     # If already published, execute published widgets
     if publication is not None and publication.get("value", {}).get("items"):
