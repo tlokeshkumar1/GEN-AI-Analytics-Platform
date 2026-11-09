@@ -276,7 +276,8 @@ class SchemaService:
                                           selection.context.semantic_revision, approved=True)
             metadata = {}
             for field in model.fields:
-                item = ColumnMetadata(field.name, df[field.name])
+                series = df[field.name] if field.name in df.columns else pd.Series(dtype=object)
+                item = ColumnMetadata(field.name, series)
                 item.is_numeric = field.type in ("integer", "decimal")
                 item.is_measure = field.role == "measure"
                 item.is_dimension = field.role in ("dimension", "identifier")

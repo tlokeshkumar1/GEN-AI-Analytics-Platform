@@ -100,9 +100,14 @@ export const generateGraph = async (data: GenerateGraphRequest): Promise<Generat
 
 export const sendChatMessage = async (
   message: string,
-  sessionId: string = 'default'
+  sessionId: string = 'default',
+  datasetId?: string
 ): Promise<ChatResponse> => {
-  const res = await api.post<ChatResponse>('/chat', { message, session_id: sessionId });
+  const headers: Record<string, string> = { ...contextHeaders() };
+  if (datasetId) {
+    headers['X-Dataset-Id'] = datasetId;
+  }
+  const res = await api.post<ChatResponse>('/chat', { message, session_id: sessionId }, { headers });
   if (res.data && res.data.graph_image && !res.data.graph_image.startsWith('data:')) {
     res.data.graph_image = `data:image/png;base64,${res.data.graph_image}`;
   }
@@ -118,10 +123,14 @@ export const sendChatMessageStream = async (
   onToken: (token: string) => void,
   onResult: (res: ChatResponse) => void,
   onError: (err: any) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  datasetId?: string
 ) => {
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', ...contextHeaders() };
+    if (datasetId) {
+      headers['X-Dataset-Id'] = datasetId;
+    }
     const token = getStoredToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;

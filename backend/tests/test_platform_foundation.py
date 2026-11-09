@@ -62,10 +62,12 @@ class ContextIsolationTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.service = DatasetService(self.temp.name, default_async_index=False)
         self.addCleanup(self.service.wait_for_idle)
-        for name, value in [("_index", ([], "Error")), ("_sync_hana", "Error")]:
+        for name, value in [("_index", ([], "Error")), ("_sync_hana", "Error"), ("_prune_old_versions", None)]:
             mock = patch.object(self.service, name, return_value=value)
             mock.start()
             self.addCleanup(mock.stop)
+        mock_ai = patch("api.platform.ai_settings.ai_settings", return_value=dict(llm_model="test", embedding_model="test", max_tokens=1500, temperature=0.2))
+        mock_ai.start(); self.addCleanup(mock_ai.stop)
         identity = current_identity.set(dict(user_id="owner", workspace_id="default", roles=["Member"]))
         try:
             self.a = self.service.upload(b"ID,Amount\n001,10\n", "A.csv")["dataset"]
@@ -94,7 +96,7 @@ class ContextIsolationTests(unittest.TestCase):
         self.addCleanup(mock.stop)
         mock = patch("api.platform.semantic.semantic_registry.get", return_value=Mock())
         mock.start(); self.addCleanup(mock.stop)
-        mock = patch("api.platform.ai_settings.ai_settings", return_value=dict(llm_model="test", embedding_model="test", max_tokens=1500, temperature=0.2))
+        mock = patch("api.platform.semantic.semantic_registry.list", return_value=[{"revision": 1, "status": "approved"}])
         mock.start(); self.addCleanup(mock.stop)
 
     def headers(self, item, version=1):

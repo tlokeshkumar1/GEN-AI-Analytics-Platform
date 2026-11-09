@@ -11,7 +11,9 @@ import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { ThinkingProcess, resolveIntentDetails } from '../components/ThinkingProcess';
 import { getApiErrorMessage } from '../services/api';
 import { getSemanticModels } from '../services/semanticService';
-import { selectedContext } from '../services/executionContext';
+import { selectedContext, selectContext } from '../services/executionContext';
+import { getDatasets } from '../services/datasetService';
+import { DatasetItem } from '../types/dataset';
 
 interface RAGChatProps {
   onNavigate: (path: string) => void;
@@ -256,27 +258,34 @@ export const RAGChat: React.FC<RAGChatProps> = ({
   const displayName = resolveUserName(user, userName);
   const userInitials = getUserInitials(displayName);
   const [suggestions, setSuggestions] = useState<PromptSuggestion[]>(DEFAULT_SUGGESTIONS);
+
+  // Load suggestions from active dataset semantic model if available
   useEffect(() => {
-    const context = selectedContext();
-    if (!context) return;
     let cancelled = false;
-    getSemanticModels(context.datasetId, context.version).then(models => {
-      const model = models.find(m => m.revision === context.semanticRevision && m.status === 'approved');
-      if (cancelled || !model) return;
-      const dynamicMeasures = model.fields
-        .filter(f => f.role === 'measure' && f.default_aggregation)
-        .slice(0, 3)
-        .map(f => ({
-          icon: 'bar_chart',
-          color: 'text-indigo-600',
-          title: `${f.default_aggregation} ${f.semantic_name}`,
-          query: `${f.default_aggregation} ${f.name}`,
-          badge: 'Measure',
-        }));
-      if (dynamicMeasures.length > 0) {
-        setSuggestions([DEFAULT_SUGGESTIONS[0], ...dynamicMeasures]);
-      }
-    }).catch(() => { /* The semantic review workflow displays configuration errors. */ });
+    getDatasets().then(allDatasets => {
+      if (cancelled || !allDatasets || allDatasets.length === 0) return;
+      const activeDs = allDatasets.find(d => d.isActive) || allDatasets[0];
+      const version = activeDs.currentVersion || 1;
+      getSemanticModels(activeDs.id, version).then(models => {
+        if (cancelled) return;
+        const approved = models.find(m => m.status === 'approved') || models[0];
+        if (approved) {
+          const dynamicMeasures = approved.fields
+            .filter(f => f.role === 'measure' && f.default_aggregation)
+            .slice(0, 3)
+            .map(f => ({
+              icon: 'bar_chart',
+              color: 'text-indigo-600',
+              title: `${f.default_aggregation} ${f.semantic_name}`,
+              query: `${f.default_aggregation} ${f.name}`,
+              badge: 'Measure',
+            }));
+          if (dynamicMeasures.length > 0) {
+            setSuggestions([DEFAULT_SUGGESTIONS[0], ...dynamicMeasures]);
+          }
+        }
+      }).catch(() => {});
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -826,7 +835,8 @@ export const RAGChat: React.FC<RAGChatProps> = ({
         } : t));
         setIsSubmitting(false);
       },
-      streamController.signal
+      streamController.signal,
+      undefined
     );
   };
 
@@ -1757,7 +1767,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                     handleSendMessage();
                   }
                 }}
-                placeholder="Ask about the selected dataset, calculate a metric, or request a chart..."
+                placeholder="Ask anything about your data, calculate a metric, or request a chart..."
                 className="flex-1 min-w-0 bg-transparent text-sm sm:text-base text-slate-900 placeholder:text-slate-400 focus:outline-none py-1.5"
               />
 

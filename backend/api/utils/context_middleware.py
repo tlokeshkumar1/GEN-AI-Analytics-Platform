@@ -44,6 +44,10 @@ class DatasetContextMiddleware:
                         dataset_id = catalog.get("activeDatasetId")
                     else:
                         raise HTTPException(409, "Select a dataset and version before requesting analytics.")
+                elif str(dataset_id).strip().lower() == "all" and is_chat:
+                    dataset_id = catalog.get("activeDatasetId") or (next(iter(catalog["datasets"])) if catalog.get("datasets") else None)
+                    if not dataset_id:
+                        raise HTTPException(409, "No datasets available.")
                 entry = await run_in_threadpool(dataset_service._entry, catalog, dataset_id, is_chat)
                 require_dataset_access(entry, for_chat=is_chat)
                 try:

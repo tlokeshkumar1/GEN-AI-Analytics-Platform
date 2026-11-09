@@ -3,7 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -124,35 +124,36 @@ class CascadeDatasetDeletionTests(unittest.TestCase):
             self.assertIn("%:ds-target:%", params)
             self.assertIn('%"dataset_id": "ds-target"%', params)
 
-    def test_dataset_service_delete_coordinates_full_cascade(self):
+    @patch("api.platform.ai_settings.ai_settings", return_value={"llm_model": "test", "embedding_model": "test", "max_tokens": 1500, "temperature": 0.2})
+    def test_dataset_service_delete_coordinates_full_cascade(self, mock_ai):
         service = DatasetService(self.temp_dir.name, default_async_index=False)
         self.addCleanup(service.wait_for_idle)
 
-        # Upload a dataset
-        csv_bytes = b"ID,Product,Amount\n1,Alpha,100\n2,Beta,200\n"
-        upload_res = service.upload(csv_bytes, "TestPurge.csv")
-        dataset_id = upload_res["dataset"]["id"]
-        entry = service._catalog()["datasets"][dataset_id]
-        folder = entry["folder"]
+        with patch.object(service, "_prune_old_versions", return_value=None), \
+             patch.object(service, "_index", return_value=([], None)):
+            # Upload a dataset
+            csv_bytes = b"ID,Product,Amount\n1,Alpha,100\n2,Beta,200\n"
+            upload_res = service.upload(csv_bytes, "TestPurge.csv")
+            dataset_id = upload_res["dataset"]["id"]
+            entry = service._catalog()["datasets"][dataset_id]
+            folder = entry["folder"]
 
-        folder_path = service.output_dir / folder
-        self.assertTrue(folder_path.exists())
+            folder_path = service.output_dir / folder
+            self.assertTrue(folder_path.exists())
 
-        # Seed local metadata
-        from api.platform.store import metadata_store
-        metadata_store().put(f"default:semantic:{dataset_id}:v1", "1", {"domain": "sales"})
+            # Mock HANA services and metadata store
+            mock_store = MagicMock()
+            with patch("api.platform.store.metadata_store", return_value=mock_store), \
+                 patch("api.database.hana_table_service.hana_table_service.table_exists", return_value=True), \
+                 patch("api.database.hana_table_service.hana_table_service.drop_table", return_value={"success": True, "dropped": True, "table_name": f"DS_{folder[:18].upper()}_V1"}), \
+                 patch("api.platform.datasets_metadata_repository.datasets_metadata_repo.delete_dataset", return_value=True) as mock_ds_meta, \
+                 patch("api.database.vector_client.vector_client.delete_dataset") as mock_vec:
 
-        # Mock HANA services
-        with patch("api.database.hana_table_service.hana_table_service.table_exists", return_value=True), \
-             patch("api.database.hana_table_service.hana_table_service.drop_table", return_value={"success": True, "dropped": True, "table_name": f"DS_{folder[:18].upper()}_V1"}), \
-             patch("api.platform.datasets_metadata_repository.datasets_metadata_repo.delete_dataset", return_value=True) as mock_ds_meta, \
-             patch("api.database.vector_client.vector_client.delete_dataset") as mock_vec:
+                res = service.delete(dataset_id)
 
-            res = service.delete(dataset_id)
-
-            self.assertTrue(res["success"])
-            self.assertEqual(res["deleted"]["dataset_id"], dataset_id)
-            self.assertTrue(res["deleted"]["datasets_metadata_deleted"])
+                self.assertTrue(res["success"])
+                self.assertEqual(res["deleted"]["dataset_id"], dataset_id)
+                self.assertTrue(res["deleted"]["datasets_metadata_deleted"])
             self.assertTrue(res["deleted"]["vector_rows_deleted"])
             self.assertTrue(res["deleted"]["local_files_removed"])
 

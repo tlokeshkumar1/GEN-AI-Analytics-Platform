@@ -35,6 +35,7 @@ class GraphRequest(BaseModel):
     prompt: str = Field(..., description="Natural language description of requested visualization")
     query_plan: Optional[QueryPlan] = None
     chart_type: str = "bar"
+    dataset_id: Optional[str] = None
 
 
 class GraphResponse(BaseModel):
@@ -61,6 +62,17 @@ def generate_graph(req: GraphRequest):
     if not req.prompt.strip():
         raise HTTPException(status_code=400, detail="Graph prompt cannot be empty.")
 
+    if req.dataset_id:
+        from api.services.dataset_service import dataset_service
+        from api.models.execution_context import current_selection, DatasetSelection, ExecutionContext
+        catalog = dataset_service._catalog()
+        entry = catalog.get("datasets", {}).get(req.dataset_id)
+        if entry:
+            version = entry.get("currentVersion", 1)
+            snapshot = dataset_service._snapshot(entry, version)
+            ctx = ExecutionContext(workspace_id="default", dataset_id=req.dataset_id, version=version, semantic_revision=1, user_id="system")
+            current_selection.set(DatasetSelection(ctx, entry, snapshot))
+
     # Classify intent and structure query plan
     plan = req.query_plan.model_dump(exclude_none=True, by_alias=True) if req.query_plan else intent_engine.classify(req.prompt)
     result = analytics_engine.execute(plan)
@@ -79,6 +91,7 @@ class PythonGraphAgentRequest(BaseModel):
     dimension: Optional[str] = None
     chart_type: Optional[str] = None
     aggregation: Optional[str] = "SUM"
+    dataset_id: Optional[str] = None
 
 
 @router.post("/python-agent/generate")
@@ -88,6 +101,17 @@ def generate_python_graph_agent(req: PythonGraphAgentRequest):
     Supports natural language prompt (Mode 2) OR structured data options without prompt (Mode 3).
     """
     from api.services.python_graph_agent import python_graph_agent
+    from api.services.dataset_service import dataset_service
+    from api.models.execution_context import current_selection, DatasetSelection, ExecutionContext
+
+    if req.dataset_id:
+        catalog = dataset_service._catalog()
+        entry = catalog.get("datasets", {}).get(req.dataset_id)
+        if entry:
+            version = entry.get("currentVersion", 1)
+            snapshot = dataset_service._snapshot(entry, version)
+            ctx = ExecutionContext(workspace_id="default", dataset_id=req.dataset_id, version=version, semantic_revision=1, user_id="system")
+            current_selection.set(DatasetSelection(ctx, entry, snapshot))
 
     prompt = req.prompt
     plan = dict(req.query_plan) if req.query_plan else {}

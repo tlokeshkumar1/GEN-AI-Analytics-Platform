@@ -16,8 +16,15 @@ from api.utils.logger import get_logger
 logger = get_logger("rag.pipeline")
 
 
-def current_source_metadata(order_id):
+def current_source_metadata(order_id, record_data=None):
     from api.services.dataset_service import dataset_service
+    if record_data and isinstance(record_data, dict) and record_data.get("_resolved_dataset_name"):
+        return json.dumps({
+            "source": record_data.get("_resolved_dataset_name"),
+            "dataset_id": record_data.get("_resolved_dataset_id"),
+            "table": record_data.get("_resolved_table"),
+            "row_id": order_id
+        })
     entry, _ = dataset_service.active()
     return json.dumps({"source": entry["name"] if entry else "Active Dataset",
                        "version": entry["currentVersion"] if entry else 1,
@@ -148,7 +155,7 @@ class RAGPipeline:
                     "ID": order_id,
                     "TEXT_CHUNK": f"Record {order_id}: {json.dumps(dict(order_data), default=str)[:300]}",
                     "SCORE": 1.0,
-                    "METADATA": current_source_metadata(order_id)
+                    "METADATA": current_source_metadata(order_id, order_data)
                 }
                 return {
                     "reply": reply,
@@ -302,60 +309,69 @@ class RAGPipeline:
             self._emit(callback, "intent", "completed", f"Request classified as {plan.get('intent')}.")
             if plan.get("requires_structured_query", True):
                 self._emit(callback, "calculation", "running", "Calculating over SAP HANA Cloud column store...")
-                result = analytics_engine.execute(plan)
-                if not result.success:
-                    raise HTTPException(422, result.error)
-                self._emit(callback, "calculation", "completed", f"Calculated from {result.records_matched:,} matching records in SAP HANA Cloud.")
+                try:
+                    result = analytics_engine.execute(plan)
+                except Exception as exc:
+                    logger.warning(f"Structured execution exception: {exc}; falling through to vector embedding retrieval.")
+                    result = None
 
-                policy = (
-                    "You are an enterprise AI financial and analytics advisor.\n"
-                    "Your role is to explain analytical query results from SAP HANA Cloud clearly, professionally, and concisely in GitHub-flavored Markdown.\n"
-                    "Strict formatting rules:\n"
-                    "1. Executive Brief: Begin with 1-2 concise sentences summarizing what the figures represent with key totals, leaders, or takeaways highlighted in **bold**.\n"
-                    "2. Structured Data Table: Present the calculated data in a clean Markdown table with clear column headers.\n"
-                    "3. Number Formatting: Always format monetary figures with dollar signs and comma separators (e.g. $7,407,698.00 or $2.00B), percentages with '%' (e.g. 45.2%), and integer quantities with commas.\n"
-                    "4. Key Insights: Include 2-3 concise bullet points under '### Key Insights' explaining top contributors, ranking, or notable findings in bold.\n"
-                    "5. Data Integrity: Rely strictly on the provided SAP HANA Cloud figures; never invent numbers not present in the data."
-                )
+                if result and result.success and result.data:
+                    self._emit(callback, "calculation", "completed", f"Calculated from {result.records_matched:,} matching records in SAP HANA Cloud.")
 
-                data_str = json.dumps(result.data or [], indent=2, default=str)
-                user_prompt = (
-                    f"User Question: {message}\n\n"
-                    f"Calculated Data from SAP HANA Cloud ({result.records_matched} records analyzed):\n"
-                    f"{data_str}\n\n"
-                    f"Please provide an executive summary answering the user's question, including formatted numbers, "
-                    f"a clean Markdown table, and key strategic insights."
-                )
+                    policy = (
+                        "You are an enterprise AI financial and analytics advisor.\n"
+                        "Your role is to explain analytical query results from SAP HANA Cloud clearly, professionally, and concisely in GitHub-flavored Markdown.\n"
+                        "Strict formatting rules:\n"
+                        "1. Executive Brief: Begin with 1-2 concise sentences summarizing what the figures represent with key totals, leaders, or takeaways highlighted in **bold**.\n"
+                        "2. Structured Data Table: Present the calculated data in a clean Markdown table with clear column headers.\n"
+                        "3. Number Formatting: Always format monetary figures with dollar signs and comma separators (e.g. $7,407,698.00 or $2.00B), percentages with '%' (e.g. 45.2%), and integer quantities with commas.\n"
+                        "4. Key Insights: Include 2-3 concise bullet points under '### Key Insights' explaining top contributors, ranking, or notable findings in bold.\n"
+                        "5. Data Integrity: Rely strictly on the provided SAP HANA Cloud figures; never invent numbers not present in the data."
+                    )
 
-                reply = self._stream_nim_synthesis(
-                    prompt=user_prompt,
-                    system_prompt=policy,
-                    callback=callback,
-                    stream=stream,
-                    stop_event=stop_event
-                )
+                    data_str = json.dumps(result.data or [], indent=2, default=str)
+                    user_prompt = (
+                        f"User Question: {message}\n\n"
+                        f"Calculated Data from SAP HANA Cloud ({result.records_matched} records analyzed):\n"
+                        f"{data_str}\n\n"
+                        f"Please provide an executive summary answering the user's question, including formatted numbers, "
+                        f"a clean Markdown table, and key strategic insights."
+                    )
 
-                dataset_source = selection.entry['name'] if selection else "SAP HANA Cloud"
-                ds_version = selection.context.version if selection else "1"
-                sem_rev = selection.context.semantic_revision if selection else "1"
-                reply += f"\n\nSource: **{dataset_source}**, data version **{ds_version}**, semantic revision **{sem_rev}**. Matching records: **{result.records_matched:,}**."
+                    reply = self._stream_nim_synthesis(
+                        prompt=user_prompt,
+                        system_prompt=policy,
+                        callback=callback,
+                        stream=stream,
+                        stop_event=stop_event
+                    )
 
-                image = render_chart(result.data, plan.get("chart_type") or "bar") if plan.get("intent") == "graph" and result.data else None
+                    dataset_source = selection.entry['name'] if selection else "SAP HANA Cloud"
+                    ds_version = selection.context.version if selection else "1"
+                    sem_rev = selection.context.semantic_revision if selection else "1"
+                    reply += f"\n\nSource: **{dataset_source}**, data version **{ds_version}**, semantic revision **{sem_rev}**. Matching records: **{result.records_matched:,}**."
 
-                return {
-                    "reply": reply,
-                    "sources": [source],
-                    "intent": plan.get("intent"),
-                    "type": plan.get("intent"),
-                    "status": result.status,
-                    "model": llm_model_name,
-                    "context": context,
-                    "data": result.to_dict(),
-                    "query_plan": plan,
-                    "records_matched": result.records_matched,
-                    "graph_image": image
-                }
-            self._emit(callback, "retrieval", "running", "Retrieving version-scoped evidence and business definitions.")
+                    image = render_chart(result.data, plan.get("chart_type") or "bar") if plan.get("intent") == "graph" and result.data else None
+
+                    return {
+                        "reply": reply,
+                        "sources": [source],
+                        "intent": plan.get("intent"),
+                        "type": plan.get("intent"),
+                        "status": result.status,
+                        "model": llm_model_name,
+                        "context": context,
+                        "data": result.to_dict(),
+                        "query_plan": plan,
+                        "records_matched": result.records_matched,
+                        "graph_image": image
+                    }
+                else:
+                    err_msg = getattr(result, "error", "Query not suitable for active table structured calculation")
+                    logger.info(f"Structured calculation bypassed or failed ({err_msg}). Falling through to vector embedding retrieval.")
+                    self._emit(callback, "calculation", "completed", "Proceeding to semantic vector retrieval across knowledge embeddings.")
+
+            self._emit(callback, "retrieval", "running", "Retrieving vector embeddings from SAP HANA Cloud Vector Engine...")
             chunks = retriever.retrieve(message, min(top_k, 4))
             query_order_id = self._is_order_id_query(message)
             if query_order_id:
@@ -369,10 +385,12 @@ class RAGPipeline:
                         "METADATA": json.dumps({"source": "Active Dataset Record", "record_id": str(query_order_id)})
                     }
                     chunks = [order_chunk] + [c for c in chunks if c.get("ID") != order_chunk["ID"]]
-            model = semantic_registry.get(selection.entry, selection.context.version, selection.context.semantic_revision, approved=True, for_chat=True)
-
-            # Compact semantic definition summary (reduces tokens from ~3,500 to ~200)
-            field_bullets = ", ".join(f"{f.name} ({f.role})" for f in model.fields[:20])
+            try:
+                model = semantic_registry.get(selection.entry, selection.context.version, selection.context.semantic_revision, approved=True, for_chat=True) if selection and getattr(selection, "entry", None) else None
+                field_bullets = ", ".join(f"{f.name} ({f.role})" for f in model.fields[:20]) if model and hasattr(model, "fields") else ""
+            except Exception:
+                model = None
+                field_bullets = ""
 
             # Scoped evidence chunks with size capping (reduces tokens from ~7,000 to ~1,000)
             evidence_parts = []

@@ -92,7 +92,8 @@ class HANAVectorClient:
         performs hybrid lookup against VECTOR_TABLE to ensure exact matches are included.
         """
         exact_chunks = []
-        target_pattern = f"%{dataset_id}%" if dataset_id else "%"
+        is_multi = (not dataset_id) or (str(dataset_id).strip().lower() in ("all", "*", "default"))
+        target_pattern = "%" if is_multi else f"%{dataset_id}%"
         if text_query:
             import re
             matches = re.findall(r'\b(SO-\d+|P\d{4}|C\d{4})\b', text_query, re.IGNORECASE)

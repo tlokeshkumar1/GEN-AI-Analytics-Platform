@@ -543,6 +543,35 @@ class DataService:
         except Exception as e:
             logger.warning(f"Direct HANA record lookup failed ({e})")
 
+        # 3. Cross-Table Discovery: Check all available datasets in workspace catalog
+        try:
+            from api.services.dataset_service import dataset_service
+            from api.database.hana_client import hana_client
+            from api.platform.datasets_metadata_repository import datasets_metadata_repo
+            catalog = dataset_service._catalog()
+            datasets = catalog.get("datasets", {})
+            for d_id, entry in datasets.items():
+                other_hint = entry.get("physical_table_name") or entry.get("name")
+                other_target = datasets_metadata_repo._resolve_physical_table(other_hint)
+                if not other_target or other_target == target:
+                    continue
+                candidate_columns = ["ORDERID", "ID", "PATIENT_ID", "EMPLOYEE_ID", "CUSTOMER_ID", "CODE", "KEY"]
+                for col in candidate_columns:
+                    try:
+                        sql = f'SELECT * FROM "{other_target}" WHERE UPPER("{col}") = UPPER(?) LIMIT 1'
+                        rows = hana_client.execute_query(sql, (clean_id,))
+                        if rows:
+                            logger.info(f"Resolved record {clean_id} from alternate table '{other_target}' (dataset '{d_id}')")
+                            rec = CaseInsensitiveRecord(rows[0])
+                            rec["_resolved_table"] = other_target
+                            rec["_resolved_dataset_id"] = d_id
+                            rec["_resolved_dataset_name"] = entry.get("name")
+                            return rec
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug(f"Cross-table record fallback search failed: {e}")
+
         return None
 
 

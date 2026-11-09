@@ -17,16 +17,33 @@ class ExcelDatasetService:
         self._file_mtime: Optional[float] = None
         self._last_load_time: Optional[datetime] = None
         self._loaded_path: Optional[Path] = None
+        self._loaded_table: Optional[str] = None
+        self._loaded_dataset_id: Optional[str] = None
         import tempfile
         self._default_path = Path(tempfile.gettempdir()) / "HANA_ACTIVE_DATASET.pkl"
+
+    def clear_cache(self):
+        """Invalidate in-memory dataframe and table tracking."""
+        self._df = None
+        self._records_count = None
+        self._data_as_of = None
+        self._file_mtime = None
+        self._last_load_time = None
+        self._loaded_path = None
+        self._loaded_table = None
+        self._loaded_dataset_id = None
 
     def _resolve_dataset_path(self) -> Path:
         import tempfile
         return Path(tempfile.gettempdir()) / "HANA_ACTIVE_DATASET.pkl"
 
-    def _needs_reload(self) -> bool:
+    def _needs_reload(self, target_table: Optional[str] = None, dataset_id: Optional[str] = None) -> bool:
         """Determine whether the dataset should be reloaded from SAP HANA Cloud."""
         if self._df is None or self._df.empty:
+            return True
+        if target_table is not None and self._loaded_table != target_table:
+            return True
+        if dataset_id is not None and self._loaded_dataset_id != dataset_id:
             return True
         if self._last_load_time is not None:
             elapsed = (datetime.now(timezone.utc) - self._last_load_time).total_seconds()
@@ -35,17 +52,20 @@ class ExcelDatasetService:
                 return True
         return False
 
-    def _load_dataset(self) -> pd.DataFrame:
+    def _load_dataset(self, target_table: Optional[str] = None, dataset_id: Optional[str] = None) -> pd.DataFrame:
         """Load dataset directly from SAP HANA Cloud as the single source of truth."""
         try:
             from api.database.hana_client import hana_client
             from api.platform.datasets_metadata_repository import datasets_metadata_repo
             from api.models.execution_context import current_selection
             sel = current_selection.get()
-            hint = None
-            if sel and getattr(sel, "entry", None):
-                hint = sel.entry.get("physical_table_name") or sel.entry.get("name")
-            target_table = datasets_metadata_repo._resolve_physical_table(hint)
+            if not target_table:
+                hint = None
+                if sel and getattr(sel, "entry", None):
+                    hint = sel.entry.get("physical_table_name") or sel.entry.get("name")
+                target_table = datasets_metadata_repo._resolve_physical_table(hint)
+            if not dataset_id and sel and getattr(sel, "entry", None):
+                dataset_id = sel.entry.get("id")
 
             # Query actual total count safely from HANA
             cnt_rows = hana_client.execute_query(f'SELECT COUNT(*) AS CNT FROM "{target_table}"')
@@ -56,6 +76,8 @@ class ExcelDatasetService:
             if rows:
                 self._df = pd.DataFrame(rows)
                 self._loaded_path = None
+                self._loaded_table = target_table
+                self._loaded_dataset_id = dataset_id
                 self._file_mtime = None
                 self._data_as_of = datetime.now(timezone.utc)
                 self._last_load_time = datetime.now(timezone.utc)
@@ -68,13 +90,15 @@ class ExcelDatasetService:
         self._df = pd.DataFrame()
         self._records_count = 0
         self._data_as_of = None
+        self._loaded_table = target_table
+        self._loaded_dataset_id = dataset_id
         self._file_mtime = None
         self._last_load_time = datetime.now(timezone.utc)
         return self._df
 
     def get_df(self) -> pd.DataFrame:
         """
-        Return the current DataFrame, reloading from disk if stale or unloaded.
+        Return the current DataFrame, reloading from disk/HANA if stale or unloaded.
         Guarantees freshness within DATA_REFRESH_INTERVAL_MINUTES.
         """
         from api.models.execution_context import current_selection
@@ -84,7 +108,14 @@ class ExcelDatasetService:
             if rows:
                 from api.services.dataset_service import dataset_service
                 return dataset_service._frame(rows, selection.snapshot.get("columns", []))
-            # If snapshot rows are empty (e.g. data stored in HANA column table), load from HANA Cloud
+            # If snapshot rows are empty (e.g. data stored in HANA column table), load from HANA Cloud for specific table
+            from api.platform.datasets_metadata_repository import datasets_metadata_repo
+            hint = selection.entry.get("physical_table_name") or selection.entry.get("name")
+            target_table = datasets_metadata_repo._resolve_physical_table(hint)
+            dataset_id = selection.entry.get("id")
+            if self._needs_reload(target_table, dataset_id):
+                self._load_dataset(target_table, dataset_id)
+            return self._df
         if self._needs_reload():
             self._load_dataset()
         return self._df

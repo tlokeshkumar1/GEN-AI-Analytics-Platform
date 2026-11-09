@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import api, { getApiErrorMessage } from '../services/api';
 import { selectedContext, ensureDefaultContext, selectContext } from '../services/executionContext';
 import { hasAdminRole } from '../services/authService';
+import { getDatasets } from '../services/datasetService';
+import { DatasetItem } from '../types/dataset';
 import {
   AnalyticsDefinition,
   ExecutionResult,
@@ -81,6 +83,10 @@ export function GraphStudio({
   const [publishedSuccess, setPublishedSuccess] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // Available Datasets & Active Selection for Multi-Table Scoping
+  const [datasets, setDatasets] = useState<DatasetItem[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string>('');
+
   // Active Pathway (3 Modes)
   const [activeMode, setActiveMode] = useState<CreationMode>('visual');
 
@@ -111,22 +117,77 @@ export function GraphStudio({
   const [dataModeRunning, setDataModeRunning] = useState(false);
   const [dataModeResult, setDataModeResult] = useState<PythonGraphAgentResponse | null>(null);
 
+  const handleSwitchDataset = async (newDatasetId: string) => {
+    setSelectedDatasetId(newDatasetId);
+    setError('');
+    const targetDs = datasets.find(d => d.id === newDatasetId);
+    if (!targetDs) return;
+    const version = targetDs.currentVersion || 1;
+
+    try {
+      const models = await getSemanticModels(newDatasetId, version);
+      const approved =
+        models.find(m => m.status === 'approved') ||
+        models[0];
+      if (!approved) {
+        setError(`No semantic model found for dataset "${targetDs.name}".`);
+        return;
+      }
+      setModel(approved);
+      selectContext({ datasetId: newDatasetId, version, semanticRevision: approved.revision });
+      // Reset Mode 1 visual states for clean slate on new table
+      setMetric('*');
+      setAggregation('COUNT');
+      setDimension('');
+
+      // Update Mode 3 fields
+      const measures = approved.fields.filter(f => f.role === 'measure' || f.name.includes('USD') || f.name.includes('Quantity'));
+      const dims = approved.fields.filter(f => ['dimension', 'identifier', 'time'].includes(f.role));
+      if (measures.length > 0) setSelectedDataMetric(measures[0].name);
+      if (dims.length > 0) setSelectedDataDimension(dims[0].name);
+    } catch (err) {
+      setError(getApiErrorMessage(err, `Failed to load semantic model for table "${targetDs.name}".`));
+    }
+  };
+
   const load = async () => {
+    const allDatasets = await getDatasets().catch(() => []);
+    setDatasets(allDatasets);
+
     let context = selectedContext();
     if (!context) {
       context = await ensureDefaultContext();
     }
-    if (!context) throw new Error('Select a dataset and version first.');
-    const models = await getSemanticModels(context.datasetId, context.version);
+
+    let dsId = context?.datasetId;
+    if (!dsId && allDatasets.length > 0) {
+      const activeDs = allDatasets.find(d => d.isActive) || allDatasets[0];
+      dsId = activeDs.id;
+    }
+    if (!dsId) throw new Error('No dataset available. Please upload a dataset first.');
+
+    const targetDs = allDatasets.find(d => d.id === dsId) || allDatasets[0];
+    const version = targetDs?.currentVersion || context?.version || 1;
+    const resolvedId = targetDs ? targetDs.id : dsId;
+    setSelectedDatasetId(resolvedId);
+
+    const models = await getSemanticModels(resolvedId, version);
     const approved =
-      models.find(m => m.revision === context.semanticRevision && m.status === 'approved') ||
+      models.find(m => m.revision === context?.semanticRevision && m.status === 'approved') ||
       models.find(m => m.status === 'approved') ||
       models[0];
     if (!approved) throw new Error('Approve a semantic model in Upload Dataset and select its revision.');
-    if (context.semanticRevision !== approved.revision) {
-      selectContext({ ...context, semanticRevision: approved.revision });
+    if (context?.semanticRevision !== approved.revision || context?.datasetId !== resolvedId) {
+      selectContext({ datasetId: resolvedId, version, semanticRevision: approved.revision });
     }
     setModel(approved);
+
+    // Mode 3 initial selection from the approved model
+    const measures = approved.fields.filter(f => f.role === 'measure' || f.name.includes('USD') || f.name.includes('Quantity'));
+    const dims = approved.fields.filter(f => ['dimension', 'identifier', 'time'].includes(f.role));
+    if (measures.length > 0) setSelectedDataMetric(measures[0].name);
+    if (dims.length > 0) setSelectedDataDimension(dims[0].name);
+
     const [recommendations, pubRes] = await Promise.all([
       getRecommendations(),
       getDashboardPublication().catch(() => ({ title: '', items: [], status: 'unpublished' })),
@@ -217,7 +278,7 @@ export function GraphStudio({
       const context = selectedContext();
       const res = await generatePythonGraphAgent({
         prompt: promptInput,
-        dataset_id: context?.datasetId,
+        dataset_id: selectedDatasetId || context?.datasetId,
       });
       clearInterval(interval);
       setAgentStep(10);
@@ -250,7 +311,7 @@ export function GraphStudio({
         metric: selectedDataMetric,
         dimension: selectedDataDimension,
         chart_type: selectedAdvancedChart,
-        dataset_id: context?.datasetId,
+        dataset_id: selectedDatasetId || context?.datasetId,
         query_plan: {
           metric: selectedDataMetric,
           dimension: selectedDataDimension,
@@ -447,7 +508,7 @@ export function GraphStudio({
           </div>
 
           <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className={`grid grid-cols-1 sm:grid-cols-2 ${datasets.length > 1 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-4`}>
               <div className="sm:col-span-2">
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   KPI / Chart Title
@@ -460,11 +521,32 @@ export function GraphStudio({
                 />
               </div>
 
+              {/* Table / Dataset Name Selector: If datasets.length > 1, show table dropdown; if only 1 dataset, show directly dropdown for column names */}
+              {datasets.length > 1 && !edit && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px] text-blue-600">table_chart</span>
+                    <span>Select Table / Dataset</span>
+                  </label>
+                  <select
+                    className="border border-blue-300 bg-blue-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
+                    value={selectedDatasetId}
+                    onChange={e => void handleSwitchDataset(e.target.value)}
+                  >
+                    {datasets.map(d => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} {d.isActive ? '★' : ''} ({d.rowCount?.toLocaleString() || 0} rows)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {!edit && (
                 <>
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                      Target Measure
+                      Target Measure (Y)
                     </label>
                     <select
                       className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
@@ -506,7 +588,7 @@ export function GraphStudio({
             {!edit && (
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Group by Dimension
+                  Group by Dimension (X)
                 </label>
                 <select
                   className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs max-w-md"
@@ -609,6 +691,26 @@ export function GraphStudio({
           </div>
 
           <div className="space-y-4">
+            {datasets.length > 1 && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[14px] text-purple-600">table_chart</span>
+                  <span>Target Table / Dataset</span>
+                </label>
+                <select
+                  className="border border-purple-300 bg-purple-50/30 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all shadow-2xs max-w-sm"
+                  value={selectedDatasetId}
+                  onChange={e => void handleSwitchDataset(e.target.value)}
+                >
+                  {datasets.map(d => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} {d.isActive ? '★' : ''} ({d.rowCount?.toLocaleString() || 0} rows)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                 Natural Language Visualization Prompt
@@ -769,10 +871,30 @@ export function GraphStudio({
 
           {/* Data Shown Options Form */}
           <div className="space-y-5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className={`grid grid-cols-1 sm:grid-cols-2 ${datasets.length > 1 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-4`}>
+              {datasets.length > 1 && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px] text-emerald-600">table_chart</span>
+                    <span>Source Table / Dataset</span>
+                  </label>
+                  <select
+                    className="border border-emerald-300 bg-emerald-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
+                    value={selectedDatasetId}
+                    onChange={e => void handleSwitchDataset(e.target.value)}
+                  >
+                    {datasets.map(d => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} {d.isActive ? '★' : ''} ({d.rowCount?.toLocaleString() || 0} rows)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Target Measure
+                  Target Measure (Y)
                 </label>
                 <select
                   className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
@@ -791,7 +913,7 @@ export function GraphStudio({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Breakdown Dimension
+                  Breakdown Dimension (X)
                 </label>
                 <select
                   className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"

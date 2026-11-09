@@ -569,7 +569,7 @@ class DatasetService:
         # Disk is authoritative, including after restart or a change by another worker.
         from api.services.excel_dataset_service import excel_dataset_service
         from api.services.schema_service import schema_service
-        excel_dataset_service._df = None
+        excel_dataset_service.clear_cache()
         schema_service._metadata = None
         from api.services.vector_service import vector_service
         vector_service.clear_cache()
@@ -1053,39 +1053,66 @@ class DatasetService:
         version = next(v for v in entry["versions"] if v["version"] == entry["currentVersion"])
         return self.output_dir / entry["folder"] / version["filename"]
 
-    def search(self, query, top_k):
-        """Search SAP HANA Cloud Vector Engine directly for semantically nearest neighbor chunks and entity matches."""
+    def search(self, query, top_k, dataset_id=None):
+        """Search SAP HANA Cloud Vector Engine directly for semantically nearest neighbor chunks and entity matches.
+        When dataset_id is omitted or None/'all', queries across all datasets in VECTOR_TABLE without table scoping.
+        """
         entry = None
         try:
-            entry, _ = self.active()
+            if dataset_id and str(dataset_id).strip().lower() not in ("all", "*", "default"):
+                catalog = self._catalog()
+                entry = catalog.get("datasets", {}).get(dataset_id)
+            else:
+                entry, _ = self.active()
         except Exception:
             pass
 
-        dataset_id = entry["id"] if entry else None
+        # Only restrict to a single dataset when explicitly passed a non-global dataset_id
+        scoped_id = None
+        if dataset_id and str(dataset_id).strip().lower() not in ("all", "*", "default"):
+            scoped_id = dataset_id
+
         version = entry["currentVersion"] if entry else 1
 
         from api.services.embedding_service import embedding_service
         from api.database.vector_client import vector_client
         try:
             vector = embedding_service.get_embedding(query)
-            results = vector_client.search_dataset_version(dataset_id, version, vector, top_k, text_query=query)
+            results = vector_client.search_dataset_version(scoped_id, version, vector, top_k, text_query=query)
             if results:
                 return results
         except Exception as exc:
             logger.warning(f"HANA Cloud vector retrieval failed: {exc}")
 
         # Fallback to local snapshot only if HANA Vector Engine is unreachable
-        if entry:
-            try:
-                snap = self._snapshot(entry, version)
-                words = set(re.findall(r"\w+", query.casefold()))
-                scores = [len(words & set(re.findall(r"\w+", chunk.casefold()))) for chunk in snap.get("chunks", [])]
-                indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-                return [{"ID": f"{entry['id']}:v{entry['currentVersion']}:{i}", "TEXT_CHUNK": snap["chunks"][i],
-                         "SCORE": scores[i], "METADATA": json.dumps({"source": entry["name"], "dataset_id": entry["id"], "retrieval": "fallback"})}
-                        for i in indices]
-            except Exception:
-                pass
+        try:
+            catalog = self._catalog()
+            all_entries = [entry] if (scoped_id and entry) else list(catalog.get("datasets", {}).values())
+            all_chunks = []
+            for e in all_entries:
+                if not e:
+                    continue
+                v = e.get("currentVersion", 1)
+                snap = self._snapshot(e, v)
+                for chunk in snap.get("chunks", []):
+                    all_chunks.append((e, chunk))
+            words = set(re.findall(r"\w+", query.casefold()))
+            scored = []
+            for idx, (e, chunk) in enumerate(all_chunks):
+                score = len(words & set(re.findall(r"\w+", chunk.casefold())))
+                scored.append((score, e, chunk, idx))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return [
+                {
+                    "ID": f"{e['id']}:v{e.get('currentVersion', 1)}:{idx}",
+                    "TEXT_CHUNK": chunk,
+                    "SCORE": score,
+                    "METADATA": json.dumps({"source": e.get("name", "Unknown"), "dataset_id": e.get("id"), "retrieval": "fallback"})
+                }
+                for score, e, chunk, idx in scored[:top_k]
+            ]
+        except Exception:
+            pass
         return []
 
     def _save_durable_version(self, catalog, entry, df, rows, operation, original, index, extension, provenance):
