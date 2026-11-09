@@ -33,7 +33,7 @@ def is_admin(identity: dict) -> bool:
     return "admin" in role or any("admin" in r for r in roles)
 
 
-def require_dataset_access(entry: dict, *, write: bool = False) -> None:
+def require_dataset_access(entry: dict, *, write: bool = False, for_chat: bool = False) -> None:
     """Internal callers may be unbound; every HTTP route is bound by middleware."""
     identity = current_identity.get()
     if identity is None:
@@ -41,6 +41,9 @@ def require_dataset_access(entry: dict, *, write: bool = False) -> None:
     if entry.get("workspaceId") != identity["workspace_id"]:
         # Legacy catalog ownership is assigned by an explicit migration, never a read.
         raise HTTPException(404, "Dataset not found in this workspace. Legacy data requires migration.")
+    if for_chat and not write:
+        # Both Admin and User (Member) roles can access dataset data for RAG chat within their workspace
+        return
     owner = entry.get("ownerId") == identity["user_id"]
     readers = entry.get("readers", [])
     writers = entry.get("writers", [])

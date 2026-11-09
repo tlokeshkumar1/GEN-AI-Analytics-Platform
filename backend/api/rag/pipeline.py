@@ -369,7 +369,7 @@ class RAGPipeline:
                         "METADATA": json.dumps({"source": "Active Dataset Record", "record_id": str(query_order_id)})
                     }
                     chunks = [order_chunk] + [c for c in chunks if c.get("ID") != order_chunk["ID"]]
-            model = semantic_registry.get(selection.entry, selection.context.version, selection.context.semantic_revision, approved=True)
+            model = semantic_registry.get(selection.entry, selection.context.version, selection.context.semantic_revision, approved=True, for_chat=True)
 
             # Compact semantic definition summary (reduces tokens from ~3,500 to ~200)
             field_bullets = ", ".join(f"{f.name} ({f.role})" for f in model.fields[:20])

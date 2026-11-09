@@ -16,8 +16,8 @@ from api.services.dataset_service import dataset_service
 router = APIRouter(tags=["Semantic Analytics"])
 
 
-def dataset_version(dataset_id, version):
-    entry = dataset_service._entry(dataset_service._catalog(), dataset_id)
+def dataset_version(dataset_id, version, for_chat: bool = False):
+    entry = dataset_service._entry(dataset_service._catalog(), dataset_id, for_chat=for_chat)
     return entry, dataset_service._snapshot(entry, version)
 
 
@@ -103,8 +103,8 @@ def profile(dataset_id: str, version: int):
 
 @router.get("/api/datasets/{dataset_id}/versions/{version}/semantics")
 def semantics(dataset_id: str, version: int):
-    entry, _ = dataset_version(dataset_id, version)
-    return semantic_registry.list(entry, version)
+    entry, _ = dataset_version(dataset_id, version, for_chat=True)
+    return semantic_registry.list(entry, version, for_chat=True)
 
 
 @router.post("/api/datasets/{dataset_id}/versions/{version}/semantics/propose")

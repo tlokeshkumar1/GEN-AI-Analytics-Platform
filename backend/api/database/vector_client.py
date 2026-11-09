@@ -206,19 +206,35 @@ class HANAVectorClient:
 
     def delete_dataset_version(self, dataset_id: str, version: int):
         """Delete all vectors for a specific dataset version."""
-        prefix = f"{dataset_id}:v{version}:"
         try:
-            hana_client.execute_query("DELETE FROM VECTOR_TABLE WHERE ID LIKE ?", (prefix + "%",))
+            hana_client.execute_query(
+                "DELETE FROM VECTOR_TABLE WHERE ID LIKE ? OR ID LIKE ? OR (METADATA LIKE ? AND METADATA LIKE ?)",
+                (f"{dataset_id}:v{version}:%", f"%:{dataset_id}:%:v{version}:%", f'%"dataset_id": "{dataset_id}"%', f'%"version": {version}%')
+            )
         except Exception as e:
-            logger.warning(f"Could not prune HANA vectors for {prefix}: {e}")
+            logger.warning(f"Could not prune HANA vectors for dataset {dataset_id} v{version}: {e}")
+        try:
+            from api.services.vector_service import vector_service
+            vector_service.cache.clear()
+        except Exception:
+            pass
 
     def delete_dataset(self, dataset_id: str):
         """Delete all vectors for an entire dataset across all versions."""
-        prefix = f"{dataset_id}:"
         try:
-            hana_client.execute_query("DELETE FROM VECTOR_TABLE WHERE ID LIKE ?", (prefix + "%",))
+            # Match both raw dataset_id prefixes and workspace-hashed namespaces (e.g. w<hash>:<dataset_id>:i<hash>:v<ver>:...)
+            hana_client.execute_query(
+                "DELETE FROM VECTOR_TABLE WHERE ID LIKE ? OR ID LIKE ? OR METADATA LIKE ?",
+                (f"{dataset_id}:%", f"%:{dataset_id}:%", f'%"dataset_id": "{dataset_id}"%')
+            )
+            logger.info(f"Purged vector embeddings for dataset '{dataset_id}' from VECTOR_TABLE")
         except Exception as e:
-            logger.warning(f"Could not delete HANA vectors for {prefix}: {e}")
+            logger.warning(f"Could not delete HANA vectors for dataset {dataset_id}: {e}")
+        try:
+            from api.services.vector_service import vector_service
+            vector_service.cache.clear()
+        except Exception:
+            pass
 
     def __init__(self):
         # Production schemas are provisioned by explicit migrations, never imports.

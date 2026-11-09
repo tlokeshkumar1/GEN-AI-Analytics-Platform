@@ -5,8 +5,12 @@ export interface DatasetContext {
 }
 
 const key = () => {
-  try { return `dataset-context:${JSON.parse(localStorage.getItem('auth_user') || '{}').user_id || 'signed-out'}`; }
-  catch { return 'dataset-context:signed-out'; }
+  try {
+    const raw = sessionStorage.getItem('auth_user') || localStorage.getItem('auth_user') || '{}';
+    return `dataset-context:${JSON.parse(raw).user_id || 'signed-out'}`;
+  } catch {
+    return 'dataset-context:signed-out';
+  }
 };
 
 export function selectedContext(): DatasetContext | null {
@@ -36,7 +40,18 @@ export async function ensureDefaultContext(): Promise<DatasetContext | null> {
   if (existing) return existing;
   try {
     const { getDatasets } = await import('./datasetService');
-    const datasets = await getDatasets();
+    let datasets = await getDatasets().catch(() => []);
+    if (!datasets || datasets.length === 0) {
+      try {
+        const { default: api } = await import('./api');
+        const activeRes = await api.get('/datasets/active');
+        if (activeRes.data?.dataset) {
+          datasets = [activeRes.data.dataset];
+        }
+      } catch {
+        // ignore
+      }
+    }
     if (!datasets || datasets.length === 0) return null;
     const active = datasets.find(d => d.isActive) || datasets[0];
 

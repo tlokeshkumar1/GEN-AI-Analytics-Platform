@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { InternalAxiosRequestConfig } from 'axios';
 import { contextHeaders } from './executionContext';
 
 const api = axios.create({
@@ -9,25 +9,44 @@ const api = axios.create({
   withCredentials: true,
 });
 
-// Initialize default Authorization header from stored token
-const existingToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-if (existingToken) {
-  api.defaults.headers.common['Authorization'] = `Bearer ${existingToken}`;
+export function getStoredToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return sessionStorage.getItem('auth_token') || localStorage.getItem('auth_token');
 }
 
 export function setAuthToken(token: string | null) {
   if (token) {
+    sessionStorage.setItem('auth_token', token);
     localStorage.setItem('auth_token', token);
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
   } else {
+    sessionStorage.removeItem('auth_token');
     localStorage.removeItem('auth_token');
     delete api.defaults.headers.common['Authorization'];
   }
 }
 
+export function clearAuthStorage() {
+  if (typeof window === 'undefined') return;
+  sessionStorage.removeItem('auth_token');
+  sessionStorage.removeItem('auth_user');
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('auth_user');
+}
+
+// Initialize default Authorization header from stored token
+const existingToken = getStoredToken();
+if (existingToken) {
+  api.defaults.headers.common['Authorization'] = `Bearer ${existingToken}`;
+}
+
 let cachedCsrfToken: string | null = null;
 
-api.interceptors.request.use((config) => {
+interface ExtendedAxiosRequestConfig extends InternalAxiosRequestConfig {
+  _csrfRetried?: boolean;
+}
+
+api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   Object.entries(contextHeaders()).forEach(([key, value]) => {
     if (config.headers && typeof (config.headers as any).set === 'function') {
       (config.headers as any).set(key, value);
@@ -35,7 +54,8 @@ api.interceptors.request.use((config) => {
       config.headers[key] = value;
     }
   });
-  const token = localStorage.getItem('auth_token');
+
+  const token = getStoredToken();
   if (token) {
     if (config.headers && typeof (config.headers as any).set === 'function') {
       (config.headers as any).set('Authorization', `Bearer ${token}`);
@@ -71,20 +91,60 @@ api.interceptors.response.use(
       cachedCsrfToken = csrfToken;
     }
 
-    if (typeof response.data === 'string' &&
-        (String(response.headers['content-type']).includes('text/html') || /^\s*<(?:!doctype|html)/i.test(response.data))) {
-      const message = 'SAP returned a sign-in page instead of API data. Sign in again; if this repeats, check the application router API destination.';
-      throw new axios.AxiosError(message, 'ERR_SAP_SESSION', response.config, response.request,
-        { ...response, status: 401, data: { detail: message } });
+    if (
+      typeof response.data === 'string' &&
+      (String(response.headers['content-type']).includes('text/html') || /^\s*<(?:!doctype|html)/i.test(response.data))
+    ) {
+      const message =
+        'SAP returned a sign-in page instead of API data. Sign in again; if this repeats, check the application router API destination.';
+      throw new axios.AxiosError(
+        message,
+        'ERR_SAP_SESSION',
+        response.config,
+        response.request,
+        { ...response, status: 401, data: { detail: message } }
+      );
     }
     return response;
   },
-  (error) => {
+  async (error) => {
+    const originalRequest = error.config as ExtendedAxiosRequestConfig | undefined;
+
+    // Transparent CSRF token fetch & replay on 403 "Required"
+    if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 403 &&
+      originalRequest &&
+      !originalRequest._csrfRetried
+    ) {
+      const csrfHeader = error.response.headers?.['x-csrf-token'];
+      if (csrfHeader === 'Required' || !cachedCsrfToken) {
+        originalRequest._csrfRetried = true;
+        try {
+          const fetchRes = await axios.get('/api/health', {
+            headers: { 'x-csrf-token': 'Fetch' },
+            withCredentials: true,
+          });
+          const freshToken = fetchRes.headers?.['x-csrf-token'];
+          if (freshToken && freshToken !== 'Required') {
+            cachedCsrfToken = freshToken;
+            if (originalRequest.headers && typeof (originalRequest.headers as any).set === 'function') {
+              (originalRequest.headers as any).set('x-csrf-token', freshToken);
+            } else if (originalRequest.headers) {
+              originalRequest.headers['x-csrf-token'] = freshToken;
+            }
+            return api(originalRequest);
+          }
+        } catch {
+          // If CSRF probe fails, continue with rejection
+        }
+      }
+    }
+
     if (axios.isAxiosError(error) && error.response?.status === 401) {
       const detail = String(error.response.data?.detail || '');
       if (detail.includes('SAP XSUAA') || detail.includes('Sign in again') || detail.includes('expired') || detail.includes('invalid')) {
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem('auth_user');
+        clearAuthStorage();
         window.dispatchEvent(new CustomEvent('session-expired', { detail: { message: detail } }));
       }
     }

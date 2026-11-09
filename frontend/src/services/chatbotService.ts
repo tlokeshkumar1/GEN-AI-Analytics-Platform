@@ -1,4 +1,4 @@
-import api, { getApiErrorMessage } from './api';
+import api, { getApiErrorMessage, getStoredToken } from './api';
 import { contextHeaders } from './executionContext';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -122,7 +122,7 @@ export const sendChatMessageStream = async (
 ) => {
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', ...contextHeaders() };
-    const token = localStorage.getItem('auth_token');
+    const token = getStoredToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }

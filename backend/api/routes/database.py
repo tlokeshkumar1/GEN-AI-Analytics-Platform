@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Optional, Literal
 from fastapi import APIRouter, HTTPException, Query
 from api.database.hana_table_service import hana_table_service
+from api.models.execution_context import require_admin
 from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/api/database", tags=["Database"])
@@ -8,7 +9,8 @@ router = APIRouter(prefix="/api/database", tags=["Database"])
 
 @router.get("/tables")
 async def list_tables(include_internal: bool = Query(False, description="Include system and vector/chat internal tables")):
-    """List accessible tables in the SAP HANA Cloud database schema."""
+    """List accessible tables in the SAP HANA Cloud database schema (Admin only)."""
+    require_admin()
     try:
         tables = await run_in_threadpool(hana_table_service.list_user_tables, include_internal=include_internal)
         return {"tables": tables}
@@ -18,7 +20,8 @@ async def list_tables(include_internal: bool = Query(False, description="Include
 
 @router.get("/tables/{table_name}/exists")
 async def check_table_exists(table_name: str):
-    """Check if a table exists in SAP HANA Cloud."""
+    """Check if a table exists in SAP HANA Cloud (Admin only)."""
+    require_admin()
     try:
         exists = await run_in_threadpool(hana_table_service.table_exists, table_name)
         return {"tableName": table_name, "exists": exists}
@@ -35,7 +38,8 @@ async def get_table_data(
     sortDir: Literal["asc", "desc", "ASC", "DESC"] = Query("asc"),
     search: str = Query(""),
 ):
-    """Retrieve paginated rows from any HANA table."""
+    """Retrieve paginated rows from any HANA table (Admin only)."""
+    require_admin()
     try:
         result = await run_in_threadpool(
             hana_table_service.get_table_data,

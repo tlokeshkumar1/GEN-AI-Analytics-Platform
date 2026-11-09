@@ -300,6 +300,59 @@ class HANATableService:
                     pass
             db_manager.return_connection(conn)
 
+    def drop_table(self, table_name: str) -> Dict[str, Any]:
+        """
+        Safely drop a user-created column table in SAP HANA Cloud.
+        Guards strictly prevent dropping core system tables.
+        """
+        clean_table = self.sanitize_identifier(table_name)
+        protected_system_tables = {
+            "DATASETS_METADATA", "PLATFORM_METADATA", "PLATFORM_DOCUMENTS",
+            "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS"
+        }
+        if clean_table.upper() in protected_system_tables:
+            raise ValueError(f"Dropping protected system table '{clean_table}' is strictly prohibited.")
+
+        conn = db_manager.get_connection()
+        if not conn:
+            raise RuntimeError("HANA database is unavailable.")
+
+        cursor = None
+        try:
+            conn.setautocommit(False)
+            cursor = conn.cursor()
+            schema = settings.HANA_SCHEMA
+            if schema:
+                schema_id = schema.replace('"', '""')
+                cursor.execute(f'SET SCHEMA "{schema_id}"')
+
+            # Check if table exists in current schema
+            cursor.execute(
+                "SELECT 1 FROM SYS.TABLES WHERE SCHEMA_NAME = CURRENT_SCHEMA AND TABLE_NAME = ?",
+                (clean_table,),
+            )
+            exists = cursor.fetchone() is not None
+            if not exists:
+                logger.info(f"Table '{clean_table}' does not exist in SAP HANA Cloud. Skipping drop.")
+                return {"success": True, "dropped": False, "table_name": clean_table, "reason": "not_found"}
+
+            logger.info(f"Dropping HANA column table '{clean_table}'...")
+            cursor.execute(f'DROP TABLE "{clean_table}"')
+            conn.commit()
+            logger.info(f"Successfully dropped table '{clean_table}' from SAP HANA Cloud.")
+            return {"success": True, "dropped": True, "table_name": clean_table}
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Failed to drop table '{clean_table}': {e}")
+            raise e
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            db_manager.return_connection(conn)
+
     def persist_dataframe(
         self,
         df: pd.DataFrame,

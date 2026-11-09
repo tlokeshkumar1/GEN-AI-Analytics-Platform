@@ -103,6 +103,20 @@ class MetadataStore:
                                (namespace, key, 1, payload))
         return {"revision": revision + 1, "value": value}
 
+    def delete_dataset_metadata(self, workspace_id: str, dataset_id: str) -> int:
+        """Purge all metadata documents (semantics, reviews, analytics items, dashboards) for a dataset."""
+        patterns = [
+            f"{workspace_id}:%:{dataset_id}:%",
+            f"%:{dataset_id}:%",
+            f"%:{dataset_id}",
+        ]
+        with self.transaction() as cursor:
+            total_deleted = 0
+            for pattern in patterns:
+                cursor.execute("DELETE FROM PLATFORM_DOCUMENTS WHERE NAMESPACE LIKE ?", (pattern,))
+                total_deleted += cursor.rowcount if cursor.rowcount > 0 else 0
+            return total_deleted
+
 
 @lru_cache(maxsize=1)
 def metadata_store():

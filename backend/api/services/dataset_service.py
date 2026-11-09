@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import shutil
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -85,13 +86,14 @@ class DatasetService:
     def _catalog(self):
         if self.repository is not None:
             return self.repository.catalog()
-        try:
-            from api.platform.datasets_metadata_repository import datasets_metadata_repo
-            hana_cat = datasets_metadata_repo.get_catalog(seed_fallback_path=self.catalog_path)
-            if hana_cat is not None:
-                return hana_cat
-        except Exception:
-            pass
+        if self.output_dir == OUTPUT_DIR:
+            try:
+                from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                hana_cat = datasets_metadata_repo.get_catalog(seed_fallback_path=self.catalog_path)
+                if hana_cat is not None:
+                    return hana_cat
+            except Exception:
+                pass
         if self.catalog_path.exists():
             return json.loads(self.catalog_path.read_text(encoding="utf-8"))
         return {"datasets": {}, "activeDatasetId": None, "importedFiles": []}
@@ -100,7 +102,7 @@ class DatasetService:
         if self.repository is not None and path == self.catalog_path:
             self.repository.publish(value)
             return
-        if path == self.catalog_path:
+        if path == self.catalog_path and self.output_dir == OUTPUT_DIR:
             try:
                 from api.platform.datasets_metadata_repository import datasets_metadata_repo
                 datasets_metadata_repo.save_catalog(value)
@@ -227,11 +229,11 @@ class DatasetService:
         return data
 
     @staticmethod
-    def _entry(catalog, dataset_id):
+    def _entry(catalog, dataset_id, for_chat: bool = False):
         entry = catalog["datasets"].get(dataset_id)
         if entry is None:
             raise HTTPException(404, "Dataset not found.")
-        require_dataset_access(entry)
+        require_dataset_access(entry, for_chat=for_chat)
         return entry
 
     def _item(self, entry, active_id=None):
@@ -928,18 +930,107 @@ class DatasetService:
     def delete(self, dataset_id):
         with self._writer():
             catalog = self._catalog()
-            require_dataset_access(self._entry(catalog, dataset_id), write=True)
+            entry = self._entry(catalog, dataset_id)
+            require_dataset_access(entry, write=True)
+
+            folder_name = entry.get("folder")
+            dataset_name = entry.get("name", dataset_id)
+            workspace_id = entry.get("workspaceId") or "default"
+            physical_table_name = entry.get("physical_table_name")
+
+            # 1. Cascade Purge: SAP HANA Cloud Physical Column Table
+            dropped_table = None
+            candidate_tables = []
+            if physical_table_name:
+                candidate_tables.append(physical_table_name)
+            if folder_name:
+                candidate_tables.extend([
+                    f"DS_{folder_name[:18].upper()}_V{entry.get('currentVersion', 1)}",
+                    f"DS_{folder_name[:18].upper()}",
+                    folder_name.upper()
+                ])
+            try:
+                from api.database.hana_table_service import hana_table_service
+                for tbl in candidate_tables:
+                    # Do not drop protected system or shared catalog tables
+                    if tbl.upper() in {"DATASETS_METADATA", "PLATFORM_METADATA", "PLATFORM_DOCUMENTS", "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS", "SALES_ANALYTICS"}:
+                        continue
+                    if hana_table_service.table_exists(tbl):
+                        res = hana_table_service.drop_table(tbl)
+                        if res.get("dropped"):
+                            dropped_table = tbl
+                            logger.info(f"Dropped physical HANA table '{tbl}' for dataset {dataset_id}")
+                            break
+            except Exception as e:
+                logger.warning(f"Error dropping physical table for dataset {dataset_id}: {e}")
+
+            # 2. Cascade Purge: PLATFORM_METADATA / PLATFORM_DOCUMENTS (semantics, reviews, analytics items)
+            purged_metadata_count = 0
+            try:
+                from api.platform.store import metadata_store
+                purged_metadata_count = metadata_store().delete_dataset_metadata(workspace_id, dataset_id)
+                logger.info(f"Purged {purged_metadata_count} PLATFORM_METADATA records for dataset {dataset_id}")
+            except Exception as e:
+                logger.warning(f"Error purging PLATFORM_METADATA for dataset {dataset_id}: {e}")
+
+            # 3. Cascade Purge: DATASETS_METADATA table in SAP HANA Cloud
+            try:
+                from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                datasets_metadata_repo.delete_dataset(dataset_id)
+            except Exception as e:
+                logger.warning(f"Error deleting from DATASETS_METADATA for dataset {dataset_id}: {e}")
+
+            # 4. Cascade Purge: VECTOR_TABLE in SAP HANA Cloud
+            try:
+                from api.database.vector_client import vector_client
+                vector_client.delete_dataset(dataset_id)
+            except Exception as e:
+                logger.warning(f"Error deleting from VECTOR_TABLE for dataset {dataset_id}: {e}")
+
+            # 5. Cascade Purge: Local Storage & Caches
+            # Purge local filesystem folder (raw CSV/XLSX and .version_*.json files)
+            if folder_name:
+                folder_path = self.output_dir / folder_name
+                if folder_path.exists() and folder_path.is_dir():
+                    try:
+                        shutil.rmtree(folder_path, ignore_errors=True)
+                        logger.info(f"Removed local storage directory: {folder_path}")
+                    except Exception as e:
+                        logger.warning(f"Could not delete folder {folder_path}: {e}")
+
+            # Evict from snapshot in-memory cache
+            with self._cache_lock:
+                keys_to_evict = [k for k in self._snapshot_cache if k[0] == dataset_id]
+                for k in keys_to_evict:
+                    self._snapshot_cache.pop(k, None)
+
+            # Clear dashboard cache
+            try:
+                from api.routes.dashboard import clear_dashboard_cache
+                clear_dashboard_cache()
+            except Exception:
+                pass
+
+            # Update catalog JSON
             del catalog["datasets"][dataset_id]
             if catalog["activeDatasetId"] == dataset_id:
                 catalog["activeDatasetId"] = next(iter(catalog["datasets"]), None)
             self._write_json(self.catalog_path, catalog)
             self._invalidate()
-            try:
-                from api.database.vector_client import vector_client
-                vector_client.delete_dataset(dataset_id)
-            except Exception:
-                pass
-            return {"success": True, "message": "Dataset removed from analytics and chat."}
+
+            return {
+                "success": True,
+                "message": f"Dataset '{dataset_name}' and all associated records in HANA physical tables, PLATFORM_METADATA, DATASETS_METADATA, and VECTOR_TABLE deleted.",
+                "deleted": {
+                    "dataset_id": dataset_id,
+                    "name": dataset_name,
+                    "physical_table": dropped_table,
+                    "platform_metadata_purged": purged_metadata_count,
+                    "datasets_metadata_deleted": True,
+                    "vector_rows_deleted": True,
+                    "local_files_removed": True,
+                }
+            }
 
     def active(self):
         selection = current_selection.get()

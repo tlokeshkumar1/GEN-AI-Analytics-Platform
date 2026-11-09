@@ -1,4 +1,6 @@
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from typing import List, Dict, Any, Optional
 import threading
 import time
@@ -6,6 +8,25 @@ from api.config import settings
 from api.utils.logger import get_logger
 
 logger = get_logger("services.ai_core_service")
+
+
+def _create_http_session() -> requests.Session:
+    """Create a persistent HTTP session with connection pooling and retry backoff."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=2,
+        backoff_factor=1.0,
+        status_forcelist=[429, 502, 503, 504],
+        allowed_methods=["POST", "GET"]
+    )
+    adapter = HTTPAdapter(
+        pool_connections=10,
+        pool_maxsize=20,
+        max_retries=retry_strategy
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 class AICoreService:
@@ -17,6 +38,7 @@ class AICoreService:
         self.base_url = settings.AICORE_BASE_URL
         self.token = None
         self.last_used_model: Optional[str] = None
+        self.session = _create_http_session()
 
     def get_token(self) -> Optional[str]:
         if not self.auth_url or not self.client_id:
@@ -24,7 +46,7 @@ class AICoreService:
             return None
         
         try:
-            response = requests.post(
+            response = self.session.post(
                 self.auth_url,
                 data={"grant_type": "client_credentials"},
                 auth=(self.client_id, self.client_secret),
@@ -38,11 +60,11 @@ class AICoreService:
             return None
 
     def _request_with_retry(self, url: str, headers: dict, payload: dict, timeout: int, max_retries: int = 1) -> requests.Response:
-        """Make HTTP request with exponential backoff retry."""
+        """Make HTTP request with exponential backoff retry using connection pool."""
         last_exception = None
         for attempt in range(max_retries + 1):
             try:
-                res = requests.post(url, json=payload, headers=headers, timeout=timeout)
+                res = self.session.post(url, json=payload, headers=headers, timeout=timeout)
                 res.raise_for_status()
                 return res
             except requests.exceptions.Timeout as e:
@@ -75,15 +97,14 @@ class AICoreService:
 
         token = self.get_token()
         if not token:
-            logger.warning("[AI Core] Valid OAuth token not available for SAP AI Core inference.")
+            logger.error("[AI Core] Unable to obtain bearer token for SAP AI Core.")
             return None
 
+        # Build deployment URL
         if deploy_url:
             url = deploy_url
-            if "/chat/completions" not in url:
-                url = f"{url.rstrip('/')}/chat/completions?api-version=2024-02-01"
         else:
-            url = f"{base_url.rstrip('/')}/inference/deployments/{deploy_id}/chat/completions?api-version=2024-02-01"
+            url = f"{base_url.rstrip('/')}/v2/inference/deployments/{deploy_id}/chat/completions"
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -102,7 +123,7 @@ class AICoreService:
         try:
             logger.info(f"[AI Core] Sending graph code generation request to SAP AI Core: {url}")
             t_start = time.perf_counter()
-            res = requests.post(url, json=payload, headers=headers, timeout=30)
+            res = self.session.post(url, json=payload, headers=headers, timeout=30)
             elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
             if res.status_code == 200:
                 data = res.json()
@@ -149,14 +170,17 @@ class AICoreService:
 
         from api.platform.ai_settings import ai_settings
         config = ai_settings()
-        # A workspace-selected model is explicit; responses identify actual provider failures.
-        candidate_models = [
-            config["llm_model"],
-            "nvidia/nemotron-3.5-bolt-e4b",
-            "minimaxai/minimax-m3.1-flash",
+
+        primary_model = config["llm_model"]
+        fallback_models = [
+            "meta/llama-3.2-11b-vision-instruct",
+            "meta/llama-3.1-8b-instruct",
+            "mistralai/mistral-7b-instruct-v0.3",
+            "google/gemma-2-9b-it"
         ]
-        models_to_try = []
-        for m in candidate_models:
+
+        models_to_try = [primary_model]
+        for m in fallback_models:
             if m and m not in models_to_try:
                 models_to_try.append(m)
 
@@ -169,7 +193,7 @@ class AICoreService:
             }
             try:
                 t_start = time.perf_counter()
-                res = requests.post(
+                res = self.session.post(
                     settings.NVIDIA_LLM_URL,
                     json=payload,
                     headers=headers,
@@ -197,16 +221,15 @@ class AICoreService:
                         else:
                             logger.info(f"[NVIDIA RAG] Fallback model {model_name} completed successfully.")
                         return result
-
-                    logger.warning(f"[NVIDIA RAG] Model {model_name} returned status {res.status_code}: {res.text[:100]}")
-            except requests.exceptions.Timeout:
-                logger.warning(f"[NVIDIA RAG] Model {model_name} timed out, trying next fallback...")
+                else:
+                    logger.warning(f"[NVIDIA RAG] Model {model_name} returned {res.status_code}: {res.text[:100]}")
             except Exception as e:
-                logger.warning(f"[NVIDIA RAG] Model {model_name} failed ({e}), trying next fallback...")
+                logger.warning(f"[NVIDIA RAG] Model {model_name} failed: {e}")
 
-        self.last_used_model = None
-        logger.error("[NVIDIA RAG] All NVIDIA LLM models failed or timed out.")
-        raise RuntimeError("All NVIDIA LLM models failed or timed out.")
+        raise RuntimeError(
+            f"All {len(models_to_try)} NVIDIA NIM models failed to generate a response. "
+            "Please check network access to integrate.api.nvidia.com or verify your API key."
+        )
 
     def generate_completion(self, prompt: str) -> str:
         """Standard completion for RAG chat and general queries (uses NVIDIA NIM)."""

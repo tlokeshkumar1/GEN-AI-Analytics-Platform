@@ -88,6 +88,14 @@ def compare_versions(dataset_id: str, from_version: int = Query(ge=1), to_versio
 def list_datasets():
     return dataset_service.list_datasets()
 
+@router.get("/active")
+def get_active_dataset():
+    entry, snapshot = dataset_service.active()
+    if not entry:
+        return {"active": False, "dataset": None}
+    catalog = dataset_service._catalog()
+    return {"active": True, "dataset": dataset_service._item(entry, catalog.get("activeDatasetId"))}
+
 @router.get("/{dataset_id}/data")
 def dataset_data(dataset_id: str, page: int = Query(1, ge=1), pageSize: int = Query(10, ge=1, le=1000),
                  sortField: str | None = None, sortDir: Literal["asc", "desc"] = "asc", search: str = "", version: int | None = Query(None, ge=1)):

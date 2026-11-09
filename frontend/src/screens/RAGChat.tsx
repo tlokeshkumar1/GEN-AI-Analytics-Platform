@@ -157,9 +157,9 @@ export const resolveUserName = (
 
   let candidate = user?.name || user?.user_id || '';
 
-  if (!candidate && typeof window !== 'undefined' && window.localStorage) {
+  if (!candidate && typeof window !== 'undefined') {
     try {
-      const stored = localStorage.getItem('auth_user');
+      const stored = sessionStorage.getItem('auth_user') || localStorage.getItem('auth_user');
       if (stored) {
         const parsed = JSON.parse(stored);
         candidate = parsed.name || parsed.user_id || parsed.email || '';

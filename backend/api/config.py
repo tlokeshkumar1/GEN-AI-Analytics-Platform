@@ -131,6 +131,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     PORT: int = int(os.getenv("PORT", "8000"))
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000")
+    MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
 
     # Data Freshness Settings
     DATA_REFRESH_INTERVAL_MINUTES: int = int(os.getenv("DATA_REFRESH_INTERVAL_MINUTES", "15"))

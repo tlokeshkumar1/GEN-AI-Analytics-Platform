@@ -29,12 +29,12 @@ class SemanticRegistry:
         ws = entry.get("workspaceId") or "default"
         return f"{ws}:{category}:{entry['id']}:v{version}"
 
-    def list(self, entry, version):
-        require_dataset_access(entry)
+    def list(self, entry, version, for_chat: bool = False):
+        require_dataset_access(entry, for_chat=for_chat)
         return [row["value"] for row in self.store.list(self.namespace(entry, version))]
 
-    def get(self, entry, version, revision, approved=False):
-        require_dataset_access(entry)
+    def get(self, entry, version, revision, approved=False, for_chat: bool = False):
+        require_dataset_access(entry, for_chat=for_chat)
         row = self.store.get(self.namespace(entry, version), str(revision))
         if row is None:
             raise HTTPException(409, "Review a semantic model for this dataset version before running analytics.")

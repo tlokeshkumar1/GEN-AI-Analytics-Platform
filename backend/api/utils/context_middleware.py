@@ -31,7 +31,8 @@ class DatasetContextMiddleware:
             if headers.get("x-workspace-id", workspace) != workspace:
                 raise HTTPException(403, "This account has no access to the requested workspace.")
             identity_token = current_identity.set({**identity, "workspace_id": workspace})
-            needs_dataset = path in ("/api/chat", "/api/chat/stream", "/api/analytics", "/api/dashboard") or path.startswith(("/api/insights", "/api/graph/")) or (path.startswith("/api/chat/sessions") and bool(headers.get("x-dataset-id")))
+            is_chat = path in ("/api/chat", "/api/chat/stream") or path.startswith("/api/chat/")
+            needs_dataset = is_chat or path in ("/api/analytics", "/api/dashboard") or path.startswith(("/api/insights", "/api/graph/")) or (path.startswith("/api/chat/sessions") and bool(headers.get("x-dataset-id")))
             if needs_dataset:
                 from api.platform.ai_settings import ai_settings, current_ai_settings
                 ai_token = current_ai_settings.set(await run_in_threadpool(ai_settings))
@@ -39,18 +40,18 @@ class DatasetContextMiddleware:
                 catalog = await run_in_threadpool(dataset_service._catalog)
                 dataset_id = headers.get("x-dataset-id")
                 if not dataset_id:
-                    if (path == "/api/dashboard" or path.startswith("/api/graph/")) and catalog.get("activeDatasetId"):
+                    if (path in ("/api/dashboard", "/api/chat", "/api/chat/stream") or path.startswith(("/api/graph/", "/api/chat/"))) and catalog.get("activeDatasetId"):
                         dataset_id = catalog.get("activeDatasetId")
                     else:
                         raise HTTPException(409, "Select a dataset and version before requesting analytics.")
-                entry = await run_in_threadpool(dataset_service._entry, catalog, dataset_id)
-                require_dataset_access(entry)
+                entry = await run_in_threadpool(dataset_service._entry, catalog, dataset_id, is_chat)
+                require_dataset_access(entry, for_chat=is_chat)
                 try:
                     version = int(headers.get("x-dataset-version", str(entry["currentVersion"])))
                     from api.platform.semantic import semantic_registry
                     pinned_entry = copy.deepcopy(entry)
                     pinned_entry["currentVersion"] = version
-                    models = await run_in_threadpool(semantic_registry.list, pinned_entry, version)
+                    models = await run_in_threadpool(semantic_registry.list, pinned_entry, version, is_chat)
                     approved_models = [m for m in models if m.get("status") == "approved"]
                     latest_approved = max([m["revision"] for m in approved_models], default=None)
 
@@ -74,7 +75,7 @@ class DatasetContextMiddleware:
                     raise HTTPException(422, "Dataset version and semantic revision must be positive integers.") from None
                 snapshot = await run_in_threadpool(dataset_service._snapshot, entry, version)
                 selection_token = current_selection.set(DatasetSelection(context, pinned_entry, snapshot))
-                await run_in_threadpool(semantic_registry.get, pinned_entry, version, revision, True if approved_models else False)
+                await run_in_threadpool(semantic_registry.get, pinned_entry, version, revision, True if approved_models else False, is_chat)
             await self.app(scope, receive, send)
         except HTTPException as exc:
             await JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers={"Cache-Control": "no-store"})(scope, receive, send)

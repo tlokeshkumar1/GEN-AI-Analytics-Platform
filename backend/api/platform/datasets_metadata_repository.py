@@ -203,6 +203,21 @@ class DatasetsMetadataRepository:
             logger.error(f"Failed to save catalog to DATASETS_METADATA: {exc}")
             return False
 
+    def delete_dataset(self, dataset_id: str) -> bool:
+        """Explicitly purge a dataset registration from DATASETS_METADATA."""
+        self.invalidate_cache()
+        client = self._client()
+        if not client:
+            return False
+        try:
+            sql = "DELETE FROM DATASETS_METADATA WHERE WORKSPACE_ID = ? AND DATASET_ID = ?"
+            client.execute_query(sql, (self.workspace_id, dataset_id))
+            logger.info(f"Purged dataset '{dataset_id}' from DATASETS_METADATA for workspace '{self.workspace_id}'")
+            return True
+        except Exception as exc:
+            logger.error(f"Failed to delete dataset '{dataset_id}' from DATASETS_METADATA: {exc}")
+            return False
+
     def _resolve_physical_table(self, table_name: Optional[str] = None) -> str:
         """Dynamically resolve the existing physical table directly from SAP HANA Cloud catalog."""
         client = self._client()

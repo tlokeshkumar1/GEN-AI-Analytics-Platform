@@ -79,6 +79,11 @@ class ContextIsolationTests(unittest.TestCase):
             entry, snapshot = self.service.active()
             return {"dataset": entry["id"], "version": current_selection.get().context.version,
                     "rows": snapshot["rows"]}
+        @app.post("/api/chat")
+        def inspect_chat():
+            entry, snapshot = self.service.active()
+            return {"dataset": entry["id"], "version": current_selection.get().context.version,
+                    "rows": snapshot["rows"], "user_id": current_selection.get().context.user_id}
         self.client = TestClient(app)
         from api.services import dataset_service as module
         mock = patch.object(module, "dataset_service", self.service)
@@ -122,6 +127,31 @@ class ContextIsolationTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.service.mutate(self.a["id"], "append", [{"ID": "valid", "Amount": 30}, {"Wrong": 1}])
         self.assertEqual(self.service._snapshot(entry), before)
+
+    def test_rag_chat_accessible_by_both_admin_and_regular_user(self):
+        # 1. Admin account can access RAG chat on the dataset
+        self.profile.return_value = {"user_id": "admin-user", "roles": ["Admin"], "role": "Admin"}
+        res_admin = self.client.post("/api/chat", headers=self.headers(self.a))
+        self.assertEqual(res_admin.status_code, 200)
+        self.assertEqual(res_admin.json()["dataset"], self.a["id"])
+        self.assertEqual(res_admin.json()["rows"][0]["Amount"], 10)
+        self.assertEqual(res_admin.json()["user_id"], "admin-user")
+
+        # 2. Regular non-admin User / Member can ALSO access RAG chat on the dataset
+        self.profile.return_value = {"user_id": "regular-user", "roles": ["Member"], "role": "Member"}
+        res_user = self.client.post("/api/chat", headers=self.headers(self.a))
+        self.assertEqual(res_user.status_code, 200)
+        self.assertEqual(res_user.json()["dataset"], self.a["id"])
+        self.assertEqual(res_user.json()["rows"][0]["Amount"], 10)
+        self.assertEqual(res_user.json()["user_id"], "regular-user")
+
+        # 3. Access without dataset header falls back to active dataset for chat
+        catalog = self.service._catalog()
+        catalog["activeDatasetId"] = self.a["id"]
+        self.service._write_json(self.service.catalog_path, catalog)
+        res_active = self.client.post("/api/chat")
+        self.assertEqual(res_active.status_code, 200)
+        self.assertEqual(res_active.json()["dataset"], self.a["id"])
 
 
 if __name__ == "__main__":

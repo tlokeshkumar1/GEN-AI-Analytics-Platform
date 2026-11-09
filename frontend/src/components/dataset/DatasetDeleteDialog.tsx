@@ -227,8 +227,15 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
                   <span>Permanent Action Warning</span>
                 </div>
                 <p className="text-[11px] text-rose-800 leading-relaxed">
-                  This removes <strong>{dataset.name}</strong> from the dataset list, analytics, and RAG chat. Saved version files remain on disk for recovery.
+                  This will permanently delete <strong>{dataset.name}</strong> across all storage layers:
                 </p>
+                <ul className="text-[11px] text-rose-800 list-disc list-inside space-y-0.5 mt-1 font-medium">
+                  <li>Physical column tables in SAP HANA Cloud</li>
+                  <li>Semantic models & analytics in <strong>PLATFORM_METADATA</strong></li>
+                  <li>Catalog entries in <strong>DATASETS_METADATA</strong></li>
+                  <li>High-dimensional embeddings in <strong>VECTOR_TABLE</strong></li>
+                  <li>Local version files, snapshots, and runtime caches</li>
+                </ul>
               </div>
 
               <div>
@@ -275,7 +282,9 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
               <Trash2 className="w-3.5 h-3.5" />
             )}
             <span>
-              {deleteMode === 'rows'
+              {isDeleting
+                ? 'Purging from HANA & storage...'
+                : deleteMode === 'rows'
                 ? `Delete ${selectedRowIds.size} Row(s)`
                 : 'Confirm & Delete Entire Dataset'}
             </span>
