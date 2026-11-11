@@ -9,8 +9,18 @@ import {
   getHanaTableData,
   executeHanaQuery,
   deleteHanaTableRange,
+  deleteHanaTable,
 } from '../services/hanaAdminService';
 import { getApiErrorMessage } from '../services/api';
+
+const PROTECTED_SYSTEM_TABLES = new Set([
+  'DATASETS_METADATA',
+  'PLATFORM_METADATA',
+  'PLATFORM_DOCUMENTS',
+  'VECTOR_TABLE',
+  'CHAT_MESSAGES',
+  'CHAT_SESSIONS',
+]);
 
 interface HanaAdminProps {
   onNavigate: (path: string) => void;
@@ -60,6 +70,14 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [deleteError, setDeleteError] = useState<string>('');
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string>('');
+
+  // Delete / Drop Table Modal state
+  const [showDeleteTableModal, setShowDeleteTableModal] = useState<boolean>(false);
+  const [tableToDelete, setTableToDelete] = useState<string>('');
+  const [isDroppingTable, setIsDroppingTable] = useState<boolean>(false);
+  const [dropTableError, setDropTableError] = useState<string>('');
+  const [confirmDropTableName, setConfirmDropTableName] = useState<string>('');
+  const [cascadeDatasetClean, setCascadeDatasetClean] = useState<boolean>(true);
 
   // SQL Console state
   const [sqlQuery, setSqlQuery] = useState<string>('SELECT * FROM "SALES_ANALYTICS" LIMIT 20');
@@ -223,6 +241,61 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
       setDeleteError(getApiErrorMessage(err, 'Failed to delete table records.'));
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleOpenDeleteTableModal = (tableName: string) => {
+    if (PROTECTED_SYSTEM_TABLES.has(tableName.toUpperCase())) return;
+    setTableToDelete(tableName);
+    setConfirmDropTableName('');
+    setDropTableError('');
+    setCascadeDatasetClean(true);
+    setShowDeleteTableModal(true);
+  };
+
+  const handleExecuteDropTable = async () => {
+    if (!tableToDelete) return;
+    if (confirmDropTableName.trim().toUpperCase() !== tableToDelete.trim().toUpperCase()) {
+      setDropTableError(`Please type '${tableToDelete}' exactly to confirm deletion.`);
+      return;
+    }
+
+    setIsDroppingTable(true);
+    setDropTableError('');
+    try {
+      const res = await deleteHanaTable(tableToDelete, cascadeDatasetClean);
+      setShowDeleteTableModal(false);
+      setConfirmDropTableName('');
+      setActionSuccessMsg(res.message || `Table '${tableToDelete}' has been dropped from SAP HANA Cloud.`);
+      setTimeout(() => setActionSuccessMsg(''), 6000);
+
+      // Refresh overview and tables
+      const data = await getHanaOverview();
+      setStats(data.stats);
+      setTables(data.tables || []);
+
+      // If the deleted table was currently selected, select another table
+      if (selectedTableName.toUpperCase() === tableToDelete.toUpperCase()) {
+        const remaining = (data.tables || []).filter(
+          (t) => t.name.toUpperCase() !== tableToDelete.toUpperCase()
+        );
+        if (remaining.length > 0) {
+          const businessTable = remaining.find((t) => !t.isInternal);
+          const nextTable = businessTable ? businessTable.name : remaining[0].name;
+          setSelectedTableName(nextTable);
+          setCurrentPage(1);
+          setRowSearch('');
+          setSearchDebounce('');
+          fetchActiveTableData(nextTable);
+        } else {
+          setSelectedTableName('');
+          setTableData(null);
+        }
+      }
+    } catch (err: unknown) {
+      setDropTableError(getApiErrorMessage(err, `Failed to delete table '${tableToDelete}'`));
+    } finally {
+      setIsDroppingTable(false);
     }
   };
 
@@ -391,27 +464,48 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
               </span>
               {filteredTables.map((t) => {
                 const isSelected = t.name.toUpperCase() === selectedTableName.toUpperCase();
+                const isProtected = PROTECTED_SYSTEM_TABLES.has(t.name.toUpperCase());
                 return (
-                  <button
+                  <div
                     key={t.name}
-                    type="button"
-                    onClick={() => handleSelectTable(t.name)}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer select-none border ${
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-medium transition-all select-none border group ${
                       isSelected
                         ? 'bg-blue-600 text-white border-blue-600 shadow-2xs font-semibold'
                         : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
                     }`}
                   >
-                    <span className="material-symbols-outlined text-[14px]">
-                      {t.name === 'VECTOR_TABLE' ? 'scatter_plot' : t.isInternal ? 'memory' : 'table_view'}
-                    </span>
-                    <span className="font-mono text-[11px] font-bold">{t.name}</span>
-                    <span className={`text-[10px] px-1 py-0.2 rounded font-mono ${
-                      isSelected ? 'bg-blue-700/80 text-white' : 'bg-slate-200 text-slate-700'
-                    }`}>
-                      {t.rowCount >= 1000 ? `${(t.rowCount / 1000).toFixed(1)}k` : t.rowCount}
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTable(t.name)}
+                      className="inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">
+                        {t.name === 'VECTOR_TABLE' ? 'scatter_plot' : t.isInternal ? 'memory' : 'table_view'}
+                      </span>
+                      <span className="font-mono text-[11px] font-bold">{t.name}</span>
+                      <span className={`text-[10px] px-1 py-0.2 rounded font-mono ${
+                        isSelected ? 'bg-blue-700/80 text-white' : 'bg-slate-200 text-slate-700'
+                      }`}>
+                        {t.rowCount >= 1000 ? `${(t.rowCount / 1000).toFixed(1)}k` : t.rowCount}
+                      </span>
+                    </button>
+
+                    {!t.isInternal && !isProtected && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenDeleteTableModal(t.name);
+                        }}
+                        title={`Delete table ${t.name}`}
+                        className={`w-4 h-4 rounded flex items-center justify-center opacity-60 hover:opacity-100 hover:scale-110 transition-all cursor-pointer ${
+                          isSelected ? 'hover:bg-blue-800 text-white' : 'hover:bg-red-100 text-slate-400 hover:text-red-600'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-[13px]">delete</span>
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -522,6 +616,26 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
                 >
                   <span className="material-symbols-outlined text-[14px] text-rose-600">delete_sweep</span>
                   <span>Delete: Range</span>
+                </button>
+
+                {/* 5. DELETE TABLE BUTTON ("drop table") */}
+                <button
+                  type="button"
+                  onClick={() => handleOpenDeleteTableModal(selectedTableName)}
+                  disabled={PROTECTED_SYSTEM_TABLES.has((selectedTableName || '').toUpperCase()) || !selectedTableName}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+                    PROTECTED_SYSTEM_TABLES.has((selectedTableName || '').toUpperCase()) || !selectedTableName
+                      ? 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed opacity-60'
+                      : 'border-red-300 bg-red-50 hover:bg-red-100 text-red-700 shadow-2xs'
+                  }`}
+                  title={
+                    PROTECTED_SYSTEM_TABLES.has((selectedTableName || '').toUpperCase())
+                      ? `Protected system table '${selectedTableName}' cannot be deleted`
+                      : `Permanently delete / drop table '${selectedTableName}' from SAP HANA Cloud`
+                  }
+                >
+                  <span className="material-symbols-outlined text-[14px] text-red-600">delete_forever</span>
+                  <span>Delete Table</span>
                 </button>
               </div>
             </div>
@@ -1143,6 +1257,109 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
                   <span className="material-symbols-outlined text-[15px]">delete_forever</span>
                 )}
                 <span>{isDeleting ? 'Deleting…' : 'Delete Records'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL: DELETE / DROP TABLE ==================== */}
+      {showDeleteTableModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-2xs animate-in fade-in duration-100">
+          <div className="relative w-full max-w-md bg-white rounded-xl shadow-2xl border border-red-200 overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-red-100 bg-red-50/80">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-red-600 text-[22px]">warning</span>
+                <div>
+                  <h3 className="font-bold text-sm text-red-950 font-mono">
+                    Delete Table: {tableToDelete}
+                  </h3>
+                  <p className="text-[11px] text-red-700">Permanent SAP HANA Cloud table drop</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDeleteTableModal(false)}
+                className="w-6 h-6 rounded flex items-center justify-center text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[16px]">close</span>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-4 space-y-3.5 text-xs">
+              <div className="bg-red-50/50 p-3 rounded-lg border border-red-200 text-slate-700 space-y-2">
+                <p className="text-xs text-red-900 font-semibold flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-red-600 text-[16px]">dangerous</span>
+                  This action is irreversible and executes:
+                </p>
+                <code className="block bg-slate-900 text-rose-300 px-2.5 py-1.5 rounded font-mono text-[11px]">
+                  DROP TABLE "{tableToDelete}"
+                </code>
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  All column definitions, schema constraints, indexes, and stored records within this table will be permanently removed from SAP HANA Cloud.
+                </p>
+              </div>
+
+              {/* Cascade Dataset Cleanup Checkbox */}
+              <label className="flex items-start gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100/70 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={cascadeDatasetClean}
+                  onChange={(e) => setCascadeDatasetClean(e.target.checked)}
+                  className="mt-0.5 rounded text-red-600 focus:ring-red-500 h-3.5 w-3.5 cursor-pointer"
+                />
+                <span className="text-[11px] text-slate-700 leading-snug">
+                  <strong>Cascade Dataset Cleanup:</strong> If this table was uploaded as a dataset, also purge associated catalog metadata from <code className="text-[10px] bg-slate-200 px-1 py-0.2 rounded font-mono">DATASETS_METADATA</code> and vector embeddings from <code className="text-[10px] bg-slate-200 px-1 py-0.2 rounded font-mono">VECTOR_TABLE</code>.
+                </span>
+              </label>
+
+              {/* Type Table Name to Confirm */}
+              <div className="space-y-1">
+                <label className="block text-[11px] font-semibold text-slate-700">
+                  Type <span className="font-mono font-bold text-red-700 select-all">{tableToDelete}</span> to confirm deletion:
+                </label>
+                <input
+                  type="text"
+                  value={confirmDropTableName}
+                  onChange={(e) => setConfirmDropTableName(e.target.value)}
+                  placeholder={`Enter ${tableToDelete}`}
+                  className="w-full px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500"
+                />
+              </div>
+
+              {dropTableError && (
+                <div role="alert" className="p-2.5 rounded-lg bg-red-100 border border-red-200 text-red-900 text-[11px] font-medium flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[16px] text-red-700 shrink-0">error</span>
+                  <span>{dropTableError}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-4 py-2.5 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowDeleteTableModal(false)}
+                disabled={isDroppingTable}
+                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExecuteDropTable}
+                disabled={isDroppingTable || confirmDropTableName.trim().toUpperCase() !== tableToDelete.trim().toUpperCase()}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-semibold bg-red-600 hover:bg-red-700 text-white shadow-2xs transition-colors cursor-pointer disabled:opacity-40"
+              >
+                {isDroppingTable ? (
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <span className="material-symbols-outlined text-[15px]">delete_forever</span>
+                )}
+                <span>{isDroppingTable ? 'Dropping Table…' : 'Drop Table Permanently'}</span>
               </button>
             </div>
           </div>

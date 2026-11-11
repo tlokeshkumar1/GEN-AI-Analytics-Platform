@@ -1177,7 +1177,31 @@ for bar in bars:
         df_agg = None
 
         try:
-            df = excel_dataset_service.get_df()
+            joins = query_plan.get("joins") if query_plan else None
+            left_ds = (query_plan.get("left_dataset_id") or query_plan.get("dataset_id")) if query_plan else None
+            df = None
+            if joins and left_ds:
+                try:
+                    from api.platform.join_service import join_service
+                    for j in joins:
+                        r_id = j.get("right_dataset_id") if isinstance(j, dict) else getattr(j, "right_dataset_id", None)
+                        l_k = j.get("left_key") if isinstance(j, dict) else getattr(j, "left_key", None)
+                        r_k = j.get("right_key") if isinstance(j, dict) else getattr(j, "right_key", None)
+                        if r_id:
+                            if not l_k or not r_k:
+                                res = join_service.resolve_join(left_ds, r_id)
+                                if res.get("joinable"):
+                                    l_k = res["left_key"]
+                                    r_k = res["right_key"]
+                            if l_k and r_k:
+                                df = join_service.load_joined_dataframe(left_ds, r_id, l_k, r_k, how="left")
+                                logger.info(f"[Graph Agent] Successfully merged tables {left_ds} and {r_id} on {l_k}={r_k}")
+                                break
+                except Exception as join_exc:
+                    logger.warning(f"[Graph Agent] Failed to load joined DataFrame: {join_exc}")
+
+            if df is None:
+                df = excel_dataset_service.get_df()
             data_as_of = excel_dataset_service.get_data_as_of()
             records_in_source = len(df)
 

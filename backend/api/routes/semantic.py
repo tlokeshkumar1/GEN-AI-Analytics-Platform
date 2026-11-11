@@ -128,6 +128,23 @@ def review(dataset_id: str, version: int, revision: int, body: Review):
     return result
 
 
+class ResolveJoinRequest(BaseModel):
+    left_dataset_id: str
+    right_dataset_id: str
+
+
+@router.post("/api/analytics/resolve-join")
+def resolve_join_endpoint(body: ResolveJoinRequest):
+    from api.platform.join_service import join_service
+    return join_service.resolve_join(body.left_dataset_id, body.right_dataset_id)
+
+
+@router.get("/api/analytics/join-graph")
+def join_graph_endpoint():
+    from api.platform.join_service import join_service
+    return {"edges": join_service.get_workspace_join_graph()}
+
+
 def selected():
     value = current_selection.get()
     if value is None:

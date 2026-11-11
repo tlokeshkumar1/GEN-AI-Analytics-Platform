@@ -112,6 +112,14 @@ class DatasetsMetadataRepository:
                     "ownerId": row.get("OWNER_ID"),
                     "readers": meta.get("readers", ["*"]),
                     "writers": meta.get("writers", []),
+                    "tableName": meta.get("tableName") or meta.get("table_name"),
+                    "table_name": meta.get("table_name") or meta.get("tableName"),
+                    "displayName": meta.get("displayName") or meta.get("display_name"),
+                    "display_name": meta.get("display_name") or meta.get("displayName"),
+                    "sheetName": meta.get("sheetName") or meta.get("sheet_name"),
+                    "sheet_name": meta.get("sheet_name") or meta.get("sheetName"),
+                    "sourceFilename": meta.get("sourceFilename") or meta.get("source_filename") or meta.get("sourceFile"),
+                    "sourceFile": meta.get("sourceFile") or meta.get("sourceFilename") or meta.get("source_filename"),
                     "versions": versions,
                     "updatedAt": updated_at_str,
                 }
@@ -145,12 +153,28 @@ class DatasetsMetadataRepository:
             # Upsert each dataset
             for d_id, entry in datasets.items():
                 is_active = (d_id == active_id)
+                table_name = entry.get("tableName") or entry.get("table_name")
+                display_name = entry.get("displayName") or entry.get("display_name")
+                sheet_name = entry.get("sheetName") or entry.get("sheet_name")
+                source_file = entry.get("sourceFile") or entry.get("sourceFilename") or entry.get("source_filename")
+
                 meta = {
                     "readers": entry.get("readers", ["*"]),
                     "writers": entry.get("writers", []),
+                    "tableName": table_name,
+                    "table_name": table_name,
+                    "displayName": display_name,
+                    "display_name": display_name,
+                    "sheetName": sheet_name,
+                    "sheet_name": sheet_name,
+                    "sourceFilename": source_file,
+                    "sourceFile": source_file,
                 }
                 versions_json = json.dumps(entry.get("versions", []), ensure_ascii=False)
                 metadata_json = json.dumps(meta, ensure_ascii=False)
+
+                # Persist clean name: prefer clean display_name or table_name over raw filename
+                persisted_name = display_name or table_name or entry.get("name", d_id)
 
                 sql = """
                     UPSERT DATASETS_METADATA (
@@ -162,7 +186,7 @@ class DatasetsMetadataRepository:
                 client.execute_query(sql, (
                     self.workspace_id,
                     d_id,
-                    entry.get("name", d_id),
+                    persisted_name,
                     entry.get("folder", d_id),
                     int(entry.get("currentVersion", 1)),
                     is_active,
@@ -279,7 +303,16 @@ class DatasetsMetadataRepository:
             if c_clean in hana_tables:
                 return c_clean
 
-        # 4. If no exact candidate match, pick the user table in HANA with the most records
+        # Fuzzy token matching before generic fallback
+        import re
+        for c in candidates:
+            c_norm = re.sub(r'[^A-Z0-9]+', '_', c.upper()).strip('_')
+            for h_table in hana_tables:
+                h_norm = re.sub(r'[^A-Z0-9]+', '_', h_table).strip('_')
+                if c_norm == h_norm or (len(c_norm) > 8 and (c_norm in h_norm or h_norm in c_norm)):
+                    return h_table
+
+        # 4. If no candidate match, pick the user table in HANA with the most records
         if hana_tables:
             sorted_by_records = sorted(hana_tables.items(), key=lambda x: x[1], reverse=True)
             if sorted_by_records[0][1] > 0:

@@ -85,8 +85,19 @@ def compare_versions(dataset_id: str, from_version: int = Query(ge=1), to_versio
             "identity_note": "Local row identifiers persist through edits and appends. Use approved source keys to compare independent replacement uploads."}
 
 @router.get("")
-def list_datasets():
+def list_datasets(sync_tables: bool = Query(False)):
+    if sync_tables:
+        try:
+            from api.platform.reconciliation_service import reconciliation_service
+            reconciliation_service.reconcile_all_tables()
+        except Exception:
+            pass
     return dataset_service.list_datasets()
+
+@router.post("/reconcile-tables")
+def reconcile_tables():
+    from api.platform.reconciliation_service import reconciliation_service
+    return reconciliation_service.reconcile_all_tables()
 
 @router.get("/active")
 def get_active_dataset():

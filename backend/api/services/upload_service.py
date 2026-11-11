@@ -58,11 +58,19 @@ class UploadService:
         clean_content = clean_buffer.getvalue()
 
         # Step 1: Upload clean dataset version & create vector embeddings
+        # Note: clean_content is already normalized by IngestionService.prepare() + Agent 1 into a clean
+        # single-sheet table with row-1 headers, so raw sheet/header/transform options must not be re-applied.
+        sheet_name = transformation_plan.sheet if (transformation_plan and hasattr(transformation_plan, 'sheet')) else None
+        display_name = target_table_name or (f"{filename.rsplit('.', 1)[0]} - {sheet_name}" if sheet_name else filename.rsplit('.', 1)[0])
+
         result = dataset_service.upload(
             clean_content,
             filename,
             async_index=async_index,
-            transformation_plan=transformation_plan
+            transformation_plan=None,
+            table_name=target_table_name,
+            display_name=display_name,
+            sheet_name=sheet_name,
         )
         dataset_entry = result["dataset"]
         dataset_id = dataset_entry["id"]
@@ -102,6 +110,19 @@ class UploadService:
                     action=table_action,
                 )
                 logger.info(f"[UploadService] Clean data persisted to HANA table '{active_table}'.")
+                try:
+                    with dataset_service._writer():
+                        cat = dataset_service._catalog()
+                        rentry = dataset_service._entry(cat, dataset_id)
+                        rentry["tableName"] = active_table
+                        rentry["table_name"] = active_table
+                        if target_table_name:
+                            rentry["displayName"] = target_table_name
+                            rentry["display_name"] = target_table_name
+                            rentry["name"] = target_table_name
+                        dataset_service._write_json(dataset_service.catalog_path, cat)
+                except Exception as ex:
+                    logger.debug(f"[UploadService] Note: Could not update table_name on catalog entry: {ex}")
             except Exception as e:
                 logger.error(f"[UploadService] Dynamic HANA table error for '{active_table}': {e}")
                 cloud_table_info = {

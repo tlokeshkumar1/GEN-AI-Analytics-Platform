@@ -49,8 +49,11 @@ def _login(token: str | None, username: str | None, password: str | None) -> dic
         # If SAP direct password grant failed, provide local dev session in development environment
         if not token:
             if os.getenv("APP_ENV", "development") == "development" or not os.getenv("VCAP_APPLICATION"):
-                clean_user = username.strip()
-                name_part = clean_user.split("@")[0].replace(".", " ").title() if "@" in clean_user else clean_user
+                from urllib.parse import quote
+                stripped_user = username.strip()
+                clean_user = quote(stripped_user, safe="@.")
+                raw_name = stripped_user.split("@")[0].replace(".", " ").title() if "@" in stripped_user else stripped_user
+                name_part = quote(raw_name, safe="")
                 token = f"dev-token-local:{clean_user}:{name_part}:{uuid.uuid4().hex[:8]}"
             else:
                 if sap_error:

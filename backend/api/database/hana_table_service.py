@@ -13,7 +13,13 @@ from api.utils.logger import get_logger
 logger = get_logger("database.hana_table_service")
 
 # Reserved / internal tables that should not be listed as business tables by default
-INTERNAL_TABLES = {"VECTOR_TABLE", "CHAT_SESSIONS", "CHAT_MESSAGES"}
+INTERNAL_TABLES = {
+    "VECTOR_TABLE",
+    "CHAT_SESSIONS",
+    "CHAT_MESSAGES",
+    "DATASETS_METADATA",
+    "PLATFORM_METADATA",
+}
 
 
 def serialize_hana_value(val: Any) -> Any:

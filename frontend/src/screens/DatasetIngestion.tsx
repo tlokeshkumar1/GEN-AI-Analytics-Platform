@@ -13,7 +13,7 @@ import { DatasetAppendView } from '../components/dataset/DatasetAppendView';
 import { DatasetDeleteDialog } from '../components/dataset/DatasetDeleteDialog';
 import { DatasetItem, DatasetAction, DATASET_ACTIONS } from '../types/dataset';
 import { UploadResponse } from '../services/uploadService';
-import { getDatasets, getDatasetData, getUserPermissions, rollbackDataset, activateDataset, reindexDataset, getDatasetStatus } from '../services/datasetService';
+import { getDatasets, getDatasetData, getUserPermissions, rollbackDataset, activateDataset, reindexDataset, getDatasetStatus, reconcileTables } from '../services/datasetService';
 import { listConnections } from '../services/systemService';
 
 interface DatasetIngestionProps {
@@ -25,6 +25,7 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
   const [datasets, setDatasets] = useState<DatasetItem[]>([]);
   const [connections, setConnections] = useState<any[]>([]);
   const [loadingDatasets, setLoadingDatasets] = useState(false);
+  const [syncingTables, setSyncingTables] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
   const [sourceTab, setSourceTab] = useState<'all' | 'uploads' | 'connected'>('all');
 
@@ -210,6 +211,20 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
       setError(getApiErrorMessage(err, 'Failed to refresh dataset.'));
     }
   }, [activeDataset]);
+
+  const handleSyncTables = async () => {
+    setSyncingTables(true);
+    setError(null);
+    try {
+      const res = await reconcileTables();
+      setMessage(`Successfully reconciled ${res.totalDatasets} HANA tables (${res.unbundledCount} multi-sheet tables unbundled).`);
+      setRefreshTrigger(n => n + 1);
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Failed to reconcile HANA tables.'));
+    } finally {
+      setSyncingTables(false);
+    }
+  };
 
   const upload = async (file: File) => {
     if (isBusy || !basePermissions.canAppend) return;
@@ -692,6 +707,18 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
               <div className="flex items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => void handleSyncTables()}
+                  disabled={syncingTables}
+                  title="Rescan and sync all tables from SAP HANA Cloud"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <span className={`material-symbols-outlined text-[16px] text-emerald-600 ${syncingTables ? 'animate-spin' : ''}`}>
+                    sync
+                  </span>
+                  <span>{syncingTables ? 'Syncing...' : 'Sync HANA Tables'}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => onNavigate('system-settings/connections')}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-600 hover:text-blue-700 hover:bg-blue-50 border border-slate-200 transition-colors"
                 >
@@ -775,15 +802,21 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
 
                         {/* Title & Info */}
                         <h3
-                          title={ds.name}
+                          title={ds.tableName || ds.displayName || ds.name}
                           className="font-bold text-slate-900 text-sm group-hover:text-blue-600 transition-colors truncate"
                         >
-                          {ds.name}
+                          {ds.tableName || ds.displayName || ds.name.replace(/\.[^/.]+$/, '')}
                         </h3>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          Version {ds.currentVersion || 1} · Ingested{' '}
-                          {new Date(ds.lastUpdated).toLocaleDateString()}
-                        </p>
+                        <div className="flex flex-col gap-0.5 mt-0.5">
+                          <p className="text-[11px] text-slate-500 truncate" title={ds.sourceFile || ds.sourceFilename || ds.currentFilename || ds.name}>
+                            <span className="font-semibold text-slate-600">Source:</span> {ds.sourceFile || ds.sourceFilename || ds.currentFilename || ds.name}
+                            {ds.sheetName ? <span className="ml-1 px-1.5 py-0.2 bg-blue-50 text-blue-700 rounded text-[10px] font-semibold border border-blue-200">Sheet: {ds.sheetName}</span> : null}
+                          </p>
+                          <p className="text-[10px] text-slate-400">
+                            Version {ds.currentVersion || 1} · Ingested{' '}
+                            {new Date(ds.lastUpdated).toLocaleDateString()}
+                          </p>
+                        </div>
 
                         {/* Metrics Grid */}
                         <div className="grid grid-cols-2 gap-2 mt-2.5 p-2 rounded-lg bg-slate-50 border border-slate-100">

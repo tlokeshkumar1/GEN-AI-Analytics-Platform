@@ -94,8 +94,8 @@ class SemanticRegistry:
             left_count = len(frame.dropna(subset=relationship.left_keys))
             relationship.evidence = {"left_non_null_rows": left_count, "matched_left_rows": len(joined),
                                      "right_rows": len(right_frame), "right_key_unique": True}
-            if len(joined) != left_count:
-                raise HTTPException(422, "Relationship has unmatched keys. Review key coverage before approving the join.")
+            if len(joined) == 0:
+                raise HTTPException(422, "Relationship has no matching keys between datasets.")
         fields = {field.name: field for field in model.fields}
         for metric in model.derived_metrics:
             if metric.name in fields:
@@ -180,7 +180,12 @@ class SemanticRegistry:
             definition = next((metric for metric in model.derived_metrics if metric.name == name), None)
             if definition:
                 dependencies.update(measure.field for measure in definition.dependencies.values())
-        dependencies.update("relationship:" + join.relationship for join in query.joins)
+        for join in query.joins:
+            if join.relationship:
+                dependencies.add("relationship:" + join.relationship)
+            elif join.right_dataset_id or join.right_table:
+                target_ref = join.right_dataset_id or join.right_table
+                dependencies.add(f"join:{target_ref}:{join.left_key or ''}:{join.right_key or ''}")
         item.dependencies = sorted(dependencies)
         self.store.put(self.namespace(entry, version, f"analytics:{semantic_revision}"), f"{item.id}:{revision}", item.model_dump(mode="json"))
         return item

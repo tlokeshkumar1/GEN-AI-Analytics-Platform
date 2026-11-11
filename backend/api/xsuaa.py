@@ -45,10 +45,10 @@ def xsuaa_credentials(plan: str = "application") -> dict:
 
 
 def bearer_token(authorization: str | None) -> str:
-    parts = (authorization or "").split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
+    parts = (authorization or "").strip().split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
         raise HTTPException(401, "SAP XSUAA authentication required. Sign in again.", headers={"WWW-Authenticate": "Bearer"})
-    return parts[1]
+    return parts[1].strip()
 
 
 def validate_token(token: str, credentials: dict | None = None) -> tuple:
@@ -66,9 +66,10 @@ def validate_token(token: str, credentials: dict | None = None) -> tuple:
             def get_logon_name(self) -> str:
                 return "admin@sap.corp"
 
+        from urllib.parse import unquote
         parts = token.split(":")
-        user_email = parts[1] if len(parts) > 1 else "lokesh@neovatic.com"
-        user_name = parts[2] if len(parts) > 2 else "Lokesh Kumar (Admin)"
+        user_email = unquote(parts[1]) if len(parts) > 1 else "lokesh@neovatic.com"
+        user_name = unquote(parts[2]) if len(parts) > 2 else "Lokesh Kumar (Admin)"
         user_id = parts[3] if len(parts) > 3 else "dev-admin-user"
 
         claims = {

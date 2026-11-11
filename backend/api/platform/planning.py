@@ -31,6 +31,42 @@ def classify_request(prompt):
         if cache_key in _INTENT_CACHE:
             return copy.deepcopy(_INTENT_CACHE[cache_key])
     text = prompt.casefold()
+
+    # Discover any joinable datasets dynamically in the current workspace
+    from api.platform.join_service import join_service
+    current_ds_id = selection.context.dataset_id
+    join_edges = join_service.get_workspace_join_graph()
+    joined_dims_map = {}  # dim_lower -> (c_name, edge, other_id)
+    for edge in join_edges:
+        if edge.get("joinable"):
+            other_id = edge["right_dataset_id"] if edge["left_dataset_id"] == current_ds_id else (edge["left_dataset_id"] if edge["right_dataset_id"] == current_ds_id else None)
+            if other_id:
+                for c in join_service.get_dataset_columns(other_id):
+                    if c.get("role") in ("dimension", "identifier", "time"):
+                        joined_dims_map[c["name"]] = (c["name"], edge, other_id)
+
+    # Pre-flight check: if prompt asks for a dimension (by X / per X) belonging to an unjoinable table
+    joinable_other_ids = set()
+    for edge in join_edges:
+        if edge.get("joinable"):
+            if edge.get("left_dataset_id") == current_ds_id:
+                joinable_other_ids.add(edge.get("right_dataset_id"))
+            elif edge.get("right_dataset_id") == current_ds_id:
+                joinable_other_ids.add(edge.get("left_dataset_id"))
+
+    from api.services.dataset_service import dataset_service
+    catalog = dataset_service._catalog()
+    for ds_id, ds_entry in catalog.get("datasets", {}).items():
+        if ds_id == current_ds_id or ds_id in joinable_other_ids:
+            continue
+        for c in join_service.get_dataset_columns(ds_id):
+            c_name = c.get("name", "")
+            if not c_name or any(k.casefold() == c_name.casefold() for k in joined_dims_map):
+                continue
+            c_pattern = re.escape(c_name.casefold()).replace("_", r"[\s_]+")
+            if re.search(r"\b(by|per)\s+" + c_pattern, text):
+                raise HTTPException(422, f"The field '{c_name}' belongs to dataset '{ds_entry.get('name', ds_id)}' which cannot be joined with the active dataset because they do not share common keys or matching data.")
+
     numerical = bool(re.search(r"\b(total|sum|average|avg|count|how many|how much|top|bottom|highest|lowest|compare|chart|graph|plot|min|max|minimum|maximum|trend|trends)\b", text))
     if not re.search(r"\b(meaning|definition|describe|explain)\b", text):
         numerical = numerical or any(f.role == "measure" and any(re.search(r"(?<!\w)" + re.escape(alias.casefold()) + r"(?!\w)", text) for alias in [f.name, f.semantic_name, *f.aliases]) for f in model.fields)
@@ -92,6 +128,40 @@ def classify_request(prompt):
             matched.append(field)
     measures = [f for f in matched if f.role == "measure"]
     dimensions = [f for f in matched if f.role in ("dimension", "identifier", "time") and re.search(r"\b(by|per)\s+" + re.escape(f.name.casefold()), text)]
+    selected_dims = [f.name for f in dimensions]
+    joined_joins = []
+
+    # Check joinable tables for cross-table dimensions if none found locally
+    if not selected_dims and joined_dims_map:
+        for raw_name, (actual_name, edge, other_id) in joined_dims_map.items():
+            pattern = re.escape(raw_name.casefold()).replace("_", r"[\s_]+")
+            if re.search(r"\b(by|per)\s+" + pattern, text) or re.search(r"(?<!\w)" + pattern + r"(?!\w)", text):
+                from api.models.query_plan import Join
+                selected_dims.append(actual_name)
+                joined_joins.append(Join(
+                    right_dataset_id=other_id,
+                    left_key=edge["left_key"],
+                    right_key=edge["right_key"],
+                    how="left"
+                ))
+                break
+
+    # If still not found, check if user requested a field from an unjoinable dataset
+    if not selected_dims:
+        from api.services.dataset_service import dataset_service
+        catalog = dataset_service._catalog()
+        for ds_id, ds_entry in catalog.get("datasets", {}).items():
+            if ds_id == current_ds_id:
+                continue
+            cols = join_service.get_dataset_columns(ds_id)
+            for c in cols:
+                c_name = c["name"]
+                c_pattern = re.sub(r"[_\\s]+", r"[\\s_]+", re.escape(c_name.casefold()))
+                if re.search(r"\b(by|per)\s+" + c_pattern, text) or re.search(r"(?<!\w)" + c_pattern + r"(?!\w)", text):
+                    is_joinable = any(e.get("joinable") and (e["right_dataset_id"] == ds_id or e["left_dataset_id"] == ds_id) for e in join_edges)
+                    if not is_joinable:
+                        raise HTTPException(422, f"The field '{c_name}' belongs to dataset '{ds_entry.get('name', ds_id)}' which cannot be joined with the active dataset because they do not share common keys or matching data.")
+
     aggregation = None
     for pattern, agg in [(r"count distinct|unique", "COUNT_DISTINCT"), (r"\b(count|how many)\b", "COUNT"),
                          (r"\b(average|avg)\b", "AVG"), (r"\b(minimum|min|lowest)\b", "MIN"),
@@ -111,8 +181,14 @@ def classify_request(prompt):
         raise HTTPException(422, "Specify an aggregation or approve a default for this metric.")
     if re.search(r"\b(where|between|during|since|until|for|in|compare|versus|vs)\b", text):
         raise HTTPException(422, "This request needs an explicit filtered query plan. Configure AI planning or use the structured editor.")
-    out = QueryPlan(intent="graph" if re.search(r"\b(chart|plot|graph)\b", text) else "analytical",
-                     metric=metric, aggregation=aggregation, dimensions=[f.name for f in dimensions]).model_dump(exclude_none=True)
+    out = QueryPlan(
+        intent="graph" if re.search(r"\b(chart|plot|graph)\b", text) else "analytical",
+        left_dataset_id=current_ds_id if joined_joins else None,
+        metric=metric,
+        aggregation=aggregation,
+        dimensions=selected_dims,
+        joins=joined_joins,
+    ).model_dump(exclude_none=True)
     with _INTENT_CACHE_LOCK:
         if len(_INTENT_CACHE) > 200:
             _INTENT_CACHE.pop(next(iter(_INTENT_CACHE)), None)

@@ -173,13 +173,82 @@ class AnalyticsEngine:
             return min(values) if aggregation == "MIN" else max(values)
 
     def _execute_on_hana(self, plan: QueryPlan, start: float):
-        """Execute analytical query directly on SAP HANA Cloud SALES_ANALYTICS table."""
+        """Execute analytical query directly on SAP HANA Cloud table(s), supporting dynamic joins."""
         try:
             from api.database.hana_client import hana_client
-            dim_cols = [d.upper() for d in plan.dimensions]
+            from api.platform.datasets_metadata_repository import datasets_metadata_repo
+            from api.models.execution_context import current_selection
+            selection = current_selection.get()
+
+            # 1. Resolve base (left) table
+            target_table = getattr(plan, "table_name", None)
+            if not target_table and getattr(plan, "left_dataset_id", None):
+                from api.services.dataset_service import dataset_service
+                cat = dataset_service._catalog()
+                left_entry = dataset_service._entry(cat, plan.left_dataset_id, for_chat=True)
+                if left_entry:
+                    target_table = left_entry.get("physical_table_name") or left_entry.get("name")
+            if not target_table and getattr(plan, "dataset_id", None):
+                from api.services.dataset_service import dataset_service
+                cat = dataset_service._catalog()
+                left_entry = dataset_service._entry(cat, plan.dataset_id, for_chat=True)
+                if left_entry:
+                    target_table = left_entry.get("physical_table_name") or left_entry.get("name")
+            if not target_table and selection and selection.entry:
+                target_table = selection.entry.get("physical_table_name") or selection.entry.get("name")
+            target_table = datasets_metadata_repo._resolve_physical_table(target_table)
+
+            # 2. Process joins if present
+            join_clauses = []
+            right_schemas = []
+            if plan.joins:
+                from api.platform.join_service import join_service
+                from api.services.dataset_service import dataset_service
+                cat = dataset_service._catalog()
+                left_id = getattr(plan, "left_dataset_id", None) or getattr(plan, "dataset_id", None) or (selection.entry["id"] if selection and selection.entry else None)
+                for idx, j in enumerate(plan.joins):
+                    r_table = j.right_table
+                    r_key = j.right_key
+                    l_key = j.left_key
+                    if not r_table and j.right_dataset_id:
+                        r_entry = dataset_service._entry(cat, j.right_dataset_id, for_chat=True)
+                        if r_entry:
+                            r_table = datasets_metadata_repo._resolve_physical_table(
+                                r_entry.get("physical_table_name") or r_entry.get("name")
+                            )
+                    if (not l_key or not r_key) and j.right_dataset_id and left_id:
+                        res = join_service.resolve_join(left_id, j.right_dataset_id)
+                        if res.get("joinable"):
+                            l_key = res["left_key"]
+                            r_key = res["right_key"]
+                            if not r_table:
+                                r_table = res.get("right_table")
+
+                    if r_table and l_key and r_key:
+                        r_alias = f"R{idx + 1}"
+                        r_schema_cols = {c["name"].upper(): c["name"] for c in datasets_metadata_repo.load_schema_from_hana(r_table)}
+                        right_schemas.append((r_alias, r_schema_cols))
+                        join_type = "LEFT JOIN" if j.how == "left" else "INNER JOIN"
+                        join_clauses.append(f'{join_type} "{r_table}" {r_alias} ON L."{l_key.upper()}" = {r_alias}."{r_key.upper()}"')
+
+            has_joins = bool(join_clauses)
+            left_schema_cols = {c["name"].upper(): c["name"] for c in datasets_metadata_repo.load_schema_from_hana(target_table)}
+
+            def qualify_col(col_name: str) -> str:
+                if not has_joins:
+                    return f'"{col_name.upper()}"'
+                c_up = col_name.upper()
+                for r_alias, r_cols in right_schemas:
+                    if c_up in r_cols:
+                        return f'{r_alias}."{c_up}"'
+                if c_up in left_schema_cols:
+                    return f'L."{c_up}"'
+                return f'"{c_up}"'
+
+            dim_cols = [f'{qualify_col(d)} AS "{d.upper()}"' for d in plan.dimensions] if has_joins else [f'"{d.upper()}"' for d in plan.dimensions]
             measure_exprs = []
             for m in plan.measures:
-                col = m.field.upper() if m.field != '*' else '*'
+                col = qualify_col(m.field) if m.field != '*' else '*'
                 agg = m.aggregation.upper()
                 alias = m.alias or m.field
                 if agg == 'COUNT_DISTINCT':
@@ -195,7 +264,7 @@ class AnalyticsEngine:
             where_parts = []
             params = []
             for f in (plan.filters or []):
-                col = f.column.upper()
+                col = qualify_col(f.column)
                 op = f.operator.upper()
                 if op == 'IS_NULL':
                     where_parts.append(f'{col} IS NULL')
@@ -213,7 +282,7 @@ class AnalyticsEngine:
                     params.append(f.value)
 
             where_clause = f'WHERE {" AND ".join(where_parts)}' if where_parts else ''
-            group_clause = f'GROUP BY {", ".join(dim_cols)}' if dim_cols else ''
+            group_clause = f'GROUP BY {", ".join([qualify_col(d) for d in plan.dimensions])}' if plan.dimensions else ''
 
             order_clause = ''
             if plan.sort:
@@ -222,11 +291,11 @@ class AnalyticsEngine:
                 if matched_alias:
                     order_clause = f'ORDER BY "{matched_alias}" {plan.sort.direction.upper()}'
                 else:
-                    order_clause = f'ORDER BY {sort_col.upper()} {plan.sort.direction.upper()}'
+                    order_clause = f'ORDER BY {qualify_col(sort_col)} {plan.sort.direction.upper()}'
             else:
                 temporal_dims = [d for d in plan.dimensions if is_temporal_dimension(d)]
                 if temporal_dims:
-                    order_cols = [f'{td.upper()} ASC' for td in temporal_dims]
+                    order_cols = [f'{qualify_col(td)} ASC' for td in temporal_dims]
                     order_clause = f'ORDER BY {", ".join(order_cols)}'
                 elif plan.limit and plan.measures:
                     order_col = plan.measures[0].alias or plan.measures[0].field
@@ -234,15 +303,8 @@ class AnalyticsEngine:
 
             limit_clause = f'LIMIT {plan.limit}' if plan.limit else ''
 
-            from api.platform.datasets_metadata_repository import datasets_metadata_repo
-            from api.models.execution_context import current_selection
-            selection = current_selection.get()
-            target_table = getattr(plan, "table_name", None)
-            if not target_table and selection and selection.entry:
-                target_table = selection.entry.get("physical_table_name") or selection.entry.get("name")
-            target_table = datasets_metadata_repo._resolve_physical_table(target_table)
-
-            sql = ' '.join(filter(None, ['SELECT', select_clause, f'FROM "{target_table}"', where_clause, group_clause, order_clause, limit_clause]))
+            from_clause = f'FROM "{target_table}" L {" ".join(join_clauses)}' if has_joins else f'FROM "{target_table}"'
+            sql = ' '.join(filter(None, ['SELECT', select_clause, from_clause, where_clause, group_clause, order_clause, limit_clause]))
             raw_rows = hana_client.execute_query(sql, tuple(params))
             if raw_rows is None:
                 return None
@@ -311,13 +373,22 @@ class AnalyticsEngine:
             plan = QueryPlan.model_validate(query_plan)
             if not plan.measures and not plan.derived_metrics:
                 raise ValueError("Specify the metric and aggregation; no business metric is selected automatically.")
-            if dataframe is None and not plan.joins and not plan.derived_metrics and not plan.comparison:
+            if dataframe is None and not plan.derived_metrics and not plan.comparison:
                 hana_res = self._execute_on_hana(plan, start)
                 if hana_res is not None and hana_res.success:
                     return hana_res
             if dataframe is None:
                 from api.services.data_service import data_service
-                dataframe = data_service.get_dataframe()
+                target_ds_id = getattr(plan, "left_dataset_id", None) or getattr(plan, "dataset_id", None)
+                if target_ds_id:
+                    from api.services.dataset_service import dataset_service
+                    cat = dataset_service._catalog()
+                    entry = dataset_service._entry(cat, target_ds_id, for_chat=True)
+                    if entry:
+                        snap = dataset_service._snapshot(entry, entry.get("currentVersion", 1))
+                        dataframe = dataset_service._frame(snap["rows"], snap["columns"])
+                if dataframe is None:
+                    dataframe = data_service.get_dataframe()
             df = dataframe.copy()
             # Normalize column names in df if they match plan dimensions/measures case-insensitively
             col_map = {}
@@ -337,20 +408,40 @@ class AnalyticsEngine:
                 if semantic_model is not None:
                     semantic_fields = {field.name: field.aggregations for field in semantic_model.fields}
             if plan.joins:
-                if selection is None or semantic_model is None:
-                    raise ValueError("Joins require a selected approved semantic model")
-                from api.platform.formulas import validated_join
-                from api.platform.semantic import semantic_registry
-                from api.services.dataset_service import dataset_service
                 for join in plan.joins:
-                    relationship = next((r for r in semantic_model.relationships if r.id == join.relationship), None)
-                    if relationship is None:
-                        raise ValueError("The requested relationship is not approved")
-                    entry = dataset_service._entry(dataset_service._catalog(), relationship.right_dataset_id)
-                    snapshot = dataset_service._snapshot(entry, relationship.right_version)
-                    right_model = semantic_registry.get(entry, relationship.right_version, relationship.right_semantic_revision, approved=True)
-                    df = validated_join(df, dataset_service._frame(snapshot["rows"], snapshot["columns"]), relationship, join.how)
-                    semantic_fields = {**semantic_fields, **{f"{relationship.id}__{field.name}": field.aggregations for field in right_model.fields}}
+                    if join.right_dataset_id or (join.left_key and join.right_key):
+                        from api.platform.join_service import join_service
+                        l_id = getattr(plan, "left_dataset_id", None) or getattr(plan, "dataset_id", None) or (selection.entry["id"] if selection and selection.entry else None)
+                        l_k = join.left_key
+                        r_k = join.right_key
+                        if not l_k or not r_k:
+                            res = join_service.resolve_join(l_id, join.right_dataset_id)
+                            if not res.get("joinable"):
+                                raise ValueError(res.get("reason", "Tables cannot be joined."))
+                            l_k = res["left_key"]
+                            r_k = res["right_key"]
+                        df = join_service.load_joined_dataframe(
+                            left_dataset_id=l_id,
+                            right_dataset_id=join.right_dataset_id,
+                            left_key=l_k,
+                            right_key=r_k,
+                            how=join.how
+                        )
+                    elif join.relationship:
+                        if selection is None or semantic_model is None:
+                            raise ValueError("Joins require a selected approved semantic model")
+                        from api.platform.formulas import validated_join
+                        from api.platform.semantic import semantic_registry
+                        from api.services.dataset_service import dataset_service
+                        relationship = next((r for r in semantic_model.relationships if r.id == join.relationship), None)
+                        if relationship is None:
+                            raise ValueError("The requested relationship is not approved")
+                        entry = dataset_service._entry(dataset_service._catalog(), relationship.right_dataset_id)
+                        snapshot = dataset_service._snapshot(entry, relationship.right_version)
+                        right_model = semantic_registry.get(entry, relationship.right_version, relationship.right_semantic_revision, approved=True)
+                        df = validated_join(df, dataset_service._frame(snapshot["rows"], snapshot["columns"]), relationship, join.how)
+                        if semantic_fields is not None:
+                            semantic_fields = {**semantic_fields, **{f"{relationship.id}__{field.name}": field.aggregations for field in right_model.fields}}
             derived = []
             for name in plan.derived_metrics:
                 metric = next((m for m in semantic_model.derived_metrics if m.name == name), None) if semantic_model is not None else None

@@ -99,6 +99,32 @@ class TestHanaAdmin(unittest.TestCase):
         )
         self.assertEqual(res.status_code, 400)
 
+    def test_delete_table_protected_system_table_prohibited(self):
+        """Dropping protected system tables like DATASETS_METADATA or VECTOR_TABLE must be rejected with 400."""
+        for tbl in ["DATASETS_METADATA", "VECTOR_TABLE", "PLATFORM_METADATA", "CHAT_MESSAGES"]:
+            res = self.client.delete(f"/api/hanaadmin/tables/{tbl}", headers=self.auth_headers)
+            self.assertEqual(res.status_code, 400)
+            self.assertIn("strictly prohibited", res.json().get("detail", ""))
+
+    def test_delete_table_nonexistent_returns_404(self):
+        """Dropping a non-existent table must return 404."""
+        from unittest.mock import patch
+        with patch.object(hana_table_service, "table_exists", return_value=False):
+            res = self.client.delete("/api/hanaadmin/tables/NON_EXISTENT_CUSTOM_TABLE", headers=self.auth_headers)
+            self.assertEqual(res.status_code, 404)
+
+    def test_delete_table_success(self):
+        """Dropping a valid user table must successfully call drop_table and return 200."""
+        from unittest.mock import patch
+        with patch.object(hana_table_service, "table_exists", return_value=True), \
+             patch.object(hana_table_service, "drop_table", return_value={"success": True, "dropped": True, "table_name": "DS_CUSTOM_V1"}):
+            res = self.client.delete("/api/hanaadmin/tables/DS_CUSTOM_V1?cascade_dataset=false", headers=self.auth_headers)
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data.get("success"))
+            self.assertTrue(data.get("dropped"))
+            self.assertEqual(data.get("tableName"), "DS_CUSTOM_V1")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -140,9 +140,9 @@ describe('Multi-Table / Dataset Scoping in GraphStudio and RAGChat', () => {
 
     render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'Admin' }} />);
 
-    // When multiple datasets exist, table selector MUST be rendered
+    // When multiple datasets exist, table selector MUST be rendered (for both measure and dimension)
     await waitFor(() => {
-      expect(screen.getByText('Select Table / Dataset')).toBeTruthy();
+      expect(screen.getAllByText('Select Table / Dataset').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Target Measure (Y)')).toBeTruthy();
       expect(screen.getByText('Group by Dimension (X)')).toBeTruthy();
     });

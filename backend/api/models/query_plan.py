@@ -48,8 +48,18 @@ class TimeGrouping(BaseModel):
 
 class Join(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    relationship: str
+    relationship: str | None = None
+    right_dataset_id: str | None = None
+    right_table: str | None = None
+    left_key: str | None = None
+    right_key: str | None = None
     how: Literal["left", "inner"] = "left"
+
+    @model_validator(mode="after")
+    def validate_join_spec(self):
+        if not self.relationship and not (self.right_dataset_id or self.right_table or (self.left_key and self.right_key)):
+            raise ValueError("Join must specify either a relationship identifier or right_dataset_id/right_table with keys")
+        return self
 
 
 class PeriodComparison(BaseModel):
@@ -63,6 +73,9 @@ class PeriodComparison(BaseModel):
 
 class QueryPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    dataset_id: str | None = None
+    left_dataset_id: str | None = None
+    table_name: str | None = None
     intent: Literal["analytical", "ranking", "comparison", "graph", "chat"] = "analytical"
     metric: str | None = None
     aggregation: Aggregation | None = None

@@ -1,9 +1,13 @@
+import logging
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Literal
 from fastapi import APIRouter, HTTPException, Query, Body
 from pydantic import BaseModel, Field
 from api.database.hana_table_service import hana_table_service
 from api.models.execution_context import require_admin
 from starlette.concurrency import run_in_threadpool
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/hanaadmin", tags=["HANA Cloud Admin"])
 
@@ -197,5 +201,90 @@ async def delete_table_range(table_name: str, payload: DeleteRangePayload):
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete records from '{table_name}': {str(e)}")
+
+
+@router.delete("/tables/{table_name}")
+async def drop_table(
+    table_name: str,
+    cascade_dataset: bool = Query(True, description="Also clean up matching dataset metadata & embeddings if table is a dataset table")
+):
+    """
+    Safely drop a column table from SAP HANA Cloud.
+    Protected system tables (e.g. DATASETS_METADATA, VECTOR_TABLE, etc.) cannot be dropped.
+    If cascade_dataset is True and the table is linked to an uploaded dataset, cleans up associated metadata and vectors.
+    """
+    require_admin()
+    try:
+        clean_name = table_name.strip()
+        protected = {
+            "DATASETS_METADATA", "PLATFORM_METADATA", "PLATFORM_DOCUMENTS",
+            "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS"
+        }
+        if clean_name.upper() in protected:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dropping protected system table '{clean_name}' is strictly prohibited."
+            )
+
+        exists = await run_in_threadpool(hana_table_service.table_exists, clean_name)
+        if not exists:
+            raise HTTPException(status_code=404, detail=f"Table '{clean_name}' does not exist.")
+
+        # Identify if this table is associated with an uploaded dataset
+        matched_dataset_id = None
+        dataset_cleaned = False
+        if cascade_dataset:
+            try:
+                from api.services.dataset_service import dataset_service
+                catalog = await run_in_threadpool(dataset_service._catalog)
+                clean_upper = clean_name.upper()
+                for ds_id, entry in list(catalog.get("datasets", {}).items()):
+                    phys = (entry.get("physical_table_name") or "").upper()
+                    folder = (entry.get("folder") or "").upper()
+                    name_stem = Path(entry.get("name", "")).stem.upper().replace(" ", "_").replace("-", "_")
+                    cand_names = {
+                        phys,
+                        folder,
+                        name_stem,
+                        f"DS_{folder[:18]}",
+                        f"DS_{folder[:18]}_V1",
+                        f"DS_{folder[:18]}_V{entry.get('currentVersion', 1)}",
+                        f"DS_{name_stem[:18]}",
+                        f"DS_{name_stem[:18]}_V1",
+                        f"DS_{name_stem[:18]}_V{entry.get('currentVersion', 1)}"
+                    }
+                    if clean_upper in cand_names:
+                        matched_dataset_id = ds_id
+                        break
+            except Exception as ex:
+                logger.warning(f"Error checking matching dataset for table '{clean_name}': {ex}")
+
+        # Drop the table in SAP HANA Cloud
+        res = await run_in_threadpool(hana_table_service.drop_table, clean_name)
+
+        # If matching dataset exists and cascade is True, delete dataset metadata & embeddings
+        if cascade_dataset and matched_dataset_id:
+            try:
+                from api.services.dataset_service import dataset_service
+                await run_in_threadpool(dataset_service.delete, matched_dataset_id)
+                dataset_cleaned = True
+                logger.info(f"Cascaded dataset cleanup for dataset '{matched_dataset_id}' on table '{clean_name}'")
+            except Exception as ex:
+                logger.warning(f"Associated dataset cleanup notice: {ex}")
+
+        return {
+            "success": True,
+            "tableName": clean_name.upper(),
+            "dropped": res.get("dropped", True),
+            "datasetCleaned": dataset_cleaned,
+            "matchedDatasetId": matched_dataset_id,
+            "message": f"Table '{clean_name.upper()}' has been successfully dropped from SAP HANA Cloud."
+        }
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to drop table '{table_name}': {str(e)}")
 
 

@@ -238,24 +238,48 @@ class DatasetService:
 
     def _item(self, entry, active_id=None):
         snap = self._snapshot(entry)
-        version = next(v for v in entry["versions"] if v["version"] == entry["currentVersion"])
-        file_path = self.output_dir / entry["folder"] / version["filename"]
+        version = next((v for v in entry["versions"] if v["version"] == entry["currentVersion"]), entry["versions"][-1] if entry.get("versions") else {})
+        file_path = self.output_dir / entry["folder"] / version.get("filename", "data.xlsx")
         size_bytes = version.get("sizeBytes", 0)
         if self.repository is None and file_path.exists():
             try:
                 size_bytes = file_path.stat().st_size
             except Exception:
                 pass
-        return {"id": entry["id"], "name": entry["name"], "description": "Uploaded dataset",
-                "rowCount": version.get("rowCount") or len(snap.get("rows", [])), "columnCount": len(snap["columns"]),
-                "columns": snap["columns"], "lastUpdated": entry["updatedAt"],
-                "format": Path(version["filename"]).suffix[1:], "source": "External connection" if version.get("sourceId") else "File upload",
-                "sizeBytes": size_bytes,
-                "status": "Ready", "currentVersion": entry["currentVersion"],
-                "currentFilename": version["filename"], "versions": entry["versions"],
-                "embeddingStatus": snap["embeddingStatus"], "embeddingCount": snap["embeddingCount"],
-                "hanaSyncStatus": snap.get("hanaSyncStatus", "Pending"),
-                "isActive": entry["id"] == active_id}
+
+        table_name = entry.get("tableName") or entry.get("table_name") or snap.get("active_table") or snap.get("tableName") or version.get("tableName")
+        display_name = entry.get("displayName") or entry.get("display_name") or table_name or entry["name"]
+        sheet_name = entry.get("sheetName") or entry.get("sheet_name") or snap.get("sheet_name") or version.get("sheet_name")
+        source_file = entry.get("sourceFile") or entry.get("sourceFilename") or entry.get("source_filename") or version.get("sourceFilename") or entry["name"]
+
+        return {
+            "id": entry["id"],
+            "name": display_name,
+            "tableName": table_name,
+            "table_name": table_name,
+            "displayName": display_name,
+            "display_name": display_name,
+            "sheetName": sheet_name,
+            "sheet_name": sheet_name,
+            "sourceFile": source_file,
+            "sourceFilename": source_file,
+            "description": "Uploaded dataset",
+            "rowCount": version.get("rowCount") or len(snap.get("rows", [])),
+            "columnCount": len(snap.get("columns", [])),
+            "columns": snap.get("columns", []),
+            "lastUpdated": entry["updatedAt"],
+            "format": Path(version.get("filename", ".xlsx")).suffix[1:] or "xlsx",
+            "source": "External connection" if version.get("sourceId") else "File upload",
+            "sizeBytes": size_bytes,
+            "status": "Ready",
+            "currentVersion": entry["currentVersion"],
+            "currentFilename": version.get("filename", entry["name"]),
+            "versions": entry.get("versions", []),
+            "embeddingStatus": snap.get("embeddingStatus", "Ready"),
+            "embeddingCount": snap.get("embeddingCount", 0),
+            "hanaSyncStatus": snap.get("hanaSyncStatus", "Ready"),
+            "isActive": entry["id"] == active_id,
+        }
 
     @staticmethod
     def _format_row_chunk(row, columns, filename=None):
@@ -620,7 +644,7 @@ class DatasetService:
             visible.append(self._item(entry, catalog["activeDatasetId"]))
         return visible
 
-    def upload(self, content, filename, async_index=None, transformation_plan=None, ingestion_id=None, target_dataset_id=None, source_id=None):
+    def upload(self, content, filename, async_index=None, transformation_plan=None, ingestion_id=None, target_dataset_id=None, source_id=None, table_name=None, display_name=None, sheet_name=None):
         if async_index is None:
             async_index = self.default_async_index
         if transformation_plan is None:
@@ -631,27 +655,73 @@ class DatasetService:
         stem, suffix = self._safe_name(filename)
         if source_id and not target_dataset_id:
             stem = stem + "_" + source_id[:8]
+
+        # Derive sheet name if not passed explicitly
+        if not sheet_name and transformation_plan and hasattr(transformation_plan, 'sheet') and transformation_plan.sheet:
+            sheet_name = transformation_plan.sheet
+
+        # Derive clean table and display identity
+        clean_display_name = display_name or table_name or (f"{stem} - {sheet_name}" if sheet_name else stem + suffix)
+        folder_name = stem
+        if table_name:
+            folder_name = self._safe_name(table_name)[0].lower()
+        elif sheet_name:
+            import re
+            clean_sheet = re.sub(r'[^a-zA-Z0-9_]+', '_', sheet_name).strip('_').lower()
+            folder_name = f"{stem}_{clean_sheet}"
+
         with self._writer():
             catalog = self._catalog()
             if target_dataset_id:
                 entry = self._entry(catalog, target_dataset_id)
+            elif table_name:
+                entry = next((d for d in catalog["datasets"].values() if (d.get("tableName") or d.get("table_name") or "").casefold() == table_name.casefold()), None)
+            elif sheet_name:
+                entry = next((d for d in catalog["datasets"].values() if (d.get("sourceFilename") or d.get("source_filename") or d.get("sourceFile") or "").casefold() == filename.casefold() and (d.get("sheetName") or d.get("sheet_name") or "").casefold() == sheet_name.casefold()), None)
             else:
-                entry = next((d for d in catalog["datasets"].values() if d["folder"].casefold() == stem.casefold()), None)
+                entry = next((d for d in catalog["datasets"].values() if d["folder"].casefold() == folder_name.casefold() and not (d.get("tableName") or d.get("table_name"))), None)
+
             if ingestion_id:
                 receipt = self._ingestion_receipt(catalog, ingestion_id)
                 if receipt:
                     return receipt
             if entry is None:
-                entry = {"id": "ds-" + uuid.uuid4().hex, "folder": stem, "name": stem + suffix, "versions": []}
+                entry = {
+                    "id": "ds-" + uuid.uuid4().hex,
+                    "folder": folder_name,
+                    "name": clean_display_name,
+                    "tableName": table_name,
+                    "table_name": table_name,
+                    "displayName": clean_display_name,
+                    "display_name": clean_display_name,
+                    "sheetName": sheet_name,
+                    "sheet_name": sheet_name,
+                    "sourceFilename": filename,
+                    "sourceFile": filename,
+                    "versions": [],
+                }
                 identity = current_identity.get()
                 if identity:
                     entry.update(workspaceId=identity["workspace_id"], ownerId=identity["user_id"], readers=[], writers=[])
             else:
                 require_dataset_access(entry, write=True)
+                if table_name:
+                    entry["tableName"] = table_name
+                    entry["table_name"] = table_name
+                if display_name:
+                    entry["displayName"] = display_name
+                    entry["display_name"] = display_name
+                    entry["name"] = display_name
+                if sheet_name:
+                    entry["sheetName"] = sheet_name
+                    entry["sheet_name"] = sheet_name
+                entry["sourceFilename"] = filename
+                entry["sourceFile"] = filename
+
             # Re-upload is a complete replacement snapshot; append has its own endpoint.
             result = self._save_version(catalog, entry, df, self._rows(df), "upload", content,
                                         index=not async_index, extension=suffix,
-                                        provenance={"ingestionId": ingestion_id, "sourceId": source_id})
+                                        provenance={"ingestionId": ingestion_id, "sourceId": source_id, "tableName": table_name, "sheet_name": sheet_name, "sourceFilename": filename})
             dataset_id = entry["id"]
             version = result["version"]
             self._prune_old_versions(catalog, entry)
@@ -1125,10 +1195,15 @@ class DatasetService:
         previous = self._snapshot(entry) if entry["versions"] else None
         vectors, status = self._index(chunks, previous) if index else ([], "Pending")
         hana_status = self._sync_hana(entry, number, chunks, vectors) if index else "Pending"
+        prov = provenance or {}
+        active_tbl = prov.get("tableName") or entry.get("tableName") or entry.get("table_name")
+        sheet_nm = prov.get("sheet_name") or entry.get("sheetName") or entry.get("sheet_name")
+        src_file = prov.get("sourceFilename") or entry.get("sourceFilename") or entry.get("sourceFile") or entry.get("name")
         snapshot = dict(rows=rows, columns=self._columns(df), chunks=chunks, embeddings=vectors,
                         embeddingCount=len(vectors), embeddingStatus=status, hanaSyncStatus=hana_status,
                         embeddingConfiguration=self._embedding_configuration(), dataProfile=df.attrs.get("data_profile"),
-                        transformationPlan=df.attrs.get("transformation_plan"))
+                        transformationPlan=df.attrs.get("transformation_plan"),
+                        active_table=active_tbl, tableName=active_tbl, sheet_name=sheet_nm, sourceFilename=src_file)
         if original is not None:
             raw = original
         elif suffix == ".csv":

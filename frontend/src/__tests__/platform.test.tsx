@@ -9,6 +9,7 @@ import { AnalyticsWidget } from '../components/AnalyticsWidget';
 import { generateCustomGraph } from '../services/graphService';
 import { contextHeaders, selectContext, selectedContext } from '../services/executionContext';
 import { getTimeGreeting, resolveUserName, getUserInitials } from '../screens/RAGChat';
+import { FileImportReview } from '../components/dataset/FileImportReview';
 
 vi.mock('../services/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -174,5 +175,31 @@ describe('Platform correctness and navigation', () => {
     expect(getUserInitials('Lokesh Kumar T')).toBe('LT');
     expect(getUserInitials('Lokesh Kumar')).toBe('LK');
     expect(getUserInitials('Admin')).toBe('AD');
+  });
+
+  it('auto-populates suggested header row and sheet from /upload/discover in FileImportReview', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { tables: [] } });
+    vi.mocked(api.post).mockResolvedValueOnce({
+      data: {
+        sheets: [{ name: 'APR-26 ', tables: [], suggested_header_row: 2 }],
+        format: 'xlsx',
+        requires_selection: false,
+        suggested_header_row: 2,
+      },
+    });
+    const file = new File(['dummy'], 'Production_Report.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    render(
+      <FileImportReview
+        file={file}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const headerInput = await screen.findByLabelText('Header row') as HTMLInputElement;
+    await vi.waitFor(() => {
+      expect(headerInput.value).toBe('2');
+    });
   });
 });

@@ -166,3 +166,26 @@ export async function deleteHanaTableRange(
   return res.data;
 }
 
+export interface DeleteTableResponse {
+  success: boolean;
+  tableName: string;
+  dropped: boolean;
+  datasetCleaned?: boolean;
+  matchedDatasetId?: string | null;
+  message: string;
+}
+
+/**
+ * Permanently delete / drop a column table from SAP HANA Cloud.
+ * Protected system tables (e.g. DATASETS_METADATA, VECTOR_TABLE, etc.) cannot be dropped.
+ */
+export async function deleteHanaTable(
+  tableName: string,
+  cascadeDataset: boolean = true
+): Promise<DeleteTableResponse> {
+  const res = await api.delete(`/hanaadmin/tables/${encodeURIComponent(tableName)}`, {
+    params: { cascade_dataset: cascadeDataset },
+  });
+  return res.data;
+}
+

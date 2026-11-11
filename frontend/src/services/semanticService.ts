@@ -117,3 +117,30 @@ export const generatePythonGraphAgent = async (params: {
   return (await api.post<PythonGraphAgentResponse>('/graph/python-agent/generate', params, { headers })).data;
 };
 
+export interface JoinResolution {
+  joinable: boolean;
+  left_dataset_id?: string;
+  right_dataset_id?: string;
+  left_table?: string;
+  right_table?: string;
+  left_key?: string;
+  right_key?: string;
+  overlap_count?: number;
+  cardinality?: string;
+  aggregation_safe?: boolean;
+  warning?: string | null;
+  reason?: string;
+}
+
+export const resolveJoin = async (leftDatasetId: string, rightDatasetId: string): Promise<JoinResolution> => {
+  return (await api.post<JoinResolution>('/analytics/resolve-join', {
+    left_dataset_id: leftDatasetId,
+    right_dataset_id: rightDatasetId
+  })).data;
+};
+
+export const getJoinGraph = async (): Promise<{ edges: JoinResolution[] }> => {
+  return (await api.get<{ edges: JoinResolution[] }>('/analytics/join-graph')).data;
+};
+
+

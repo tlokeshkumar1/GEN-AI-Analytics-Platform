@@ -17,6 +17,8 @@ import {
   generatePythonGraphAgent,
   PythonGraphAgentResponse,
   getDashboardPublication,
+  resolveJoin,
+  JoinResolution,
 } from '../services/semanticService';
 import { AnalyticsWidget } from '../components/AnalyticsWidget';
 
@@ -117,8 +119,83 @@ export function GraphStudio({
   const [dataModeRunning, setDataModeRunning] = useState(false);
   const [dataModeResult, setDataModeResult] = useState<PythonGraphAgentResponse | null>(null);
 
+  // Cross-table join states for Mode 1 (Build Your KPI)
+  const [dimensionDatasetId, setDimensionDatasetId] = useState<string>('');
+  const [dimensionModel, setDimensionModel] = useState<SemanticModel | null>(null);
+  const [joinResolution, setJoinResolution] = useState<JoinResolution | null>(null);
+  const [isResolvingJoin, setIsResolvingJoin] = useState(false);
+
+  // Cross-table join states for Mode 3 (Data-Driven Custom Graph)
+  const [dataDimensionDatasetId, setDataDimensionDatasetId] = useState<string>('');
+  const [dataDimensionModel, setDataDimensionModel] = useState<SemanticModel | null>(null);
+  const [dataJoinResolution, setDataJoinResolution] = useState<JoinResolution | null>(null);
+  const [isResolvingDataJoin, setIsResolvingDataJoin] = useState(false);
+
+  const handleDimensionDatasetChange = async (targetDsId: string) => {
+    setDimensionDatasetId(targetDsId);
+    setDimension('');
+    if (targetDsId === selectedDatasetId) {
+      setJoinResolution(null);
+      setDimensionModel(null);
+      return;
+    }
+    setIsResolvingJoin(true);
+    try {
+      const res = await resolveJoin(selectedDatasetId, targetDsId);
+      setJoinResolution(res);
+      if (res.joinable) {
+        const targetDs = datasets.find(d => d.id === targetDsId);
+        const models = await getSemanticModels(targetDsId, targetDs?.currentVersion || 1);
+        const approved = models.find(m => m.status === 'approved') || models[0];
+        setDimensionModel(approved || null);
+      } else {
+        setDimensionModel(null);
+      }
+    } catch (err) {
+      setJoinResolution({ joinable: false, reason: getApiErrorMessage(err, 'Failed to resolve cross-table join.') });
+      setDimensionModel(null);
+    } finally {
+      setIsResolvingJoin(false);
+    }
+  };
+
+  const handleDataDimensionDatasetChange = async (targetDsId: string) => {
+    setDataDimensionDatasetId(targetDsId);
+    if (targetDsId === selectedDatasetId) {
+      setDataJoinResolution(null);
+      setDataDimensionModel(null);
+      return;
+    }
+    setIsResolvingDataJoin(true);
+    try {
+      const res = await resolveJoin(selectedDatasetId, targetDsId);
+      setDataJoinResolution(res);
+      if (res.joinable) {
+        const targetDs = datasets.find(d => d.id === targetDsId);
+        const models = await getSemanticModels(targetDsId, targetDs?.currentVersion || 1);
+        const approved = models.find(m => m.status === 'approved') || models[0];
+        setDataDimensionModel(approved || null);
+        const dims = approved?.fields.filter(f => ['dimension', 'identifier', 'time'].includes(f.role)) || [];
+        if (dims.length > 0) setSelectedDataDimension(dims[0].name);
+      } else {
+        setDataDimensionModel(null);
+      }
+    } catch (err) {
+      setDataJoinResolution({ joinable: false, reason: getApiErrorMessage(err, 'Failed to resolve cross-table join.') });
+      setDataDimensionModel(null);
+    } finally {
+      setIsResolvingDataJoin(false);
+    }
+  };
+
   const handleSwitchDataset = async (newDatasetId: string) => {
     setSelectedDatasetId(newDatasetId);
+    setDimensionDatasetId(newDatasetId);
+    setJoinResolution(null);
+    setDimensionModel(null);
+    setDataDimensionDatasetId(newDatasetId);
+    setDataJoinResolution(null);
+    setDataDimensionModel(null);
     setError('');
     const targetDs = datasets.find(d => d.id === newDatasetId);
     if (!targetDs) return;
@@ -170,6 +247,8 @@ export function GraphStudio({
     const version = targetDs?.currentVersion || context?.version || 1;
     const resolvedId = targetDs ? targetDs.id : dsId;
     setSelectedDatasetId(resolvedId);
+    setDimensionDatasetId(resolvedId);
+    setDataDimensionDatasetId(resolvedId);
 
     const models = await getSemanticModels(resolvedId, version);
     const approved =
@@ -239,7 +318,27 @@ export function GraphStudio({
   };
 
   const saveVisualDefinition = async () => {
-    const query = edit ? JSON.parse(planText) : { metric, aggregation, dimension: dimension || undefined };
+    const isCrossTable = dimensionDatasetId && dimensionDatasetId !== selectedDatasetId;
+    if (isCrossTable && (!joinResolution || !joinResolution.joinable)) {
+      setError('Cannot save widget: The selected tables cannot be joined. Select joinable tables or dimension from the same table.');
+      return;
+    }
+    const query: any = edit
+      ? JSON.parse(planText)
+      : {
+          left_dataset_id: selectedDatasetId,
+          metric,
+          aggregation,
+          dimension: dimension || undefined,
+          ...(isCrossTable && joinResolution?.joinable ? {
+            joins: [{
+              right_dataset_id: dimensionDatasetId,
+              left_key: joinResolution.left_key,
+              right_key: joinResolution.right_key,
+              how: 'left'
+            }]
+          } : {})
+        };
     const item: AnalyticsDefinition = edit
       ? { ...edit, title, query_plan: query, kind }
       : {
@@ -250,7 +349,7 @@ export function GraphStudio({
           semantic_revision: model!.revision,
           query_plan: query,
           dependencies: [metric, dimension].filter(v => v && v !== '*'),
-          explanation: 'A user-defined query over approved semantic fields.',
+          explanation: isCrossTable ? `Cross-table query linked on ${joinResolution?.left_key} = ${joinResolution?.right_key}` : 'A user-defined query over approved semantic fields.',
           status: 'proposed',
         };
     await saveDefinition(item);
@@ -304,20 +403,36 @@ export function GraphStudio({
     setDataModeResult(null);
 
     try {
+      const isCrossTable = dataDimensionDatasetId && dataDimensionDatasetId !== selectedDatasetId;
+      if (isCrossTable && (!dataJoinResolution || !dataJoinResolution.joinable)) {
+        setError('Cannot generate chart: The selected tables cannot be joined. Choose joinable tables or select dimension from the same table.');
+        setDataModeRunning(false);
+        return;
+      }
       const context = selectedContext();
       const prompt = `Generate a ${selectedAdvancedChart} chart of ${selectedDataMetric} by ${selectedDataDimension} with ${selectedPalette} palette`;
+      const plan: any = {
+        left_dataset_id: selectedDatasetId,
+        metric: selectedDataMetric,
+        dimension: selectedDataDimension,
+        chart_type: selectedAdvancedChart,
+        limit: dataLimit,
+        ...(isCrossTable && dataJoinResolution?.joinable ? {
+          joins: [{
+            right_dataset_id: dataDimensionDatasetId,
+            left_key: dataJoinResolution.left_key,
+            right_key: dataJoinResolution.right_key,
+            how: 'left'
+          }]
+        } : {})
+      };
       const res = await generatePythonGraphAgent({
         prompt,
         metric: selectedDataMetric,
         dimension: selectedDataDimension,
         chart_type: selectedAdvancedChart,
         dataset_id: selectedDatasetId || context?.datasetId,
-        query_plan: {
-          metric: selectedDataMetric,
-          dimension: selectedDataDimension,
-          chart_type: selectedAdvancedChart,
-          limit: dataLimit,
-        },
+        query_plan: plan,
       });
       if (res.status === 'error' || !res.image_base64) {
         setError(res.message || 'Data-driven graph generation failed to create an image.');
@@ -521,23 +636,29 @@ export function GraphStudio({
                 />
               </div>
 
-              {/* Table / Dataset Name Selector: If datasets.length > 1, show table dropdown; if only 1 dataset, show directly dropdown for column names */}
+              {/* Table / Dataset Name Selector: If datasets.length > 1, show table dropdown */}
               {datasets.length > 1 && !edit && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
                     <span className="material-symbols-outlined text-[14px] text-blue-600">table_chart</span>
                     <span>Select Table / Dataset</span>
+                    <span className="text-[10px] text-slate-400 font-normal">(Target Measure)</span>
                   </label>
                   <select
                     className="border border-blue-300 bg-blue-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
                     value={selectedDatasetId}
                     onChange={e => void handleSwitchDataset(e.target.value)}
                   >
-                    {datasets.map(d => (
-                      <option key={d.id} value={d.id}>
-                        {d.name} {d.isActive ? '★' : ''} ({d.rowCount?.toLocaleString() || 0} rows)
-                      </option>
-                    ))}
+                    {datasets.map(d => {
+                      const label = d.tableName || d.displayName || d.name;
+                      const hasDistinctSource = d.sourceFile && d.sourceFile !== label;
+                      const sourceHint = hasDistinctSource ? ` [${d.sourceFile}${d.sheetName ? ` · ${d.sheetName}` : ''}]` : '';
+                      return (
+                        <option key={d.id} value={d.id}>
+                          {label}{sourceHint} {d.isActive ? '★' : ''} ({(d.rowCount || 0).toLocaleString()} rows)
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
               )}
@@ -586,24 +707,92 @@ export function GraphStudio({
             </div>
 
             {!edit && (
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Group by Dimension (X)
-                </label>
-                <select
-                  className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs max-w-md"
-                  value={dimension}
-                  onChange={e => setDimension(e.target.value)}
-                >
-                  <option value="">No grouping (single aggregated KPI value)</option>
-                  {model.fields
-                    .filter(f => ['dimension', 'identifier', 'time'].includes(f.role))
-                    .map(f => (
-                      <option key={f.name} value={f.name}>
-                        {f.semantic_name} ({f.role})
-                      </option>
-                    ))}
-                </select>
+              <div className="space-y-2">
+                <div className={`grid grid-cols-1 ${datasets.length > 1 ? 'sm:grid-cols-2' : ''} gap-4 max-w-2xl`}>
+                  {datasets.length > 1 && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
+                        <span className="material-symbols-outlined text-[14px] text-blue-600">table_chart</span>
+                        <span>Select Table / Dataset</span>
+                        <span className="text-[10px] text-slate-400 font-normal">(Group by Dimension)</span>
+                      </label>
+                      <select
+                        className="border border-blue-300 bg-blue-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
+                        value={dimensionDatasetId || selectedDatasetId}
+                        onChange={e => void handleDimensionDatasetChange(e.target.value)}
+                      >
+                        {datasets.map(d => {
+                          const label = d.tableName || d.displayName || d.name;
+                          const hasDistinctSource = d.sourceFile && d.sourceFile !== label;
+                          const sourceHint = hasDistinctSource ? ` [${d.sourceFile}]` : '';
+                          const sameTableHint = d.id === selectedDatasetId ? ' (Same Table)' : '';
+                          return (
+                            <option key={d.id} value={d.id}>
+                              {label}{sourceHint}{sameTableHint} ({(d.rowCount || 0).toLocaleString()} rows)
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      Group by Dimension (X)
+                    </label>
+                    <select
+                      className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
+                      value={dimension}
+                      onChange={e => setDimension(e.target.value)}
+                      disabled={dimensionDatasetId !== selectedDatasetId && (!joinResolution || !joinResolution.joinable)}
+                    >
+                      <option value="">No grouping (single aggregated KPI value)</option>
+                      {((dimensionDatasetId && dimensionDatasetId !== selectedDatasetId && dimensionModel)
+                        ? dimensionModel.fields
+                        : model.fields
+                      )
+                        .filter(f => ['dimension', 'identifier', 'time'].includes(f.role))
+                        .map(f => (
+                          <option key={f.name} value={f.name}>
+                            {f.semantic_name} ({f.role})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Live Cross-Table Join Validation Status */}
+                {dimensionDatasetId && dimensionDatasetId !== selectedDatasetId && (
+                  <div>
+                    {isResolvingJoin && (
+                      <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                        <span className="material-symbols-outlined animate-spin text-[16px]">progress_activity</span>
+                        <span>Verifying join keys and value overlap between selected tables...</span>
+                      </div>
+                    )}
+                    {!isResolvingJoin && joinResolution?.joinable && (
+                      <div className="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                        <span className="material-symbols-outlined text-emerald-600 text-[18px]">verified</span>
+                        <div>
+                          <span className="font-semibold">Join Verified: </span>
+                          <span>Linked via <code className="font-mono bg-emerald-100 px-1 py-0.5 rounded">{joinResolution.left_key}</code> = <code className="font-mono bg-emerald-100 px-1 py-0.5 rounded">{joinResolution.right_key}</code> ({joinResolution.overlap_count?.toLocaleString()} matching records, {joinResolution.cardinality})</span>
+                          {joinResolution.warning && (
+                            <p className="mt-0.5 text-amber-700 text-[11px]">{joinResolution.warning}</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {!isResolvingJoin && joinResolution && !joinResolution.joinable && (
+                      <div className="flex items-center gap-2 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                        <span className="material-symbols-outlined text-rose-600 text-[18px]">cancel</span>
+                        <div>
+                          <span className="font-semibold">Tables Cannot Be Joined: </span>
+                          <span>{joinResolution.reason || 'No common matching key with data found between these datasets.'} Widget creation is disabled.</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -647,9 +836,10 @@ export function GraphStudio({
 
             <div className="flex items-center gap-3 pt-3 border-t border-slate-100">
               <button
-                disabled={busy}
+                disabled={busy || (dimensionDatasetId !== selectedDatasetId && (!joinResolution || !joinResolution.joinable))}
                 onClick={() => void run(saveVisualDefinition)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-xs hover:bg-blue-700 active:scale-[0.98] transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-xs hover:bg-blue-700 active:scale-[0.98] transition-all shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                title={dimensionDatasetId !== selectedDatasetId && (!joinResolution || !joinResolution.joinable) ? "Tables cannot be joined; widget creation disabled" : undefined}
               >
                 <span className="material-symbols-outlined text-lg">save</span>
                 <span>{edit ? 'Update Definition Proposal' : 'Save Definition Proposal'}</span>
@@ -871,23 +1061,28 @@ export function GraphStudio({
 
           {/* Data Shown Options Form */}
           <div className="space-y-5">
-            <div className={`grid grid-cols-1 sm:grid-cols-2 ${datasets.length > 1 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-4`}>
+            <div className={`grid grid-cols-1 sm:grid-cols-2 ${datasets.length > 1 ? 'lg:grid-cols-3' : 'lg:grid-cols-4'} gap-4`}>
               {datasets.length > 1 && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
                     <span className="material-symbols-outlined text-[14px] text-emerald-600">table_chart</span>
-                    <span>Source Table / Dataset</span>
+                    <span>Source Table (Measure Y)</span>
                   </label>
                   <select
                     className="border border-emerald-300 bg-emerald-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
                     value={selectedDatasetId}
                     onChange={e => void handleSwitchDataset(e.target.value)}
                   >
-                    {datasets.map(d => (
-                      <option key={d.id} value={d.id}>
-                        {d.name} {d.isActive ? '★' : ''} ({d.rowCount?.toLocaleString() || 0} rows)
-                      </option>
-                    ))}
+                    {datasets.map(d => {
+                      const label = d.tableName || d.displayName || d.name;
+                      const hasDistinctSource = d.sourceFile && d.sourceFile !== label;
+                      const sourceHint = hasDistinctSource ? ` [${d.sourceFile}${d.sheetName ? ` · ${d.sheetName}` : ''}]` : '';
+                      return (
+                        <option key={d.id} value={d.id}>
+                          {label}{sourceHint} {d.isActive ? '★' : ''} ({(d.rowCount || 0).toLocaleString()} rows)
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
               )}
@@ -911,6 +1106,26 @@ export function GraphStudio({
                 </select>
               </div>
 
+              {datasets.length > 1 && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px] text-emerald-600">table_chart</span>
+                    <span>Dimension Table (Dimension X)</span>
+                  </label>
+                  <select
+                    className="border border-emerald-300 bg-emerald-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
+                    value={dataDimensionDatasetId || selectedDatasetId}
+                    onChange={e => void handleDataDimensionDatasetChange(e.target.value)}
+                  >
+                    {datasets.map(d => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} {d.id === selectedDatasetId ? '(Same Table)' : ''} ({d.rowCount?.toLocaleString() || 0} rows)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   Breakdown Dimension (X)
@@ -919,8 +1134,12 @@ export function GraphStudio({
                   className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
                   value={selectedDataDimension}
                   onChange={e => setSelectedDataDimension(e.target.value)}
+                  disabled={dataDimensionDatasetId !== selectedDatasetId && (!dataJoinResolution || !dataJoinResolution.joinable)}
                 >
-                  {model.fields
+                  {((dataDimensionDatasetId && dataDimensionDatasetId !== selectedDatasetId && dataDimensionModel)
+                    ? dataDimensionModel.fields
+                    : model.fields
+                  )
                     .filter(f => ['dimension', 'identifier', 'time'].includes(f.role))
                     .map(f => (
                       <option key={f.name} value={f.name}>
@@ -963,6 +1182,36 @@ export function GraphStudio({
               </div>
             </div>
 
+            {/* Live Cross-Table Join Validation Status for Mode 3 */}
+            {dataDimensionDatasetId && dataDimensionDatasetId !== selectedDatasetId && (
+              <div className="mt-2">
+                {isResolvingDataJoin && (
+                  <div className="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                    <span className="material-symbols-outlined animate-spin text-[16px]">progress_activity</span>
+                    <span>Verifying join keys and value overlap between selected tables...</span>
+                  </div>
+                )}
+                {!isResolvingDataJoin && dataJoinResolution?.joinable && (
+                  <div className="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                    <span className="material-symbols-outlined text-emerald-600 text-[18px]">verified</span>
+                    <div>
+                      <span className="font-semibold">Join Verified: </span>
+                      <span>Linked via <code className="font-mono bg-emerald-100 px-1 py-0.5 rounded">{dataJoinResolution.left_key}</code> = <code className="font-mono bg-emerald-100 px-1 py-0.5 rounded">{dataJoinResolution.right_key}</code> ({dataJoinResolution.overlap_count?.toLocaleString()} matching records, {dataJoinResolution.cardinality})</span>
+                    </div>
+                  </div>
+                )}
+                {!isResolvingDataJoin && dataJoinResolution && !dataJoinResolution.joinable && (
+                  <div className="flex items-center gap-2 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                    <span className="material-symbols-outlined text-rose-600 text-[18px]">cancel</span>
+                    <div>
+                      <span className="font-semibold">Tables Cannot Be Joined: </span>
+                      <span>{dataJoinResolution.reason || 'No common matching key with data found between these datasets.'} Chart generation is disabled.</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Advanced Python Chart Type Tiles */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-2">
@@ -991,9 +1240,10 @@ export function GraphStudio({
             </div>
 
             <button
-              disabled={dataModeRunning}
+              disabled={dataModeRunning || (dataDimensionDatasetId !== selectedDatasetId && (!dataJoinResolution || !dataJoinResolution.joinable))}
               onClick={() => void handleRunDataDrivenAgent()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-2xs transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              title={dataDimensionDatasetId !== selectedDatasetId && (!dataJoinResolution || !dataJoinResolution.joinable) ? "Tables cannot be joined; chart generation disabled" : undefined}
             >
               <span className={`material-symbols-outlined text-lg ${dataModeRunning ? 'animate-spin' : ''}`}>
                 {dataModeRunning ? 'sync' : 'auto_graph'}

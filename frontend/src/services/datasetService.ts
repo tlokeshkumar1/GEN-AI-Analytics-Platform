@@ -2,8 +2,18 @@ import { hasAdminRole } from './authService';
 import api from './api';
 import { DatasetItem, DatasetRow, DatasetDataResult } from '../types/dataset';
 
-export async function getDatasets(): Promise<DatasetItem[]> {
-  return (await api.get<DatasetItem[]>('/datasets')).data;
+export async function getDatasets(syncTables = false): Promise<DatasetItem[]> {
+  return (await (syncTables ? api.get<DatasetItem[]>('/datasets', { params: { sync_tables: true } }) : api.get<DatasetItem[]>('/datasets'))).data;
+}
+
+export async function reconcileTables(): Promise<{
+  success: boolean;
+  totalDatasets: number;
+  reconciledCount: number;
+  unbundledCount: number;
+  datasets: DatasetItem[];
+}> {
+  return (await api.post('/datasets/reconcile-tables')).data;
 }
 
 export async function getDatasetData(datasetId: string, page = 1, pageSize = 10,

@@ -20,6 +20,11 @@ export type HanaSyncStatus = 'Ready' | 'Pending' | 'Error';
 export interface DatasetItem {
   id: string;
   name: string;
+  tableName?: string;
+  displayName?: string;
+  sheetName?: string;
+  sourceFile?: string;
+  sourceFilename?: string;
   description: string;
   rowCount: number;
   columnCount: number;

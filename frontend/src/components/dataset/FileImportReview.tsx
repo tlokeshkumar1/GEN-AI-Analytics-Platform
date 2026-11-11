@@ -15,7 +15,7 @@ export function FileImportReview({
   onCommitStart?: (filename: string) => void;
   onCommitError?: (error: string) => void;
 }) {
-  const [sheets, setSheets] = useState<{ name: string; tables: { name: string }[] }[]>([]);
+  const [sheets, setSheets] = useState<{ name: string; tables: { name: string }[]; suggested_header_row?: number }[]>([]);
   const [options, setOptions] = useState<Record<string, any>>({ header_row: 1, duplicate_policy: 'keep', decimal_separator: '.', column_types: {} });
   const [profile, setProfile] = useState<any>(null);
   const [error, setError] = useState('');
@@ -26,13 +26,22 @@ export function FileImportReview({
   // SAP HANA Cloud Table Destination States
   const [cloudTables, setCloudTables] = useState<CloudTableInfo[]>([]);
   const [tableDestMode, setTableDestMode] = useState<'new' | 'existing' | 'none'>('new');
-  const defaultTableName = file.name
-    .replace(/\.[^/.]+$/, '')
-    .replace(/[^a-zA-Z0-9_]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '')
-    .toUpperCase() || 'UPLOADED_TABLE';
-  const [newTableName, setNewTableName] = useState<string>(defaultTableName);
+  const deriveDefaultTableName = (sheetName?: string | null) => {
+    const fileBase = file.name
+      .replace(/\.[^/.]+$/, '')
+      .replace(/[^a-zA-Z0-9_]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
+    const cleanSheet = sheetName
+      ? sheetName.replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')
+      : '';
+    const combined = cleanSheet && !fileBase.toUpperCase().endsWith(cleanSheet.toUpperCase())
+      ? `${fileBase}_${cleanSheet}`
+      : fileBase;
+    return combined.toUpperCase() || 'UPLOADED_TABLE';
+  };
+  const [newTableName, setNewTableName] = useState<string>(() => deriveDefaultTableName());
+  const [tableUserEdited, setTableUserEdited] = useState(false);
   const [existingTableName, setExistingTableName] = useState<string>('');
   const [existingTableAction, setExistingTableAction] = useState<'append' | 'replace'>('append');
 
@@ -50,7 +59,21 @@ export function FileImportReview({
     let cancelled = false;
     const form = new FormData(); form.append('file', file);
     api.post('/upload/discover', form, { headers: { 'Content-Type': 'multipart/form-data' } })
-      .then(({ data }) => { if (!cancelled) setSheets(data.sheets); })
+      .then(({ data }) => {
+        if (!cancelled) {
+          setSheets(data.sheets || []);
+          const firstSheet = data.sheets?.[0];
+          const suggested = data.suggested_header_row ?? firstSheet?.suggested_header_row;
+          if (!tableUserEdited && firstSheet?.name) {
+            setNewTableName(deriveDefaultTableName(firstSheet.name));
+          }
+          setOptions(previous => ({
+            ...previous,
+            sheet: data.sheets?.length === 1 ? firstSheet.name : previous.sheet,
+            header_row: typeof suggested === 'number' && suggested >= 1 ? suggested : previous.header_row,
+          }));
+        }
+      })
       .catch(err => { if (!cancelled) setError(getApiErrorMessage(err, 'Source discovery failed.')); });
 
     // Load available SAP HANA Cloud tables
@@ -127,8 +150,19 @@ export function FileImportReview({
     {error && <p role="alert" className="text-red-700 bg-red-50 p-3 rounded-lg text-sm">{error}</p>}
 
     <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-      {!!sheets.length && <label>Worksheet<select className={input} value={options.sheet || ''} onChange={e => change({ sheet: e.target.value || null, table: null })}>
-        <option value="">{sheets.length === 1 ? sheets[0].name : 'Choose a sheet'}</option>{sheets.map(sheet => <option key={sheet.name}>{sheet.name}</option>)}
+      {!!sheets.length && <label>Worksheet<select className={input} value={options.sheet || ''} onChange={e => {
+        const nextSheetName = e.target.value || null;
+        const sheetInfo = sheets.find(s => s.name === nextSheetName) || sheets[0];
+        if (!tableUserEdited && nextSheetName) {
+          setNewTableName(deriveDefaultTableName(nextSheetName));
+        }
+        change({
+          sheet: nextSheetName,
+          table: null,
+          ...(typeof sheetInfo?.suggested_header_row === 'number' ? { header_row: sheetInfo.suggested_header_row } : {}),
+        });
+      }}>
+        <option value="">{sheets.length === 1 ? sheets[0].name : 'Choose a sheet'}</option>{sheets.map(sheet => <option key={sheet.name} value={sheet.name}>{sheet.name}</option>)}
       </select></label>}
       {!!sheets.find(s => s.name === (options.sheet || sheets[0]?.name))?.tables.length && <label>Table<select className={input} value={options.table || ''} onChange={e => change({ table: e.target.value || null })}>
         <option value="">Select a table or use the sheet</option>{sheets.find(s => s.name === (options.sheet || sheets[0]?.name))?.tables.map(table => <option key={table.name}>{table.name}</option>)}
@@ -207,7 +241,10 @@ export function FileImportReview({
               className={`${input} font-mono uppercase text-xs mt-1 bg-white`}
               placeholder="e.g. SALES_DATA_2024"
               value={newTableName}
-              onChange={e => setNewTableName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
+              onChange={e => {
+                setNewTableName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'));
+                setTableUserEdited(true);
+              }}
             />
           </label>
           <div className="flex items-center text-xs text-slate-600 pt-5">
