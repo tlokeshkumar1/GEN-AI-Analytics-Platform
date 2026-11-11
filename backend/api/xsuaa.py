@@ -2,9 +2,11 @@
 
 Keep this module independent of config and package utility initializers.
 """
+import copy
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 import jwt
@@ -12,6 +14,8 @@ from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[2]
+_CREDENTIALS_CACHE: dict[tuple, dict] = {}
+_CREDENTIALS_LOCK = threading.Lock()
 
 
 def xsuaa_credentials(plan: str = "application") -> dict:
@@ -19,13 +23,30 @@ def xsuaa_credentials(plan: str = "application") -> dict:
         raise HTTPException(503, "Only the project XSUAA application service is supported.")
     try:
         raw = os.getenv("VCAP_SERVICES")
+        vcap_app = os.getenv("VCAP_APPLICATION")
+        expected = os.getenv("XSUAA_SERVICE_NAME")
+        env_creds = os.getenv("XSUAA_APPLICATION_CREDENTIALS", "{}")
+        default_env_path = ROOT / "default-env.json"
+        has_default_env = not raw and not vcap_app and default_env_path.exists()
+        default_env_mtime = None
+        if has_default_env:
+            try:
+                default_env_mtime = default_env_path.stat().st_mtime
+            except OSError:
+                default_env_mtime = None
+        cache_key = (plan, raw, vcap_app, expected, env_creds, default_env_mtime)
+        if not has_default_env or default_env_mtime is not None:
+            with _CREDENTIALS_LOCK:
+                cached = _CREDENTIALS_CACHE.get(cache_key)
+                if cached is not None:
+                    return copy.deepcopy(cached)
+
         if raw:
             services = json.loads(raw)
-        elif not os.getenv("VCAP_APPLICATION") and (ROOT / "default-env.json").exists():
-            services = json.loads((ROOT / "default-env.json").read_text(encoding="utf-8-sig")).get("VCAP_SERVICES", {})
+        elif has_default_env:
+            services = json.loads(default_env_path.read_text(encoding="utf-8-sig")).get("VCAP_SERVICES", {})
         else:
             services = {}
-        expected = os.getenv("XSUAA_SERVICE_NAME")
         candidates = [service for service in services.get("xsuaa", [])
                       if service.get("plan") == "application"
                       and (not expected or service.get("name") == expected)]
@@ -36,9 +57,14 @@ def xsuaa_credentials(plan: str = "application") -> dict:
         elif services.get("xsuaa"):
             raise HTTPException(503, "The configured project XSUAA application binding was not found.")
         else:
-            credentials = json.loads(os.getenv("XSUAA_APPLICATION_CREDENTIALS", "{}"))
+            credentials = json.loads(env_creds)
         if not isinstance(credentials, dict):
             raise ValueError("Invalid credentials")
+        if not has_default_env or default_env_mtime is not None:
+            with _CREDENTIALS_LOCK:
+                if len(_CREDENTIALS_CACHE) >= 16:
+                    _CREDENTIALS_CACHE.clear()
+                _CREDENTIALS_CACHE[cache_key] = copy.deepcopy(credentials)
         return credentials
     except (ValueError, TypeError, AttributeError, OSError):
         raise HTTPException(503, "Invalid XSUAA binding configuration.") from None

@@ -294,7 +294,12 @@ class JobService:
             if not registry.list(entry, version):
                 try:
                     from api.platform.agent_domain_classifier import domain_classifier_agent
-                    model = domain_classifier_agent.analyze(df=frame, dataset_id=ds_id, data_version=version)
+                    model = domain_classifier_agent.analyze(
+                        df=frame,
+                        dataset_id=ds_id,
+                        data_version=version,
+                        dataset_name=binding.get("name") or binding.get("source"),
+                    )
                     registry.propose(entry, version, snapshot, overrides=model.model_dump())
                 except Exception:
                     registry.propose(entry, version, snapshot)

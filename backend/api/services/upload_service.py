@@ -1,5 +1,5 @@
 import io
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 import pandas as pd
 
 from api.services.dataset_service import dataset_service
@@ -22,6 +22,7 @@ class UploadService:
         transformation_plan=None,
         target_table_name: str = None,
         target_table_action: str = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """
         Orchestrate the 3-Agent Ingestion Pipeline:
@@ -32,7 +33,22 @@ class UploadService:
         """
         logger.info(f"[UploadService] Starting 3-agent ingestion for file: {filename}")
 
-        # Step 0: Parse raw content
+        def _emit(stage: int, status: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
+            if progress_callback is None:
+                return
+            try:
+                progress_callback({
+                    "type": "stage",
+                    "stage": stage,
+                    "status": status,
+                    "message": message,
+                    "data": data or {},
+                })
+            except Exception as cb_exc:
+                logger.debug(f"[UploadService] Progress callback error ignored: {cb_exc}")
+
+        # ── STAGE 1 / AGENT 1: Parse + Preprocessing & Cleaning ─────────────
+        _emit(1, "running", "Triggering Agent 1: Preprocessing...")
         try:
             if transformation_plan is None:
                 df_raw = dataset_service.parse_file(content, filename)
@@ -43,7 +59,6 @@ class UploadService:
             logger.error(f"Error parsing raw file {filename}: {e}")
             raise
 
-        # ── AGENT 1: Preprocessing & Cleaning ────────────────────────────────
         logger.info("[UploadService] Triggering Agent 1: Preprocessing...")
         clean_df, audit = preprocessing_agent.clean(df_raw)
         logger.info(f"[UploadService] Agent 1 finished: {audit.get('message')}")
@@ -56,6 +71,16 @@ class UploadService:
             with pd.ExcelWriter(clean_buffer, engine="openpyxl") as writer:
                 clean_df.to_excel(writer, index=False)
         clean_content = clean_buffer.getvalue()
+
+        _emit(
+            1,
+            "completed",
+            audit.get("message") or "Preprocessing complete.",
+            {"preprocessing_audit": audit, "rows_processed": len(clean_df)},
+        )
+
+        # ── STAGE 2 / AGENT 2: Dataset Indexing + Domain Classification ─────
+        _emit(2, "running", "Triggering Agent 2: Domain Classifier...")
 
         # Step 1: Upload clean dataset version & create vector embeddings
         # Note: clean_content is already normalized by IngestionService.prepare() + Agent 1 into a clean
@@ -76,31 +101,49 @@ class UploadService:
         dataset_id = dataset_entry["id"]
         version = result["version"]
 
-        # ── AGENT 2: Domain Classification & Semantics (First 5 Rows) ────────
         logger.info("[UploadService] Triggering Agent 2: Domain Classifier...")
         semantic_model = domain_classifier_agent.analyze(
             df=clean_df,
             dataset_id=dataset_id,
-            data_version=version
+            data_version=version,
+            dataset_name=display_name or filename,
         )
         domain = semantic_model.domain
         logger.info(f"[UploadService] Agent 2 finished: Classified as domain '{domain}' with {len(semantic_model.fields)} fields.")
 
         # Persist semantic model into platform store
+        raw_entry = None
+        persisted_model = None
         try:
             catalog = dataset_service._catalog()
             raw_entry = dataset_service._entry(catalog, dataset_id)
             snapshot = dataset_service._snapshot(raw_entry, version)
-            semantic_registry.propose(raw_entry, version, snapshot, overrides=semantic_model.model_dump())
+            persisted_model = semantic_registry.propose(raw_entry, version, snapshot, overrides=semantic_model.model_dump())
+            semantic_model = persisted_model
             logger.info(f"[UploadService] Proposed semantic model saved to registry for {dataset_id} v{version}")
         except Exception as exc:
             logger.warning(f"[UploadService] Note: Could not auto-propose model to registry: {exc}")
 
-        # ── Dynamic Relational Storage in SAP HANA Cloud ──────────────────────
+        _emit(
+            2,
+            "completed",
+            f"Classified as domain '{domain}' with {len(semantic_model.fields)} fields.",
+            {
+                "domain": domain,
+                "semantic_model": semantic_model.model_dump(),
+                "dataset": dataset_entry,
+                "version": version,
+                "embeddings_generated": result.get("embeddings_generated", 0),
+                "embedding_status": dataset_entry.get("embeddingStatus", "Ready"),
+            },
+        )
+
+        # ── STAGE 3: Dynamic Relational Storage in SAP HANA Cloud ────────────
         cloud_table_info = None
         # Use user-specified table or dynamically derive a clean table name
         active_table = target_table_name or f"DS_{dataset_entry.get('folder', 'DATASET')[:18].upper()}_V{version}"
         table_action = (target_table_action or "replace").lower()
+        _emit(3, "running", f"Provisioning SAP HANA Cloud table '{active_table}'...")
 
         if table_action != "none":
             try:
@@ -132,10 +175,39 @@ class UploadService:
                     "message": f"Dataset saved, but dynamic HANA table sync encountered an issue: {str(e)}",
                 }
 
-        # ── AGENT 3: Chart & Visualization Recommender ───────────────────────
+        _emit(
+            3,
+            "completed",
+            f"Synced to HANA table '{active_table}'." if cloud_table_info and cloud_table_info.get("success") else f"HANA storage finalized for '{active_table}'.",
+            {"cloud_table": cloud_table_info or {"success": True, "table_name": active_table, "action": table_action}},
+        )
+
+        # ── STAGE 4 / AGENT 3: Chart & Visualization Recommender ─────────────
+        _emit(4, "running", "Triggering Agent 3: Chart Recommender...")
         logger.info("[UploadService] Triggering Agent 3: Chart Recommender...")
-        recommendations = chart_recommender_agent.recommend(clean_df, semantic_model)
+        recommendations = chart_recommender_agent.recommend(
+            clean_df,
+            semantic_model,
+            dataset_name=display_name or filename,
+        )
+        if raw_entry is not None and persisted_model is not None and recommendations:
+            try:
+                semantic_registry.persist_recommendations(
+                    raw_entry,
+                    version,
+                    persisted_model.revision,
+                    recommendations,
+                    model=persisted_model,
+                )
+            except Exception as exc:
+                logger.warning(f"[UploadService] Note: Could not persist proposed recommendations: {exc}")
         logger.info(f"[UploadService] Agent 3 finished: Produced {len(recommendations)} recommended charts.")
+        _emit(
+            4,
+            "completed",
+            f"Produced {len(recommendations)} recommended charts.",
+            {"recommendations": recommendations},
+        )
 
         # Build response message
         msg_parts = [

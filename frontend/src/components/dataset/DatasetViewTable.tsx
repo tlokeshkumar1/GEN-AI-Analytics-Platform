@@ -45,10 +45,22 @@ export const DatasetViewTable: React.FC<DatasetViewTableProps> = ({
   const [sortField, setSortField] = useState<string>(dataset.columns[0]?.name ?? '');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
 
   const fetchRows = async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setIsLoading(true);
     setError(null);
     try {
@@ -58,35 +70,44 @@ export const DatasetViewTable: React.FC<DatasetViewTableProps> = ({
         pageSize,
         sortField,
         sortDir,
-        searchQuery,
-        dataset.currentVersion
+        debouncedSearch,
+        dataset.currentVersion,
+        controller.signal
       );
-      setRows(data.rows);
-      setTotalRows(data.totalRows);
-      setTotalPages(data.totalPages);
+      if (!controller.signal.aborted) {
+        setRows(data.rows);
+        setTotalRows(data.totalRows);
+        setTotalPages(data.totalPages);
+      }
     } catch (err) {
-      setRows([]);
-      setTotalRows(0);
-      setError(getApiErrorMessage(err, 'Failed to load dataset rows.'));
+      if (!controller.signal.aborted) {
+        setRows([]);
+        setTotalRows(0);
+        setError(getApiErrorMessage(err, 'Failed to load dataset rows.'));
+      }
     } finally {
-      setIsLoading(false);
+      if (abortRef.current === controller) {
+        setIsLoading(false);
+      }
     }
   };
 
-  const prevFilterRef = useRef({ id: dataset.id, search: searchQuery, size: pageSize });
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const prevFilterRef = useRef({ id: dataset.id, search: debouncedSearch, size: pageSize });
 
   useEffect(() => {
     const prev = prevFilterRef.current;
-    const filterChanged = prev.id !== dataset.id || prev.search !== searchQuery || prev.size !== pageSize;
+    const filterChanged = prev.id !== dataset.id || prev.search !== debouncedSearch || prev.size !== pageSize;
     if (filterChanged) {
-      prevFilterRef.current = { id: dataset.id, search: searchQuery, size: pageSize };
+      prevFilterRef.current = { id: dataset.id, search: debouncedSearch, size: pageSize };
       if (currentPage !== 1) {
         setCurrentPage(1);
         return; // The currentPage change to 1 will trigger fetchRows on the next tick
       }
     }
-    fetchRows();
-  }, [dataset.id, dataset.currentVersion, currentPage, pageSize, sortField, sortDir, searchQuery]);
+    void fetchRows();
+  }, [dataset.id, dataset.currentVersion, currentPage, pageSize, sortField, sortDir, debouncedSearch]);
 
   const handleSort = (field: string) => {
     if (sortField === field) {

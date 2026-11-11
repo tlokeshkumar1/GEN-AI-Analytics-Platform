@@ -83,6 +83,7 @@
   ],
   "oauth2-configuration": {
     "token-validity": 900,
+    "refresh-token-validity": 43200,
     "redirect-uris": [
       "https://*.hana.ondemand.com/**",
       "https://*.applicationstudio.cloud.sap/**",

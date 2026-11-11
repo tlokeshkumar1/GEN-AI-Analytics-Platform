@@ -56,14 +56,17 @@ export interface QueryResultResponse {
 /**
  * Fetch database overview including connection stats and all live tables.
  */
-export async function getHanaOverview(): Promise<{
+export async function getHanaOverview(includeFirstTable: boolean = false, pageSize: number = 25): Promise<{
   success: boolean;
   status: string;
   stats: HanaDatabaseStats;
   tableCount: number;
   tables: HanaTable[];
+  initialTableData?: TableDataResponse | null;
 }> {
-  const res = await api.get('/hanaadmin');
+  const res = await api.get('/hanaadmin', {
+    params: includeFirstTable ? { include_first_table: true, pageSize } : undefined,
+  });
   return res.data;
 }
 

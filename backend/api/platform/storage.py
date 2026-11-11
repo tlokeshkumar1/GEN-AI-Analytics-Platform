@@ -1,9 +1,12 @@
-import tempfile
 """Content-addressed durable objects and transactional dataset catalog manifests."""
+import copy
 import hashlib
 import json
 import os
+import tempfile
+import threading
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -86,6 +89,9 @@ class DatasetRepository:
         self.objects = objects or ArtifactStore()
         self.namespace = (workspace or os.getenv("PLATFORM_WORKSPACE_ID", "default")) + ":datasets"
         self.cursor = ContextVar("dataset_catalog_transaction", default=None)
+        self._snapshot_cache: OrderedDict[str, dict] = OrderedDict()
+        self._snapshot_cache_lock = threading.Lock()
+        self._snapshot_cache_max = 32
 
     @contextmanager
     def writer(self):
@@ -124,8 +130,19 @@ class DatasetRepository:
         return self.objects.put(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
 
     def snapshot(self, reference):
+        with self._snapshot_cache_lock:
+            cached = self._snapshot_cache.get(reference)
+            if cached is not None:
+                self._snapshot_cache.move_to_end(reference)
+                return cached
         manifest = json.loads(self.objects.get(reference))
-        return {**json.loads(self.objects.get(manifest["data"])), **json.loads(self.objects.get(manifest["index"]))}
+        loaded = {**json.loads(self.objects.get(manifest["data"])), **json.loads(self.objects.get(manifest["index"]))}
+        with self._snapshot_cache_lock:
+            self._snapshot_cache[reference] = loaded
+            self._snapshot_cache.move_to_end(reference)
+            while len(self._snapshot_cache) > self._snapshot_cache_max:
+                self._snapshot_cache.popitem(last=False)
+        return loaded
 
     def save_snapshot(self, snapshot):
         index_fields = {"embeddings", "embeddingCount", "embeddingStatus", "hanaSyncStatus", "embeddingConfiguration"}

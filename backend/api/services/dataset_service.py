@@ -232,9 +232,44 @@ class DatasetService:
         require_dataset_access(entry, for_chat=for_chat)
         return entry
 
+    def _version_meta(self, entry, version):
+        number = version.get("version") or entry.get("currentVersion")
+        if self.repository is None and number is not None:
+            meta_path = self.output_dir / entry["folder"] / f".meta_{number}.json"
+            if meta_path.exists():
+                try:
+                    return json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+        if isinstance(version.get("columns"), list) and "embeddingStatus" in version:
+            return {
+                "columns": version["columns"],
+                "rowCount": version.get("rowCount", 0),
+                "embeddingStatus": version.get("embeddingStatus", "Ready"),
+                "embeddingCount": version.get("embeddingCount", 0),
+                "hanaSyncStatus": version.get("hanaSyncStatus", "Ready"),
+                "tableName": version.get("tableName"),
+                "sheet_name": version.get("sheet_name"),
+            }
+        return None
+
+    def _write_version_meta(self, folder, number, snap):
+        meta = {
+            "columns": snap.get("columns", []),
+            "rowCount": len(snap.get("rows", [])),
+            "embeddingStatus": snap.get("embeddingStatus", "Ready"),
+            "embeddingCount": snap.get("embeddingCount", 0),
+            "hanaSyncStatus": snap.get("hanaSyncStatus", "Ready"),
+            "active_table": snap.get("active_table"),
+            "tableName": snap.get("tableName"),
+            "sheet_name": snap.get("sheet_name"),
+        }
+        self._write_json(folder / f".meta_{number}.json", meta)
+
     def _item(self, entry, active_id=None):
-        snap = self._snapshot(entry)
         version = next((v for v in entry["versions"] if v["version"] == entry["currentVersion"]), entry["versions"][-1] if entry.get("versions") else {})
+        meta = self._version_meta(entry, version)
+        snap = meta if meta is not None else self._snapshot(entry)
         file_path = self.output_dir / entry["folder"] / version.get("filename", "data.xlsx")
         size_bytes = version.get("sizeBytes", 0)
         if self.repository is None and file_path.exists():
@@ -260,7 +295,7 @@ class DatasetService:
             "sourceFile": source_file,
             "sourceFilename": source_file,
             "description": "Uploaded dataset",
-            "rowCount": version.get("rowCount") or len(snap.get("rows", [])),
+            "rowCount": version.get("rowCount") if version.get("rowCount") is not None else (snap.get("rowCount") or len(snap.get("rows", []))),
             "columnCount": len(snap.get("columns", [])),
             "columns": snap.get("columns", []),
             "lastUpdated": entry["updatedAt"],
@@ -380,6 +415,7 @@ class DatasetService:
             snap = json.loads(snap_path.read_text(encoding="utf-8"))
             snap["embeddingStatus"] = "Indexing"
             self._write_json(snap_path, snap)
+            self._write_version_meta(folder, version, snap)
             self._invalidate()
 
             # Find previous version snapshot for incremental embedding reuse and HANA delta sync
@@ -410,6 +446,7 @@ class DatasetService:
                 embeddingConfiguration=self._embedding_configuration()
             )
             self._write_json(snap_path, snap)
+            self._write_version_meta(folder, version, snap)
             self._invalidate()
             logger.info(f"[Indexer] Version {version} for dataset {dataset_id} indexed: {len(vectors)} embeddings, HANA: {hana_status}")
         except Exception as exc:
@@ -512,9 +549,13 @@ class DatasetService:
                 "hanaSyncStatus": hana_status, "embeddingConfiguration": self._embedding_configuration(),
                 "dataProfile": df.attrs.get("data_profile"), "transformationPlan": df.attrs.get("transformation_plan")}
         self._write_json(folder / f".version_{number}.json", snap)
+        self._write_version_meta(folder, number, snap)
         now = datetime.now(timezone.utc).isoformat()
         entry["versions"].append({"version": number, "filename": filename, "createdAt": now,
-                                  "rowCount": len(rows), "operation": operation, **(provenance or {})})
+                                  "rowCount": len(rows), "operation": operation,
+                                  "columns": snap["columns"], "embeddingStatus": embedding_status,
+                                  "embeddingCount": len(vectors), "hanaSyncStatus": hana_status,
+                                  **(provenance or {})})
         entry.update(currentVersion=number, updatedAt=now)
         catalog["datasets"][entry["id"]] = entry
         catalog["activeDatasetId"] = entry["id"]
@@ -738,14 +779,46 @@ class DatasetService:
         if not snap.get("rows"):
             try:
                 from api.platform.datasets_metadata_repository import datasets_metadata_repo
-                table_name = entry.get("physical_table_name") or entry.get("folder") or entry.get("name")
-                rows, cols = datasets_metadata_repo.load_rows_from_hana(table_name)
-                if rows:
-                    snap["rows"] = rows
-                    if cols and not snap.get("columns"):
-                        snap["columns"] = cols
+                from api.database.hana_table_service import hana_table_service
+                table_hint = entry.get("physical_table_name") or entry.get("tableName") or entry.get("folder") or entry.get("name")
+                phys_table = datasets_metadata_repo._resolve_physical_table(table_hint)
+                if sort_field and snap.get("columns") and sort_field not in {c["name"] for c in snap["columns"]}:
+                    raise HTTPException(400, "Unknown sort column.")
+                paged = hana_table_service.get_table_data(
+                    phys_table,
+                    page=page,
+                    page_size=page_size,
+                    sort_col=sort_field,
+                    sort_dir=sort_dir.upper(),
+                    search=search or "",
+                )
+                paged_rows = paged.get("rows", [])
+                for idx, r in enumerate(paged_rows):
+                    if "__rowId" not in r:
+                        r["__rowId"] = str(r.get("id") or f"row_{(page - 1) * page_size + idx}")
+                    if "id" not in r:
+                        r["id"] = r["__rowId"]
+                return {
+                    "dataset": self._item(entry, catalog["activeDatasetId"]),
+                    "rows": paged_rows,
+                    "totalRows": paged.get("filteredRows", len(paged_rows)),
+                    "page": paged.get("page", page),
+                    "pageSize": paged.get("pageSize", page_size),
+                    "totalPages": paged.get("totalPages", 1),
+                }
+            except HTTPException:
+                raise
             except Exception:
-                pass
+                try:
+                    from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                    table_name = entry.get("physical_table_name") or entry.get("folder") or entry.get("name")
+                    rows, cols = datasets_metadata_repo.load_rows_from_hana(table_name)
+                    if rows:
+                        snap["rows"] = rows
+                        if cols and not snap.get("columns"):
+                            snap["columns"] = cols
+                except Exception:
+                    pass
         rows = [dict(r, id=r["__rowId"]) if "id" not in r else dict(r) for r in snap.get("rows", [])]
         if search.strip():
             visible_columns = [c["name"] for c in snap["columns"]]
@@ -998,9 +1071,13 @@ class DatasetService:
             if self.repository is not None:
                 version = next(v for v in entry["versions"] if v["version"] == entry["currentVersion"])
                 version["snapshotKey"] = self.repository.save_snapshot(snap)
+                version["embeddingStatus"] = status
+                version["embeddingCount"] = len(vectors)
+                version["hanaSyncStatus"] = snap["hanaSyncStatus"]
                 self._write_json(self.catalog_path, catalog)
             else:
                 self._write_json(self.output_dir / entry["folder"] / f".version_{entry['currentVersion']}.json", snap)
+                self._write_version_meta(self.output_dir / entry["folder"], entry["currentVersion"], snap)
             self._invalidate()
             message = f"Current version embeddings refreshed ({len(vectors)} vectors)."
             if snap["hanaSyncStatus"] == "Error":
@@ -1226,7 +1303,9 @@ class DatasetService:
         reference = self.repository.save_snapshot(snapshot)
         now = datetime.now(timezone.utc).isoformat()
         entry["versions"].append(dict(version=number, filename=filename, createdAt=now, operation=operation,
-                                      rowCount=len(rows), snapshotKey=reference, rawKey=raw_key, sizeBytes=len(raw), **(provenance or {})))
+                                      rowCount=len(rows), snapshotKey=reference, rawKey=raw_key, sizeBytes=len(raw),
+                                      columns=snapshot["columns"], embeddingStatus=status,
+                                      embeddingCount=len(vectors), hanaSyncStatus=hana_status, **(provenance or {})))
         entry.update(currentVersion=number, updatedAt=now)
         catalog["datasets"][entry["id"]] = entry
         catalog["activeDatasetId"] = entry["id"]
@@ -1255,6 +1334,9 @@ class DatasetService:
             version = next((v for v in current["versions"] if v["version"] == number), None)
             if version is not None:
                 version["snapshotKey"] = reference
+                version["embeddingStatus"] = status
+                version["embeddingCount"] = len(vectors)
+                version["hanaSyncStatus"] = hana_status
                 self._write_json(self.catalog_path, catalog)
 
     def _ingestion_receipt(self, catalog, ingestion_id):

@@ -31,7 +31,7 @@ def get_ai_settings():
             "embedding_dimensions": 1536}
 
 
-from api.platform.ai_settings import AISettings
+from api.platform.ai_settings import AISettings, clear_ai_settings_cache
 
 
 @router.put("/ai")
@@ -40,6 +40,7 @@ def update_ai_settings(body: AISettings):
     namespace = identity["workspace_id"] + ":settings"
     row = connection_service.store.get(namespace, "ai")
     connection_service.store.put(namespace, "ai", body.model_dump(), row["revision"] if row else 0)
+    clear_ai_settings_cache()
     connection_service.audit("ai_settings_updated", "ai")
     return get_ai_settings()
 

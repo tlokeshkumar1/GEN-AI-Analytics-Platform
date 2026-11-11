@@ -23,10 +23,15 @@ class DatasetsMetadataRepository:
         self._cached_catalog_time: float = 0.0
         self._ttl_seconds: float = 60.0
         self._cached_schema: Dict[str, List[Dict[str, Any]]] = {}
+        self._cached_hana_tables: Optional[Dict[str, int]] = None
+        self._cached_hana_tables_time: float = 0.0
 
     def invalidate_cache(self):
         self._cached_catalog = None
         self._cached_catalog_time = 0.0
+        self._cached_hana_tables = None
+        self._cached_hana_tables_time = 0.0
+        self._cached_schema.clear()
 
     def _client(self):
         try:
@@ -242,13 +247,15 @@ class DatasetsMetadataRepository:
             logger.error(f"Failed to delete dataset '{dataset_id}' from DATASETS_METADATA: {exc}")
             return False
 
-    def _resolve_physical_table(self, table_name: Optional[str] = None) -> str:
-        """Dynamically resolve the existing physical table directly from SAP HANA Cloud catalog."""
+    def _list_hana_tables(self) -> Dict[str, int]:
+        now = time.time()
+        if self._cached_hana_tables is not None and (now - self._cached_hana_tables_time) < 30.0:
+            return self._cached_hana_tables
+
         client = self._client()
         if not client:
-            return table_name or "DATASET_TABLE"
+            return {}
 
-        # 1. Gather all existing user tables in SAP HANA Cloud
         system_tables = {"DATASETS_METADATA", "PLATFORM_METADATA", "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS"}
         hana_tables: Dict[str, int] = {}
         try:
@@ -270,6 +277,21 @@ class DatasetsMetadataRepository:
                         hana_tables[t_name] = 1
             except Exception as e:
                 logger.warning(f"Failed to query HANA table catalog: {e}")
+
+        if hana_tables:
+            self._cached_hana_tables = hana_tables
+            self._cached_hana_tables_time = now
+        return hana_tables
+
+    def get_table_record_count(self, table_name: str) -> Optional[int]:
+        hana_tables = self._list_hana_tables()
+        return hana_tables.get(str(table_name or "").upper())
+
+    def _resolve_physical_table(self, table_name: Optional[str] = None) -> str:
+        """Dynamically resolve the existing physical table directly from SAP HANA Cloud catalog."""
+        hana_tables = self._list_hana_tables()
+        if not hana_tables and not self._client():
+            return table_name or "DATASET_TABLE"
 
         # 2. Extract potential table name hints from input and current execution selection
         candidates: List[str] = []

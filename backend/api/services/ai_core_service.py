@@ -17,7 +17,7 @@ def _create_http_session() -> requests.Session:
         total=2,
         backoff_factor=1.0,
         status_forcelist=[429, 502, 503, 504],
-        allowed_methods=["POST", "GET"]
+        allowed_methods=["GET"]
     )
     adapter = HTTPAdapter(
         pool_connections=10,
@@ -82,7 +82,12 @@ class AICoreService:
                 raise
         raise last_exception
 
-    def generate_aicore_completion(self, prompt: str) -> Optional[str]:
+    def generate_aicore_completion(
+        self,
+        prompt: str,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> Optional[str]:
         """
         Generate completion using SAP AI Core Generative AI Hub deployment.
         Dedicated for custom graph generation.
@@ -116,8 +121,8 @@ class AICoreService:
             "messages": [
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.2,
-            "max_tokens": 1500
+            "temperature": 0.2 if temperature is None else temperature,
+            "max_tokens": 1500 if max_tokens is None else max_tokens,
         }
 
         try:
@@ -156,7 +161,13 @@ class AICoreService:
 
         return None
 
-    def generate_nvidia_completion(self, prompt: str) -> str:
+    def generate_nvidia_completion(
+        self,
+        prompt: str,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        timeout: int = 25,
+    ) -> str:
         """Generate text completion using NVIDIA NIM LLM API (dedicated for RAG Chat)."""
         api_key = settings.NVIDIA_API_KEY
         if not api_key:
@@ -173,10 +184,9 @@ class AICoreService:
 
         primary_model = config["llm_model"]
         fallback_models = [
-            "meta/llama-3.2-11b-vision-instruct",
-            "meta/llama-3.1-8b-instruct",
-            "mistralai/mistral-7b-instruct-v0.3",
-            "google/gemma-2-9b-it"
+            "meta/llama-3.3-70b-instruct",
+            "meta/llama-3.1-70b-instruct",
+            "mistralai/mistral-small-24b-instruct",
         ]
 
         models_to_try = [primary_model]
@@ -188,8 +198,8 @@ class AICoreService:
             payload = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": config["temperature"],
-                "max_tokens": config["max_tokens"],
+                "temperature": config["temperature"] if temperature is None else temperature,
+                "max_tokens": config["max_tokens"] if max_tokens is None else max_tokens,
             }
             try:
                 t_start = time.perf_counter()
@@ -197,7 +207,7 @@ class AICoreService:
                     settings.NVIDIA_LLM_URL,
                     json=payload,
                     headers=headers,
-                    timeout=15
+                    timeout=timeout
                 )
                 elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
                 if res.status_code == 200:
@@ -234,6 +244,46 @@ class AICoreService:
     def generate_completion(self, prompt: str) -> str:
         """Standard completion for RAG chat and general queries (uses NVIDIA NIM)."""
         return self.generate_nvidia_completion(prompt)
+
+    def generate_structured_completion(
+        self,
+        prompt: str,
+        max_tokens: int = 1800,
+        temperature: float = 0.1,
+    ) -> Optional[str]:
+        """
+        Generate structured JSON completion for autonomous agents.
+        Uses NVIDIA NIM first when configured, falling back to SAP AI Core if available.
+        """
+        if settings.NVIDIA_API_KEY:
+            try:
+                try:
+                    result = self.generate_nvidia_completion(
+                        prompt,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        timeout=30,
+                    )
+                except TypeError:
+                    # Compatibility if a unit test patches generate_nvidia_completion with 1-arg signature
+                    result = self.generate_nvidia_completion(prompt)
+                if result and result.strip():
+                    return result
+            except Exception as exc:
+                logger.warning(f"[AI Core] Structured NVIDIA completion failed: {exc}")
+
+        try:
+            result = self.generate_aicore_completion(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            if result and result.strip():
+                return result
+        except Exception as exc:
+            logger.warning(f"[AI Core] Structured SAP AI Core completion failed: {exc}")
+
+        return None
 
     def generate_embedding(self, text: str) -> List[float]:
         return self.generate_embeddings([text], input_type="query")[0]

@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+import time
 from typing import Optional
 from api.config import settings
 from api.utils.logger import get_logger
@@ -26,7 +27,10 @@ class HANAConnectionManager:
         if self._max_pool_size <= 0:
             raise ValueError(f"HANA_POOL_SIZE must be greater than 0, got {self._max_pool_size}")
         self._pool_timeout = getattr(settings, "HANA_POOL_TIMEOUT", 30.0)
+        self._health_check_interval = 30.0
         self._pool = queue.Queue(maxsize=self._max_pool_size)
+        self._last_used: dict[int, float] = {}
+        self._last_used_lock = threading.Lock()
         self._semaphore = threading.BoundedSemaphore(self._max_pool_size)
 
     def _create_connection(self):
@@ -57,7 +61,7 @@ class HANAConnectionManager:
             logger.error("Failed to connect to the configured SAP HANA schema (%s).", type(e).__name__)
             return None
 
-    def get_connection(self, timeout: Optional[float] = None):
+    def get_connection(self, timeout: Optional[float] = None, validate: bool = False):
         """
         Get a connection from the pool or create a new one, strictly capping
         the total number of live (idle + active) connections at HANA_POOL_SIZE.
@@ -85,10 +89,16 @@ class HANAConnectionManager:
                 conn = None
 
             if conn is not None:
+                with self._last_used_lock:
+                    last_used = self._last_used.pop(id(conn), 0.0)
                 try:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT 1 FROM DUMMY")
-                    cursor.close()
+                    is_conn_fn = getattr(conn, "isconnected", None)
+                    if callable(is_conn_fn) and is_conn_fn() is False:
+                        raise RuntimeError("Connection closed")
+                    if validate or (time.monotonic() - last_used) >= self._health_check_interval:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT 1 FROM DUMMY")
+                        cursor.close()
                     return conn
                 except Exception:
                     try:
@@ -112,9 +122,13 @@ class HANAConnectionManager:
         if not conn:
             return
         try:
+            with self._last_used_lock:
+                self._last_used[id(conn)] = time.monotonic()
             try:
                 self._pool.put_nowait(conn)
             except queue.Full:
+                with self._last_used_lock:
+                    self._last_used.pop(id(conn), None)
                 try:
                     conn.close()
                 except Exception:
@@ -126,7 +140,7 @@ class HANAConnectionManager:
                 pass
 
     def is_connected(self) -> bool:
-        conn = self.get_connection(timeout=5.0)
+        conn = self.get_connection(timeout=5.0, validate=True)
         if conn:
             self.return_connection(conn)
             return True

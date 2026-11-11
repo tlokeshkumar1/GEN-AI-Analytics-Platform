@@ -97,17 +97,24 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
     return () => clearTimeout(timer);
   }, [rowSearch]);
 
-  // Load database overview & tables
+  const skipNextTableFetchRef = React.useRef<string | null>(null);
+
+  // Load database overview & tables (with first table page-1 rows in the same round-trip on initial load)
   const loadDatabaseOverview = async (showLoading = true) => {
     if (showLoading) setLoadingTables(true);
     setError('');
     try {
-      const data = await getHanaOverview();
+      const fetchInitialRows = !selectedTableName && activeTab === 'tables';
+      const data = await getHanaOverview(fetchInitialRows, pageSize);
       setStats(data.stats);
       setTables(data.tables || []);
       if (!selectedTableName && data.tables?.length > 0) {
         const businessTable = data.tables.find(t => !t.isInternal);
         const firstTbl = businessTable ? businessTable.name : data.tables[0].name;
+        if (data.initialTableData && data.initialTableData.tableName.toUpperCase() === firstTbl.toUpperCase()) {
+          skipNextTableFetchRef.current = firstTbl;
+          setTableData(data.initialTableData);
+        }
         setSelectedTableName(firstTbl);
         setSqlQuery(`SELECT * FROM "${firstTbl}" LIMIT 20`);
       }
@@ -148,6 +155,10 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
   };
 
   useEffect(() => {
+    if (skipNextTableFetchRef.current && skipNextTableFetchRef.current === selectedTableName) {
+      skipNextTableFetchRef.current = null;
+      return;
+    }
     fetchActiveTableData(selectedTableName);
   }, [selectedTableName, currentPage, pageSize, sortField, sortDir, searchDebounce, activeTab]);
 

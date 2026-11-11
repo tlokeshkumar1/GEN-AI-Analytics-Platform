@@ -75,10 +75,12 @@ export const EnterpriseSignIn: React.FC<EnterpriseSignInProps> = ({
     try {
       let userContext: UserContext | null = null;
       let token: string | null = null;
+      let expiresIn: number | undefined = undefined;
 
       try {
         const loginRes = await fetch(`${apiBaseUrl}/api/auth/login`, {
           method: 'POST',
+          credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: cleanEmail, password: cleanPassword, rememberMe })
         });
@@ -88,6 +90,7 @@ export const EnterpriseSignIn: React.FC<EnterpriseSignInProps> = ({
         if (loginRes.ok && data.status === 'success') {
           userContext = data.user;
           token = data.token;
+          expiresIn = typeof data.expires_in === 'number' ? data.expires_in : undefined;
         } else {
           setError(data.detail || 'Invalid corporate email or password. Access denied.');
           setIsLoading(false);
@@ -102,7 +105,7 @@ export const EnterpriseSignIn: React.FC<EnterpriseSignInProps> = ({
       if (userContext) {
         clearLocalIdentity(false);
         if (token) {
-          setAuthToken(token);
+          setAuthToken(token, expiresIn);
           localStorage.setItem('auth_user', JSON.stringify(userContext));
         }
         if (onSignInSuccess) {

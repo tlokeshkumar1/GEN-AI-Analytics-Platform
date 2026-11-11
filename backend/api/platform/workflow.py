@@ -1,9 +1,13 @@
 """Three logical agents coordinated through persisted, validated stage outputs."""
+import threading
 from typing import Literal
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from api.models.execution_context import current_identity, require_dataset_access
 from api.platform.contracts import DataProfile, TransformationPlan, SemanticModel, AnalyticsPlan
 from api.platform.semantic import semantic_registry, now
+
+_WORKFLOW_SAVE_LOCK = threading.Lock()
 
 
 class EngineeringOutput(BaseModel):
@@ -48,12 +52,26 @@ class WorkflowOrchestrator:
 
     def save(self, entry, version, stage, status, outputs, error=None):
         namespace = semantic_registry.namespace(entry, version, "workflow")
-        row = semantic_registry.store.get(namespace, "run")
-        value = WorkflowState(dataset_id=entry["id"], version=version, stage=stage, status=status,
-                              attempts=max(1, (row["value"]["attempts"] if row else 0) + (1 if status == "running" else 0)),
-                              outputs={**(row["value"]["outputs"] if row else {}), **outputs}, updated_at=now(), error=error)
-        semantic_registry.store.put(namespace, "run", value.model_dump(mode="json"), row["revision"] if row else 0)
-        return value
+        with _WORKFLOW_SAVE_LOCK:
+            for attempt in range(4):
+                row = semantic_registry.store.get(namespace, "run")
+                value = WorkflowState(
+                    dataset_id=entry["id"],
+                    version=version,
+                    stage=stage,
+                    status=status,
+                    attempts=max(1, (row["value"]["attempts"] if row else 0) + (1 if status == "running" else 0)),
+                    outputs={**(row["value"]["outputs"] if row else {}), **outputs},
+                    updated_at=now(),
+                    error=error,
+                )
+                try:
+                    semantic_registry.store.put(namespace, "run", value.model_dump(mode="json"), row["revision"] if row else 0)
+                    return value
+                except HTTPException as exc:
+                    if exc.status_code == 409 and attempt < 3:
+                        continue
+                    raise
 
     def propose_semantics(self, entry, version, snapshot, overrides=None):
         require_dataset_access(entry, write=True)

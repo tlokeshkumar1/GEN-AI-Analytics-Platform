@@ -79,11 +79,13 @@ export function GraphStudio({
   const [model, setModel] = useState<SemanticModel | null>(null);
   const [items, setItems] = useState<AnalyticsDefinition[]>([]);
   const [previews, setPreviews] = useState<Record<string, ExecutionResult>>({});
-  const [loadingPreviewId, setLoadingPreviewId] = useState<string | null>(null);
+  const [loadingPreviews, setLoadingPreviews] = useState<Record<string, boolean>>({});
+  const [reviewingItems, setReviewingItems] = useState<Record<string, 'approved' | 'rejected'>>({});
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [publishedSuccess, setPublishedSuccess] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
 
   // Available Datasets & Active Selection for Multi-Table Scoping
   const [datasets, setDatasets] = useState<DatasetItem[]>([]);
@@ -228,13 +230,33 @@ export function GraphStudio({
   };
 
   const load = async () => {
-    const allDatasets = await getDatasets().catch(() => []);
-    setDatasets(allDatasets);
-
     let context = selectedContext();
-    if (!context) {
-      context = await ensureDefaultContext();
+    let allDatasets: DatasetItem[];
+    let preloadedModels: SemanticModel[] | null = null;
+    let preloadedRecs: AnalyticsDefinition[] | null = null;
+    let preloadedPub: any = null;
+
+    if (context) {
+      const [dsList, models, recommendations, pubRes] = await Promise.all([
+        getDatasets().catch(() => []),
+        getSemanticModels(context.datasetId, context.version),
+        getRecommendations(),
+        getDashboardPublication().catch(() => ({ title: '', items: [], status: 'unpublished' })),
+      ]);
+      allDatasets = dsList;
+      preloadedModels = models;
+      preloadedRecs = recommendations;
+      preloadedPub = pubRes;
+    } else {
+      const [dsList, resolvedCtx] = await Promise.all([
+        getDatasets().catch(() => []),
+        ensureDefaultContext(),
+      ]);
+      allDatasets = dsList;
+      context = resolvedCtx;
     }
+
+    setDatasets(allDatasets);
 
     let dsId = context?.datasetId;
     if (!dsId && allDatasets.length > 0) {
@@ -250,7 +272,7 @@ export function GraphStudio({
     setDimensionDatasetId(resolvedId);
     setDataDimensionDatasetId(resolvedId);
 
-    const models = await getSemanticModels(resolvedId, version);
+    const models = preloadedModels ?? (await getSemanticModels(resolvedId, version));
     const approved =
       models.find(m => m.revision === context?.semanticRevision && m.status === 'approved') ||
       models.find(m => m.status === 'approved') ||
@@ -267,10 +289,12 @@ export function GraphStudio({
     setSelectedDataMetric(measures.length > 0 ? measures[0].name : '*');
     setSelectedDataDimension(dims.length > 0 ? dims[0].name : '');
 
-    const [recommendations, pubRes] = await Promise.all([
-      getRecommendations(),
-      getDashboardPublication().catch(() => ({ title: '', items: [], status: 'unpublished' })),
-    ]);
+    const [recommendations, pubRes] = preloadedRecs !== null
+      ? [preloadedRecs, preloadedPub]
+      : await Promise.all([
+          getRecommendations(),
+          getDashboardPublication().catch(() => ({ title: '', items: [], status: 'unpublished' })),
+        ]);
     const itemsList = Array.isArray(pubRes) ? pubRes : ((pubRes as any)?.items || []);
     const pubKeys = itemsList.map((p: any) => `${p.id}:${p.revision}`);
     setPublishedKeys(pubKeys);
@@ -278,8 +302,9 @@ export function GraphStudio({
     setItems(recommendations);
   };
 
-  const run = async (operation: () => Promise<void>) => {
+  const run = async (operation: () => Promise<void>, actionKey?: string) => {
     setBusy(true);
+    if (actionKey) setBusyAction(actionKey);
     setError('');
     setMessage('');
     setPublishedSuccess(false);
@@ -289,6 +314,7 @@ export function GraphStudio({
       setError(getApiErrorMessage(err, 'Operation failed.'));
     } finally {
       setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -306,14 +332,49 @@ export function GraphStudio({
       });
       return;
     }
-    setLoadingPreviewId(key);
+    setLoadingPreviews(previous => ({ ...previous, [key]: true }));
     try {
       const result = await executePlan(item.query_plan);
       setPreviews(previous => ({ ...previous, [key]: result }));
     } catch (err) {
       setError(getApiErrorMessage(err, 'Failed to preview query execution.'));
     } finally {
-      setLoadingPreviewId(null);
+      setLoadingPreviews(previous => {
+        const next = { ...previous };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
+  const handleReviewItem = async (item: AnalyticsDefinition, decision: 'approved' | 'rejected') => {
+    const key = `${item.id}:${item.revision}`;
+    if (reviewingItems[key]) return;
+    setReviewingItems(previous => ({ ...previous, [key]: decision }));
+    setError('');
+    setPublishedSuccess(false);
+    try {
+      const updated = await reviewDefinition(item, decision);
+      setItems(previous =>
+        previous.map(existing =>
+          existing.id === item.id && existing.revision === item.revision
+            ? { ...existing, ...updated, status: updated?.status || decision }
+            : existing
+        )
+      );
+      setMessage(
+        decision === 'approved'
+          ? `Approved definition "${item.title}". It can now be included on the dashboard.`
+          : `Rejected definition "${item.title}".`
+      );
+    } catch (err) {
+      setError(getApiErrorMessage(err, `Failed to ${decision === 'approved' ? 'approve' : 'reject'} "${item.title}".`));
+    } finally {
+      setReviewingItems(previous => {
+        const next = { ...previous };
+        delete next[key];
+        return next;
+      });
     }
   };
 
@@ -463,7 +524,7 @@ export function GraphStudio({
       setPublishedKeys([...selected]);
       setPublishedSuccess(true);
       setMessage(`Successfully published ${selectedWidgets.length} widget(s) to the Executive Dashboard!`);
-    });
+    }, 'publish');
   };
 
   return (
@@ -491,15 +552,24 @@ export function GraphStudio({
           disabled={busy || !model}
           onClick={() =>
             void run(async () => {
-              const result = await proposeRecommendations();
-              setItems(result || (await getRecommendations()));
-              setMessage('Auto-generated KPI recommendations from approved semantic fields.');
-            })
+              const newlyProposed = await proposeRecommendations();
+              const allItems = await getRecommendations();
+              setItems(allItems);
+              if (Array.isArray(newlyProposed) && newlyProposed.length > 0) {
+                setMessage(
+                  `Added ${newlyProposed.length} new AI-recommended KPI/chart definition${newlyProposed.length === 1 ? '' : 's'}. Existing definitions were preserved.`
+                );
+              } else {
+                setMessage('All meaningful KPIs and charts for this dataset are already generated — no duplicates added.');
+              }
+            }, 'propose')
           }
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold text-xs shadow-2xs hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold text-xs shadow-2xs hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
-          <span className="material-symbols-outlined text-[16px]">{busy ? 'sync' : 'auto_awesome'}</span>
-          <span>{busy ? 'Proposing...' : 'Propose AI Recommendations'}</span>
+          <span className={`material-symbols-outlined text-[16px] ${busyAction === 'propose' ? 'animate-spin' : ''}`}>
+            {busyAction === 'propose' ? 'progress_activity' : 'auto_awesome'}
+          </span>
+          <span>{busyAction === 'propose' ? 'Proposing...' : 'Propose AI Recommendations'}</span>
         </button>
       </div>
 
@@ -837,12 +907,22 @@ export function GraphStudio({
             <div className="flex items-center gap-3 pt-3 border-t border-slate-100">
               <button
                 disabled={busy || (dimensionDatasetId !== selectedDatasetId && (!joinResolution || !joinResolution.joinable))}
-                onClick={() => void run(saveVisualDefinition)}
+                onClick={() => void run(saveVisualDefinition, 'save')}
                 className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-xs hover:bg-blue-700 active:scale-[0.98] transition-all shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 title={dimensionDatasetId !== selectedDatasetId && (!joinResolution || !joinResolution.joinable) ? "Tables cannot be joined; widget creation disabled" : undefined}
               >
-                <span className="material-symbols-outlined text-lg">save</span>
-                <span>{edit ? 'Update Definition Proposal' : 'Save Definition Proposal'}</span>
+                <span className={`material-symbols-outlined text-lg ${busyAction === 'save' ? 'animate-spin' : ''}`}>
+                  {busyAction === 'save' ? 'progress_activity' : 'save'}
+                </span>
+                <span>
+                  {busyAction === 'save'
+                    ? edit
+                      ? 'Updating...'
+                      : 'Saving...'
+                    : edit
+                    ? 'Update Definition Proposal'
+                    : 'Save Definition Proposal'}
+                </span>
               </button>
               {edit && (
                 <button
@@ -1409,7 +1489,9 @@ export function GraphStudio({
             const isPublished = publishedKeys.includes(key);
             const isSelected = selected.includes(key);
             const isPreviewOpen = Boolean(previews[key]);
-            const isPreviewLoading = loadingPreviewId === key;
+            const isPreviewLoading = Boolean(loadingPreviews[key]);
+            const reviewingDecision = reviewingItems[key];
+            const isCardReviewing = Boolean(reviewingDecision);
 
             return (
               <article
@@ -1524,16 +1606,16 @@ export function GraphStudio({
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <button
                       type="button"
-                      disabled={busy || isPreviewLoading}
+                      disabled={busy || isPreviewLoading || isCardReviewing}
                       onClick={() => void togglePreview(item)}
-                      className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all border cursor-pointer ${
+                      className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all border cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                         isPreviewOpen
                           ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
                           : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 shadow-2xs'
                       }`}
                     >
-                      <span className="material-symbols-outlined text-[15px]">
-                        {isPreviewLoading ? 'sync' : isPreviewOpen ? 'visibility_off' : 'visibility'}
+                      <span className={`material-symbols-outlined text-[15px] ${isPreviewLoading ? 'animate-spin' : ''}`}>
+                        {isPreviewLoading ? 'progress_activity' : isPreviewOpen ? 'visibility_off' : 'visibility'}
                       </span>
                       <span>
                         {isPreviewLoading ? 'Executing...' : isPreviewOpen ? 'Hide Preview' : 'Preview Live'}
@@ -1542,7 +1624,7 @@ export function GraphStudio({
 
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || isPreviewLoading || isCardReviewing}
                       onClick={() => {
                         setEdit(item);
                         setPlanText(JSON.stringify(item.query_plan, null, 2));
@@ -1551,7 +1633,7 @@ export function GraphStudio({
                         setActiveMode('visual');
                         document.getElementById('definition-form')?.scrollIntoView({ behavior: 'smooth' });
                       }}
-                      className="px-2 py-1 rounded-lg text-xs font-semibold text-slate-700 border border-slate-200 bg-white hover:bg-slate-50 flex items-center gap-1 transition-all shadow-2xs cursor-pointer"
+                      className="px-2 py-1 rounded-lg text-xs font-semibold text-slate-700 border border-slate-200 bg-white hover:bg-slate-50 flex items-center gap-1 transition-all shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <span className="material-symbols-outlined text-[15px]">edit</span>
                       <span>Edit Query</span>
@@ -1561,34 +1643,26 @@ export function GraphStudio({
                       <div className="flex items-center gap-1.5 pl-1.5 border-l border-slate-200">
                         <button
                           type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            void run(async () => {
-                              await reviewDefinition(item, 'approved');
-                              setItems(await getRecommendations());
-                              setMessage(`Approved definition "${item.title}". It can now be included on the dashboard.`);
-                            })
-                          }
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                          disabled={busy || isPreviewLoading || isCardReviewing}
+                          onClick={() => void handleReviewItem(item, 'approved')}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                         >
-                          <span className="material-symbols-outlined text-[15px]">check</span>
-                          <span>Approve</span>
+                          <span className={`material-symbols-outlined text-[15px] ${reviewingDecision === 'approved' ? 'animate-spin' : ''}`}>
+                            {reviewingDecision === 'approved' ? 'progress_activity' : 'check'}
+                          </span>
+                          <span>{reviewingDecision === 'approved' ? 'Approving...' : 'Approve'}</span>
                         </button>
 
                         <button
                           type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            void run(async () => {
-                              await reviewDefinition(item, 'rejected');
-                              setItems(await getRecommendations());
-                              setMessage(`Rejected definition "${item.title}".`);
-                            })
-                          }
-                          className="border border-rose-200 text-rose-600 hover:bg-rose-50 font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 transition-all cursor-pointer"
+                          disabled={busy || isPreviewLoading || isCardReviewing}
+                          onClick={() => void handleReviewItem(item, 'rejected')}
+                          className="border border-rose-200 text-rose-600 hover:bg-rose-50 font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                         >
-                          <span className="material-symbols-outlined text-[15px]">close</span>
-                          <span>Reject</span>
+                          <span className={`material-symbols-outlined text-[15px] ${reviewingDecision === 'rejected' ? 'animate-spin' : ''}`}>
+                            {reviewingDecision === 'rejected' ? 'progress_activity' : 'close'}
+                          </span>
+                          <span>{reviewingDecision === 'rejected' ? 'Rejecting...' : 'Reject'}</span>
                         </button>
                       </div>
                     )}
@@ -1662,9 +1736,11 @@ export function GraphStudio({
                 : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
             }`}
           >
-            <span className="material-symbols-outlined text-lg">{busy ? 'sync' : 'publish'}</span>
+            <span className={`material-symbols-outlined text-lg ${busyAction === 'publish' ? 'animate-spin' : ''}`}>
+              {busyAction === 'publish' ? 'progress_activity' : 'publish'}
+            </span>
             <span>
-              {busy
+              {busyAction === 'publish'
                 ? 'Publishing...'
                 : selected.length === 0
                 ? 'Publish to Dashboard'

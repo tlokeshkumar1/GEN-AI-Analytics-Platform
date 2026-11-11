@@ -2,6 +2,7 @@ import re
 import math
 import time
 import struct
+import threading
 import datetime
 from decimal import Decimal
 from typing import List, Dict, Any, Optional
@@ -62,6 +63,50 @@ def serialize_hana_value(val: Any) -> Any:
 
 
 class HANATableService:
+    def __init__(self):
+        self._conn_schemas: Dict[int, str] = {}
+        self._schema_lock = threading.Lock()
+
+    def _ensure_schema(self, conn, cursor) -> Optional[str]:
+        schema = settings.HANA_SCHEMA
+        if not schema:
+            return schema
+        conn_id = id(conn)
+        with self._schema_lock:
+            if self._conn_schemas.get(conn_id) == schema:
+                return schema
+        schema_id = schema.replace('"', '""')
+        cursor.execute(f'SET SCHEMA "{schema_id}"')
+        with self._schema_lock:
+            if len(self._conn_schemas) >= 128:
+                self._conn_schemas.clear()
+            self._conn_schemas[conn_id] = schema
+        return schema
+
+    def _fetch_columns_on_cursor(self, cursor, clean_table: str) -> List[Dict[str, Any]]:
+        cursor.execute(
+            """
+            SELECT COLUMN_NAME, DATA_TYPE_NAME, LENGTH, SCALE, IS_NULLABLE, POSITION, DEFAULT_VALUE, COMMENTS
+            FROM SYS.TABLE_COLUMNS
+            WHERE SCHEMA_NAME = CURRENT_SCHEMA AND TABLE_NAME = ?
+            ORDER BY POSITION ASC
+            """,
+            (clean_table,),
+        )
+        return [
+            {
+                "name": row[0],
+                "type": row[1],
+                "length": row[2],
+                "scale": row[3],
+                "isNullable": row[4] == "TRUE",
+                "position": row[5],
+                "defaultValue": row[6],
+                "comments": row[7],
+            }
+            for row in cursor.fetchall()
+        ]
+
     def sanitize_identifier(self, name: str) -> str:
         """Sanitize table or column name into a valid SAP HANA SQL identifier."""
         # Strip file extensions if present
@@ -88,10 +133,7 @@ class HANATableService:
         tables = []
         try:
             cursor = conn.cursor()
-            schema = settings.HANA_SCHEMA
-            if schema:
-                schema_id = schema.replace('"', '""')
-                cursor.execute(f'SET SCHEMA "{schema_id}"')
+            schema = self._ensure_schema(conn, cursor)
 
             # Fetch live table names from SYS.TABLES in CURRENT_SCHEMA
             cursor.execute(
@@ -217,10 +259,7 @@ class HANATableService:
         cursor = None
         try:
             cursor = conn.cursor()
-            schema = settings.HANA_SCHEMA
-            if schema:
-                schema_id = schema.replace('"', '""')
-                cursor.execute(f'SET SCHEMA "{schema_id}"')
+            schema = self._ensure_schema(conn, cursor)
             cursor.execute(
                 "SELECT 1 FROM SYS.TABLES WHERE SCHEMA_NAME = CURRENT_SCHEMA AND TABLE_NAME = ?",
                 (clean_name,),
@@ -284,10 +323,7 @@ class HANATableService:
         try:
             conn.setautocommit(False)
             cursor = conn.cursor()
-            schema = settings.HANA_SCHEMA
-            if schema:
-                schema_id = schema.replace('"', '""')
-                cursor.execute(f'SET SCHEMA "{schema_id}"')
+            schema = self._ensure_schema(conn, cursor)
 
             logger.info(f"Creating HANA column table '{clean_table}' with {len(column_defs)} columns...")
             cursor.execute(sql)
@@ -327,10 +363,7 @@ class HANATableService:
         try:
             conn.setautocommit(False)
             cursor = conn.cursor()
-            schema = settings.HANA_SCHEMA
-            if schema:
-                schema_id = schema.replace('"', '""')
-                cursor.execute(f'SET SCHEMA "{schema_id}"')
+            schema = self._ensure_schema(conn, cursor)
 
             # Check if table exists in current schema
             cursor.execute(
@@ -482,10 +515,7 @@ class HANATableService:
         cursor = None
         try:
             cursor = conn.cursor()
-            schema = settings.HANA_SCHEMA
-            if schema:
-                schema_id = schema.replace('"', '""')
-                cursor.execute(f'SET SCHEMA "{schema_id}"')
+            schema = self._ensure_schema(conn, cursor)
             cursor.execute(
                 """
                 SELECT COLUMN_NAME, DATA_TYPE_NAME, LENGTH, SCALE, IS_NULLABLE, POSITION, DEFAULT_VALUE, COMMENTS
@@ -545,10 +575,7 @@ class HANATableService:
         cursor = None
         try:
             cursor = conn.cursor()
-            schema = settings.HANA_SCHEMA
-            if schema:
-                schema_id = schema.replace('"', '""')
-                cursor.execute(f'SET SCHEMA "{schema_id}"')
+            schema = self._ensure_schema(conn, cursor)
 
             # Verify table exists in current schema
             cursor.execute(
@@ -558,15 +585,8 @@ class HANATableService:
             if not cursor.fetchone():
                 raise ValueError(f"Table '{clean_table}' does not exist in schema '{schema}'.")
 
-            # Fetch columns
-            cols = self.get_table_columns(clean_table)
-            if not cols:
-                cursor.execute(
-                    "SELECT COLUMN_NAME, DATA_TYPE_NAME FROM SYS.TABLE_COLUMNS WHERE SCHEMA_NAME = CURRENT_SCHEMA AND TABLE_NAME = ? ORDER BY POSITION ASC",
-                    (clean_table,),
-                )
-                cols = [{"name": r[0], "type": r[1]} for r in cursor.fetchall()]
-
+            # Fetch columns inline on the same cursor (avoids a second HANA connection)
+            cols = self._fetch_columns_on_cursor(cursor, clean_table)
             col_names = [c["name"] for c in cols]
 
             # Validate sort column
@@ -594,10 +614,22 @@ class HANATableService:
 
             where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-            # Query total row count
-            cursor.execute(f'SELECT COUNT(*) FROM "{clean_table}"')
-            total_rows_res = cursor.fetchone()
-            total_rows = int(total_rows_res[0]) if total_rows_res else 0
+            # Prefer fast SYS.M_TABLES.RECORD_COUNT for unfiltered total count; fallback to COUNT(*)
+            total_rows = None
+            try:
+                cursor.execute(
+                    "SELECT RECORD_COUNT FROM SYS.M_TABLES WHERE SCHEMA_NAME = CURRENT_SCHEMA AND TABLE_NAME = ?",
+                    (clean_table,),
+                )
+                rc_row = cursor.fetchone()
+                if rc_row and rc_row[0] is not None:
+                    total_rows = int(rc_row[0])
+            except Exception:
+                total_rows = None
+            if total_rows is None:
+                cursor.execute(f'SELECT COUNT(*) FROM "{clean_table}"')
+                total_rows_res = cursor.fetchone()
+                total_rows = int(total_rows_res[0]) if total_rows_res else 0
 
             # Query filtered row count
             if where_sql:
@@ -650,10 +682,7 @@ class HANATableService:
         cursor = None
         try:
             cursor = conn.cursor()
-            schema = settings.HANA_SCHEMA
-            if schema:
-                schema_id = schema.replace('"', '""')
-                cursor.execute(f'SET SCHEMA "{schema_id}"')
+            schema = self._ensure_schema(conn, cursor)
 
             # Version
             hana_version = "Unknown"
@@ -738,10 +767,7 @@ class HANATableService:
         max_rows = max(1, min(500, max_rows))
         try:
             cursor = conn.cursor()
-            schema = settings.HANA_SCHEMA
-            if schema:
-                schema_id = schema.replace('"', '""')
-                cursor.execute(f'SET SCHEMA "{schema_id}"')
+            schema = self._ensure_schema(conn, cursor)
 
             start_time = time.time()
             cursor.execute(query_clean)
@@ -801,10 +827,7 @@ class HANATableService:
         try:
             conn.setautocommit(False)
             cursor = conn.cursor()
-            schema = settings.HANA_SCHEMA
-            if schema:
-                schema_id = schema.replace('"', '""')
-                cursor.execute(f'SET SCHEMA "{schema_id}"')
+            schema = self._ensure_schema(conn, cursor)
 
             # Verify table exists
             cursor.execute(
@@ -930,6 +953,152 @@ class HANATableService:
                     pass
             logger.error(f"Failed to delete records from '{clean_table}': {e}")
             raise e
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            db_manager.return_connection(conn)
+
+
+    def get_database_overview(self, include_internal: bool = True, include_first_table: bool = False, page_size: int = 25) -> Dict[str, Any]:
+        """Fetch database stats, table catalog, and optionally first business table page-1 rows in a single connection."""
+        conn = db_manager.get_connection()
+        if not conn:
+            return {
+                "stats": {"connected": False, "error": "HANA Database unavailable"},
+                "tables": [],
+                "initialTableData": None,
+            }
+
+        cursor = None
+        try:
+            cursor = conn.cursor()
+            schema = self._ensure_schema(conn, cursor)
+
+            hana_version = "Unknown"
+            try:
+                cursor.execute("SELECT VERSION FROM SYS.M_DATABASE")
+                ver_row = cursor.fetchone()
+                if ver_row:
+                    hana_version = str(ver_row[0])
+            except Exception:
+                pass
+
+            cursor.execute(
+                """
+                SELECT t.SCHEMA_NAME, t.TABLE_NAME, t.TABLE_TYPE, MAX(m.RECORD_COUNT) AS RECORD_COUNT
+                FROM SYS.TABLES t
+                LEFT JOIN SYS.M_TABLES m
+                  ON t.SCHEMA_NAME = m.SCHEMA_NAME AND t.TABLE_NAME = m.TABLE_NAME
+                WHERE t.SCHEMA_NAME = CURRENT_SCHEMA
+                GROUP BY t.SCHEMA_NAME, t.TABLE_NAME, t.TABLE_TYPE
+                ORDER BY t.TABLE_NAME ASC
+                """
+            )
+            table_rows = cursor.fetchall()
+
+            cols_by_table: Dict[str, List[Dict[str, Any]]] = {}
+            try:
+                cursor.execute(
+                    """
+                    SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE_NAME, LENGTH, SCALE, IS_NULLABLE, POSITION, DEFAULT_VALUE, COMMENTS
+                    FROM SYS.TABLE_COLUMNS
+                    WHERE SCHEMA_NAME = CURRENT_SCHEMA
+                    ORDER BY TABLE_NAME ASC, POSITION ASC
+                    """
+                )
+                for col_table, col_name, data_type, length, scale, is_nullable, pos, def_val, comments in cursor.fetchall():
+                    cols_by_table.setdefault(col_table, []).append({
+                        "name": col_name,
+                        "type": data_type,
+                        "length": length,
+                        "scale": scale,
+                        "isNullable": is_nullable == "TRUE",
+                        "position": pos,
+                        "defaultValue": def_val,
+                        "comments": comments,
+                    })
+            except Exception:
+                pass
+
+            tables: List[Dict[str, Any]] = []
+            total_records = 0
+            for schema_name, table_name, table_type, rec_count in table_rows:
+                is_internal = table_name.upper() in INTERNAL_TABLES
+                row_count = int(rec_count) if rec_count is not None else None
+                if row_count is None:
+                    try:
+                        cursor.execute(f'SELECT COUNT(*) FROM "{schema_name}"."{table_name}"')
+                        rc_row = cursor.fetchone()
+                        row_count = int(rc_row[0]) if rc_row else 0
+                    except Exception:
+                        row_count = 0
+                total_records += row_count
+                if not include_internal and is_internal:
+                    continue
+                columns = cols_by_table.get(table_name, [])
+                tables.append({
+                    "name": table_name,
+                    "schema": schema_name,
+                    "type": table_type,
+                    "rowCount": row_count,
+                    "columnCount": len(columns),
+                    "columns": columns,
+                    "isInternal": is_internal,
+                })
+            stats = {
+                "connected": True,
+                "host": settings.HANA_ADDRESS,
+                "port": settings.HANA_PORT,
+                "schema": schema,
+                "version": hana_version,
+                "totalTables": len(table_rows),
+                "totalRecords": total_records,
+            }
+
+            initial_table_data = None
+            if include_first_table and tables:
+                first_tbl = next((t for t in tables if not t["isInternal"]), tables[0])
+                clean_first = self.sanitize_identifier(first_tbl["name"])
+                cols = first_tbl.get("columns") or self._fetch_columns_on_cursor(cursor, clean_first)
+                col_names = [c["name"] for c in cols]
+                sort_col = col_names[0] if col_names else None
+                order_clause = f'ORDER BY "{sort_col}" ASC' if sort_col else ""
+                p_size = max(1, min(500, page_size))
+                cursor.execute(f'SELECT * FROM "{clean_first}" {order_clause} LIMIT ?', (p_size,))
+                desc = [d[0] for d in cursor.description] if cursor.description else col_names
+                rows_data = [
+                    {desc[i]: serialize_hana_value(r[i]) for i in range(len(desc))}
+                    for r in cursor.fetchall()
+                ]
+                total_rows = first_tbl["rowCount"]
+                initial_table_data = {
+                    "success": True,
+                    "tableName": clean_first,
+                    "totalRows": total_rows,
+                    "filteredRows": total_rows,
+                    "page": 1,
+                    "pageSize": p_size,
+                    "totalPages": max(1, math.ceil(total_rows / p_size)) if total_rows > 0 else 1,
+                    "columns": cols,
+                    "rows": rows_data,
+                }
+
+            return {"stats": stats, "tables": tables, "initialTableData": initial_table_data}
+        except Exception as e:
+            logger.error(f"Error getting database overview: {e}")
+            return {
+                "stats": {
+                    "connected": False,
+                    "host": settings.HANA_ADDRESS,
+                    "schema": settings.HANA_SCHEMA,
+                    "error": str(e),
+                },
+                "tables": [],
+                "initialTableData": None,
+            }
         finally:
             if cursor:
                 try:

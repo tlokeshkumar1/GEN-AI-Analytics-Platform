@@ -11,7 +11,7 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
     status: string;
   } | null>(null);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = async (forceRefresh = false) => {
     setLoading(true);
@@ -92,6 +92,28 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
           <button onClick={() => setError('')} className="text-red-400 hover:text-red-600 transition-colors cursor-pointer">
             <span className="material-symbols-outlined text-lg">close</span>
           </button>
+        </div>
+      )}
+
+      {/* Loading Skeletons */}
+      {loading && !dashboard && !error && (
+        <div className="space-y-3.5 animate-pulse" aria-busy="true" aria-label="Loading executive dashboard">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2.5">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="bg-white border border-slate-200 rounded-xl p-3 h-24 space-y-2">
+                <div className="h-3 bg-slate-200 rounded w-2/3" />
+                <div className="h-6 bg-slate-100 rounded w-1/2" />
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div key={i} className="bg-white border border-slate-200 rounded-xl p-4 h-72 space-y-3">
+                <div className="h-4 bg-slate-200 rounded w-1/3" />
+                <div className="h-56 bg-slate-100 rounded-lg w-full" />
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

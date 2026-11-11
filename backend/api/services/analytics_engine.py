@@ -232,7 +232,11 @@ class AnalyticsEngine:
                         join_clauses.append(f'{join_type} "{r_table}" {r_alias} ON L."{l_key.upper()}" = {r_alias}."{r_key.upper()}"')
 
             has_joins = bool(join_clauses)
-            left_schema_cols = {c["name"].upper(): c["name"] for c in datasets_metadata_repo.load_schema_from_hana(target_table)}
+            left_schema_cols = (
+                {c["name"].upper(): c["name"] for c in datasets_metadata_repo.load_schema_from_hana(target_table)}
+                if has_joins
+                else {}
+            )
 
             def qualify_col(col_name: str) -> str:
                 if not has_joins:
@@ -338,9 +342,11 @@ class AnalyticsEngine:
                     row_dict[alias] = json_value(val)
                 clean_rows.append(row_dict)
 
-            # Determine actual records in target HANA table dynamically
-            count_rows = hana_client.execute_query(f'SELECT COUNT(*) AS CNT FROM "{target_table}"')
-            total_in_db = int(count_rows[0].get("CNT") or 0) if count_rows else len(clean_rows)
+            # Determine actual records in target HANA table dynamically (use cached SYS.M_TABLES count when available)
+            total_in_db = datasets_metadata_repo.get_table_record_count(target_table)
+            if total_in_db is None:
+                count_rows = hana_client.execute_query(f'SELECT COUNT(*) AS CNT FROM "{target_table}"')
+                total_in_db = int(count_rows[0].get("CNT") or 0) if count_rows else len(clean_rows)
 
             result.records_total = total_in_db
             result.records_matched = len(clean_rows) if plan.dimensions else total_in_db
@@ -373,7 +379,7 @@ class AnalyticsEngine:
             plan = QueryPlan.model_validate(query_plan)
             if not plan.measures and not plan.derived_metrics:
                 raise ValueError("Specify the metric and aggregation; no business metric is selected automatically.")
-            if dataframe is None and not plan.derived_metrics and not plan.comparison:
+            if dataframe is None and not plan.derived_metrics and not plan.comparison and not plan.time_grouping:
                 hana_res = self._execute_on_hana(plan, start)
                 if hana_res is not None and hana_res.success:
                     return hana_res
@@ -473,7 +479,13 @@ class AnalyticsEngine:
                 grouping = plan.time_grouping
                 series = self._column(filtered, grouping.field)
                 if not pd.api.types.is_datetime64_any_dtype(series):
-                    raise ValueError("Time grouping requires an approved date field")
+                    if pd.api.types.is_numeric_dtype(series):
+                        raise ValueError("Time grouping requires an approved date field")
+                    parsed = pd.to_datetime(series, errors="coerce")
+                    non_null = int(series.notna().sum())
+                    if non_null == 0 or int(parsed.notna().sum()) < max(1, int(non_null * 0.7)):
+                        raise ValueError("Time grouping requires an approved date field")
+                    series = parsed
                 period = {"year": "Y", "quarter": "Q", "month": "M", "day": "D"}[grouping.period]
                 filtered = filtered.copy()
                 filtered["period"] = series.dt.to_period(period).astype("string")

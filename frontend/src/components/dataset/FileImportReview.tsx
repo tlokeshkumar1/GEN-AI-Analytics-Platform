@@ -1,18 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import api, { getApiErrorMessage } from '../../services/api';
-import { uploadDatasetFile, UploadResponse, getDatabaseTables, CloudTableInfo } from '../../services/uploadService';
+import { uploadDatasetFileStream, UploadResponse, UploadStageEvent, getDatabaseTables, CloudTableInfo } from '../../services/uploadService';
 
 export function FileImportReview({
   file,
   onSaved,
   onCancel,
   onCommitStart,
+  onCommitProgress,
   onCommitError,
 }: {
   file: File;
   onSaved: (result: UploadResponse) => void;
   onCancel: () => void;
   onCommitStart?: (filename: string) => void;
+  onCommitProgress?: (event: UploadStageEvent) => void;
   onCommitError?: (error: string) => void;
 }) {
   const [sheets, setSheets] = useState<{ name: string; tables: { name: string }[]; suggested_header_row?: number }[]>([]);
@@ -122,7 +124,17 @@ export function FileImportReview({
         targetAction = existingTableAction;
       }
 
-      const res = await uploadDatasetFile(file, buildPlan(), targetTable, targetAction);
+      const res = await uploadDatasetFileStream(
+        file,
+        buildPlan(),
+        targetTable,
+        targetAction,
+        (event) => {
+          if (onCommitProgress) {
+            onCommitProgress(event);
+          }
+        }
+      );
       onSaved(res);
     } catch (err) {
       const errMsg = getApiErrorMessage(err, 'Import failed.');

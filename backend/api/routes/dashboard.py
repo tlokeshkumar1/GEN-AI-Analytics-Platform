@@ -1,3 +1,4 @@
+import contextvars
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -46,22 +47,27 @@ def publish_recommended_charts(req: PublishRecommendedRequest):
     semantic_revision = context.semantic_revision
 
     # Auto-approve semantic model if currently proposed
+    model = None
     try:
         model = semantic_registry.get(entry, version, semantic_revision)
         if model.status != "approved":
-            semantic_registry.review(entry, version, semantic_revision, "approved")
+            model = semantic_registry.review(entry, version, semantic_revision, "approved")
     except Exception as exc:
         logger.warning(f"Semantic model auto-approval note: {exc}")
+
+    from api.models.query_plan import QueryPlan
+    from api.platform.agent_chart_recommender import extract_query_dependencies
 
     analytics_ns = semantic_registry.namespace(entry, version, f"analytics:{semantic_revision}")
     published_refs = []
 
     for item_data in req.items:
         item_id = item_data.get("id") or ("rec_" + uuid.uuid4().hex[:12])
-        query_plan = item_data.get("query_plan", {})
+        query_plan = QueryPlan.model_validate(item_data.get("query_plan", {}))
         title = item_data.get("title", "Metric Chart")
         kind = item_data.get("kind", "bar")
         explanation = item_data.get("explanation", "Recommended analytical chart.")
+        deps = item_data.get("dependencies") or extract_query_dependencies(model, query_plan)
 
         item = AnalyticsItem(
             id=item_id,
@@ -70,11 +76,17 @@ def publish_recommended_charts(req: PublishRecommendedRequest):
             revision=1,
             semantic_revision=semantic_revision,
             query_plan=query_plan,
-            dependencies=[],
+            dependencies=deps,
             explanation=explanation,
             status="approved"
         )
-        semantic_registry.store.put(analytics_ns, f"{item.id}:1", item.model_dump(mode="json"))
+        existing_item = semantic_registry.store.get(analytics_ns, f"{item.id}:1")
+        semantic_registry.store.put(
+            analytics_ns,
+            f"{item.id}:1",
+            item.model_dump(mode="json"),
+            expected_revision=existing_item["revision"] if existing_item else 0,
+        )
         published_refs.append({"id": item.id, "revision": 1})
 
     # Save published dashboard configuration
@@ -83,7 +95,13 @@ def publish_recommended_charts(req: PublishRecommendedRequest):
         "title": req.title or "Executive Analytics Dashboard",
         "items": published_refs
     }
-    semantic_registry.store.put(dashboard_ns, "published", publication_payload)
+    existing_pub = semantic_registry.store.get(dashboard_ns, "published")
+    semantic_registry.store.put(
+        dashboard_ns,
+        "published",
+        publication_payload,
+        expected_revision=existing_pub["revision"] if existing_pub else 0,
+    )
 
     clear_dashboard_cache()
     logger.info(f"Published {len(published_refs)} widgets to dashboard namespace: {dashboard_ns}")
@@ -142,7 +160,8 @@ def get_dashboard(refresh: bool = False):
             return {"definition": item.model_dump(mode="json"), "result": res.to_dict()}
 
         with ThreadPoolExecutor(max_workers=min(16, max(1, len(items_to_compute)))) as executor:
-            widgets = [w for w in executor.map(_execute_widget, items_to_compute) if w is not None]
+            futures = [executor.submit(contextvars.copy_context().run, _execute_widget, ref) for ref in items_to_compute]
+            widgets = [w for w in (f.result() for f in futures) if w is not None]
 
         response_data = {
             "title": publication["value"].get("title", "Executive Analytics Dashboard"),
@@ -161,21 +180,27 @@ def get_dashboard(refresh: bool = False):
             df = dataset_service._frame(snapshot["rows"], snapshot["columns"])
             recs = chart_recommender_agent.recommend(df, model)
 
+            default_recs = [r for r in recs if r.get("selected_by_default")]
+
+            def _execute_auto_widget(r):
+                res = analytics_engine.execute(r["query_plan"])
+                definition = {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "kind": r["kind"],
+                    "revision": 1,
+                    "semantic_revision": context.semantic_revision,
+                    "query_plan": r["query_plan"],
+                    "explanation": r["explanation"],
+                    "status": "approved"
+                }
+                return {"definition": definition, "result": res.to_dict()}
+
             auto_widgets = []
-            for r in recs:
-                if r.get("selected_by_default"):
-                    res = analytics_engine.execute(r["query_plan"])
-                    definition = {
-                        "id": r["id"],
-                        "title": r["title"],
-                        "kind": r["kind"],
-                        "revision": 1,
-                        "semantic_revision": context.semantic_revision,
-                        "query_plan": r["query_plan"],
-                        "explanation": r["explanation"],
-                        "status": "approved"
-                    }
-                    auto_widgets.append({"definition": definition, "result": res.to_dict()})
+            if default_recs:
+                with ThreadPoolExecutor(max_workers=min(8, len(default_recs))) as executor:
+                    futures = [executor.submit(contextvars.copy_context().run, _execute_auto_widget, r) for r in default_recs]
+                    auto_widgets = [f.result() for f in futures]
 
             if auto_widgets:
                 response_data = {
@@ -184,6 +209,8 @@ def get_dashboard(refresh: bool = False):
                     "context": context.model_dump(),
                     "status": "auto_recommended",
                 }
+                with _DASHBOARD_CACHE_LOCK:
+                    _DASHBOARD_CACHE[cache_key] = response_data
                 return response_data
         except Exception as exc:
             logger.warning(f"Auto-dashboard recommendation error: {exc}")

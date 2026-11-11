@@ -199,19 +199,28 @@ class ChatHistoryService:
             return sessions
 
     def get_session_messages(self, session_id: str, user_id: str) -> List[Dict[str, Any]]:
-        if not self.verify_session_owner(session_id, user_id):
-            raise HTTPException(404, "Chat session not found or access denied.")
+        self._require_identity(user_id)
+        self.ensure_tables()
         with self._cursor("list messages") as cursor:
+            cursor.execute("SELECT USER_ID FROM CHAT_SESSIONS WHERE SESSION_ID = ?", (session_id,))
+            owner_row = cursor.fetchone()
+            if not (owner_row and owner_row[0] is not None and owner_row[0] == user_id):
+                raise HTTPException(404, "Chat session not found or access denied.")
+            cursor.execute(
+                "SELECT MESSAGE_ID, SESSION_ID, ROLE, CONTENT, SOURCES, INTENT, METADATA, TIMESTAMP "
+                "FROM CHAT_MESSAGES WHERE SESSION_ID = ? ORDER BY TIMESTAMP ASC",
+                (session_id,),
+            )
+            all_rows = self._rows(cursor)
             from api.models.execution_context import current_selection
             selection = current_selection.get()
             if selection is not None:
-                cursor.execute("SELECT METADATA FROM CHAT_MESSAGES WHERE SESSION_ID = ? AND ROLE = 'system' ORDER BY TIMESTAMP LIMIT 1", (session_id,))
-                row = cursor.fetchone()
-                context = json.loads(row[0]).get("context") if row and row[0] else None
+                sys_row = next((r for r in all_rows if r.get("ROLE") == "system"), None)
+                metadata = sys_row.get("METADATA") if sys_row else None
+                context = metadata.get("context") if isinstance(metadata, dict) else None
                 if context != selection.context.model_dump():
                     raise HTTPException(409, "This conversation belongs to another data context. Select its original dataset and version.")
-            cursor.execute("SELECT MESSAGE_ID, SESSION_ID, ROLE, CONTENT, SOURCES, INTENT, METADATA, TIMESTAMP FROM CHAT_MESSAGES WHERE SESSION_ID = ? AND ROLE <> 'system' ORDER BY TIMESTAMP ASC", (session_id,))
-            return self._rows(cursor)
+            return [r for r in all_rows if r.get("ROLE") != "system"]
 
     def delete_session(self, session_id: str, user_id: str) -> bool:
         if not self.verify_session_owner(session_id, user_id):

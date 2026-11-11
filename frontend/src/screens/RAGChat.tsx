@@ -312,6 +312,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [sessionLoadError, setSessionLoadError] = useState<string | null>(null);
   const [sessionsRetry, setSessionsRetry] = useState(0);
+  const hasLoadedSessionsRef = useRef(false);
   const messageRequestRef = useRef<AbortController | null>(null);
   const streamRequestRef = useRef<AbortController | null>(null);
 
@@ -349,16 +350,19 @@ export const RAGChat: React.FC<RAGChatProps> = ({
   const activeThread = threads.find(t => t.id === activeThreadId) || threads[0] || null;
   const messages = activeThread?.messages || [];
 
-  // Fetch only session summaries when the user opens RAG Chat.
+  // Fetch only session summaries when the user opens RAG Chat (stale-while-revalidate on repeat opens).
   useEffect(() => {
     if (!isActive) return;
     const controller = new AbortController();
-    setLoadingSessions(true);
+    if (!hasLoadedSessionsRef.current) {
+      setLoadingSessions(true);
+    }
     setSessionsError(null);
     const loadSessionsFromBackend = async () => {
       try {
         const sessions = await fetchChatSessions(controller.signal);
         if (controller.signal.aborted) return;
+        hasLoadedSessionsRef.current = true;
         if (sessions && Array.isArray(sessions)) {
           const loadedThreads: ChatThread[] = sessions.map(s => {
             const group = getGroupForDate(s.UPDATED_AT || s.CREATED_AT);

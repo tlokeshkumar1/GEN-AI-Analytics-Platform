@@ -100,8 +100,12 @@ export const SystemSettings: React.FC<{ onNavigate: (path: string) => void; init
     } else if (tab === 'Storage & Retention') {
       setStorage((await api.get('/system/storage')).data);
     } else {
-      setAudit((await api.get('/system/audit')).data);
-      setAccess((await api.get('/system/access')).data);
+      const [auditRes, accessRes] = await Promise.all([
+        api.get('/system/audit'),
+        api.get('/system/access'),
+      ]);
+      setAudit(auditRes.data);
+      setAccess(accessRes.data);
     }
   };
 
@@ -109,15 +113,17 @@ export const SystemSettings: React.FC<{ onNavigate: (path: string) => void; init
     void run(refresh);
   }, [tab]);
 
+  const hasActiveJobs = jobs.some(j => j.state === 'queued' || j.state === 'running');
   useEffect(() => {
-    if (tab !== 'Sync Jobs') return;
+    if (tab !== 'Sync Jobs' || !hasActiveJobs) return;
     const interval = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
       listJobs()
         .then(setJobs)
         .catch(err => setError(getApiErrorMessage(err, 'Job polling failed.')));
     }, 3000);
     return () => window.clearInterval(interval);
-  }, [tab]);
+  }, [tab, hasActiveJobs]);
 
   const saveConnection = async () => {
     const descriptor = types.find(type => type.service === service);

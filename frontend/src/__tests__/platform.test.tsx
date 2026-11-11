@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import api from '../services/api';
 import { Sidebar } from '../components/Sidebar';
 import { ExecutiveDashboard } from '../screens/ExecutiveDashboard';
@@ -201,5 +201,215 @@ describe('Platform correctness and navigation', () => {
     await vi.waitFor(() => {
       expect(headerInput.value).toBe('2');
     });
+  });
+
+  it('preserves existing upload-generated KPI and chart widgets when clicking Propose AI Recommendations in Build Your KPI', async () => {
+    selectContext({ datasetId: 'sales', version: 1, semanticRevision: 1 });
+    const existingRecs = [
+      {
+        id: 'rec_kpi_revenue_sum',
+        revision: 1,
+        semantic_revision: 1,
+        title: 'Total Revenue',
+        status: 'approved',
+        kind: 'kpi',
+        dependencies: ['Revenue'],
+        explanation: 'Tracks revenue across sales.',
+        query_plan: { metric: 'Revenue', aggregation: 'SUM' },
+      },
+      {
+        id: 'rec_bar_region_revenue',
+        revision: 1,
+        semantic_revision: 1,
+        title: 'Revenue by Region',
+        status: 'approved',
+        kind: 'bar',
+        dependencies: ['Revenue', 'Region'],
+        explanation: 'Compares revenue across regions.',
+        query_plan: { metric: 'Revenue', aggregation: 'SUM', dimension: 'Region' },
+      },
+    ];
+    const newlyProposed = [
+      {
+        id: 'rec_kpi_revenue_avg',
+        revision: 1,
+        semantic_revision: 1,
+        title: 'Average Revenue',
+        status: 'proposed',
+        kind: 'kpi',
+        dependencies: ['Revenue'],
+        explanation: 'Measures average revenue per order.',
+        query_plan: { metric: 'Revenue', aggregation: 'AVG' },
+      },
+    ];
+
+    let recsState = [...existingRecs];
+    vi.mocked(api.get).mockImplementation(((url: string) => {
+      if (url.includes('/semantics')) {
+        return Promise.resolve({ data: [{ revision: 1, status: 'approved', fields: [] }] });
+      }
+      if (url.includes('/recommendations')) {
+        return Promise.resolve({ data: recsState });
+      }
+      if (url.includes('/insights/dashboard')) {
+        return Promise.resolve({ data: { title: 'Sales', items: [{ id: 'rec_kpi_revenue_sum', revision: 1 }], status: 'published' } });
+      }
+      return Promise.resolve({ data: [] });
+    }) as any);
+
+    vi.mocked(api.post).mockImplementation(((url: string) => {
+      if (url.includes('/insights/recommendations')) {
+        recsState = [...existingRecs, ...newlyProposed];
+        return Promise.resolve({ data: { items: newlyProposed } });
+      }
+      return Promise.resolve({ data: {} });
+    }) as any);
+
+    render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'Admin', roles: ['Admin'] }} />);
+    expect(await screen.findByText('Total Revenue')).toBeTruthy();
+    expect(screen.getByText('Revenue by Region')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Propose AI Recommendations/i }));
+
+    expect(await screen.findByText('Average Revenue')).toBeTruthy();
+    expect(screen.getByText('Total Revenue')).toBeTruthy();
+    expect(screen.getByText('Revenue by Region')).toBeTruthy();
+  });
+
+  it('shows spinning loading indicators on Preview Live, Approve, Reject, and Propose buttons while requests are in flight', async () => {
+    selectContext({ datasetId: 'sales', version: 1, semanticRevision: 1 });
+    const proposedItem = {
+      id: 'rec_kpi_1',
+      revision: 1,
+      semantic_revision: 1,
+      title: 'Pending Revenue',
+      status: 'proposed',
+      kind: 'kpi',
+      dependencies: ['Revenue'],
+      explanation: 'Pending KPI.',
+      query_plan: { metric: 'Revenue', aggregation: 'SUM' },
+    };
+
+    vi.mocked(api.get).mockImplementation(((url: string) => {
+      if (url.includes('/semantics')) {
+        return Promise.resolve({ data: [{ revision: 1, status: 'approved', fields: [] }] });
+      }
+      if (url.includes('/recommendations')) {
+        return Promise.resolve({ data: [proposedItem] });
+      }
+      return Promise.resolve({ data: [] });
+    }) as any);
+
+    let resolveExec!: (v: any) => void;
+    let resolveReview!: (v: any) => void;
+    vi.mocked(api.post).mockImplementation(((url: string) => {
+      if (url.includes('/insights/execute')) {
+        return new Promise(res => { resolveExec = res; });
+      }
+      if (url.includes('/review')) {
+        return new Promise(res => { resolveReview = res; });
+      }
+      return Promise.resolve({ data: { items: [] } });
+    }) as any);
+
+    render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'Admin', roles: ['Admin'] }} />);
+    expect(await screen.findByText('Pending Revenue')).toBeTruthy();
+
+    // Preview Live spinner
+    fireEvent.click(screen.getByRole('button', { name: /Preview Live/i }));
+    const executingBtn = await screen.findByRole('button', { name: /Executing\.\.\./i });
+    expect(executingBtn.querySelector('.animate-spin')).toBeTruthy();
+    resolveExec({ data: { success: true, data: [{ value: 100 }], summary: { formatted_value: '100' }, records_matched: 1, execution_backend: 'pandas', execution_time_ms: 1 } });
+    expect(await screen.findByRole('button', { name: /Hide Preview/i })).toBeTruthy();
+
+    // Approve spinner
+    fireEvent.click(screen.getByRole('button', { name: /Approve$/i }));
+    const approvingBtn = await screen.findByRole('button', { name: /Approving\.\.\./i });
+    expect(approvingBtn.querySelector('.animate-spin')).toBeTruthy();
+    resolveReview({ data: { ...proposedItem, status: 'approved' } });
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Approving\.\.\./i })).toBeNull();
+    });
+    expect(screen.getByText('Approved (Rev 1)')).toBeTruthy();
+  });
+
+  it('allows approving and rejecting multiple KPI cards concurrently without blocking other cards', async () => {
+    selectContext({ datasetId: 'sales', version: 1, semanticRevision: 1 });
+    const itemA = {
+      id: 'rec_kpi_a',
+      revision: 1,
+      semantic_revision: 1,
+      title: 'Metric Alpha',
+      status: 'proposed',
+      kind: 'kpi',
+      dependencies: ['Revenue'],
+      explanation: 'Alpha KPI.',
+      query_plan: { metric: 'Revenue', aggregation: 'SUM' },
+    };
+    const itemB = {
+      id: 'rec_kpi_b',
+      revision: 1,
+      semantic_revision: 1,
+      title: 'Metric Beta',
+      status: 'proposed',
+      kind: 'kpi',
+      dependencies: ['Cost'],
+      explanation: 'Beta KPI.',
+      query_plan: { metric: 'Cost', aggregation: 'SUM' },
+    };
+
+    vi.mocked(api.get).mockImplementation(((url: string) => {
+      if (url.includes('/semantics')) {
+        return Promise.resolve({ data: [{ revision: 1, status: 'approved', fields: [] }] });
+      }
+      if (url.includes('/recommendations')) {
+        return Promise.resolve({ data: [itemA, itemB] });
+      }
+      return Promise.resolve({ data: [] });
+    }) as any);
+
+    const resolvers: Record<string, (v: any) => void> = {};
+    vi.mocked(api.post).mockImplementation(((url: string) => {
+      if (url.includes('/rec_kpi_a/1/review')) {
+        return new Promise(res => { resolvers.a = res; });
+      }
+      if (url.includes('/rec_kpi_b/1/review')) {
+        return new Promise(res => { resolvers.b = res; });
+      }
+      return Promise.resolve({ data: { items: [] } });
+    }) as any);
+
+    render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'Admin', roles: ['Admin'] }} />);
+    expect(await screen.findByText('Metric Alpha')).toBeTruthy();
+    expect(screen.getByText('Metric Beta')).toBeTruthy();
+
+    // Click Approve on first card, then immediately click Reject on second card while first is still pending
+    const approveButtons = screen.getAllByRole('button', { name: /Approve$/i });
+    fireEvent.click(approveButtons[0]);
+    expect(await screen.findByRole('button', { name: /Approving\.\.\./i })).toBeTruthy();
+
+    const rejectButtons = screen.getAllByRole('button', { name: /Reject$/i });
+    // Second card's Reject button must still be enabled
+    expect((rejectButtons[1] as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(rejectButtons[1]);
+
+    // Both spinners must be visible concurrently
+    expect(await screen.findByRole('button', { name: /Rejecting\.\.\./i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Approving\.\.\./i })).toBeTruthy();
+
+    // Resolve out-of-order (B finishes before A)
+    resolvers.b({ data: { ...itemB, status: 'rejected' } });
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Rejecting\.\.\./i })).toBeNull();
+    });
+    expect(screen.getByRole('button', { name: /Approving\.\.\./i })).toBeTruthy();
+
+    resolvers.a({ data: { ...itemA, status: 'approved' } });
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Approving\.\.\./i })).toBeNull();
+    });
+
+    expect(screen.getByText('Approved (Rev 1)')).toBeTruthy();
+    expect(screen.getByText('Rejected (Rev 1)')).toBeTruthy();
   });
 });

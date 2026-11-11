@@ -20,6 +20,9 @@ import {
   Code2
 } from 'lucide-react';
 import api from '../services/api';
+import { selectContext, selectedContext } from '../services/executionContext';
+
+export type IngestionStageStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface PreprocessingAudit {
   rows_before?: number;
@@ -45,6 +48,12 @@ export interface IngestionResult {
   filename: string;
   rows_processed?: number;
   domain?: string;
+  version?: number;
+  dataset?: {
+    id?: string;
+    currentVersion?: number;
+    [key: string]: any;
+  };
   preprocessing_audit?: PreprocessingAudit;
   recommendations?: RecommendedChartItem[];
   cloud_table?: {
@@ -69,6 +78,8 @@ interface AIAgentIngestionStepperProps {
   isProcessing: boolean;
   filename: string;
   result: IngestionResult | null;
+  partialResult?: Partial<IngestionResult> | null;
+  stageStatuses?: Record<number, IngestionStageStatus>;
   error?: string | null;
   onClose: () => void;
   onNavigateToDashboard: () => void;
@@ -79,14 +90,12 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   isProcessing,
   filename,
   result,
+  partialResult,
+  stageStatuses,
   error,
   onClose,
   onNavigateToDashboard,
 }) => {
-  if (!isOpen) return null;
-
-  // Track progress stages: 0=init, 1=preprocessing, 2=domain, 3=hana, 4=charts, 5=ready
-  const [activeStage, setActiveStage] = useState<number>(1);
   const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({
     1: true,
     2: true,
@@ -99,33 +108,46 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
 
-  // Initialize selected charts when result arrives
+  // Initialize selected charts and ensure active dataset context is set immediately on first upload
   useEffect(() => {
+    if (result?.dataset?.id) {
+      const version = result.version || result.dataset.currentVersion || 1;
+      const existing = selectedContext();
+      if (!existing || existing.datasetId !== result.dataset.id || existing.version !== version) {
+        selectContext({
+          datasetId: result.dataset.id,
+          version,
+          semanticRevision: 1,
+        });
+      }
+    }
     if (result?.recommendations) {
       const initial: Record<string, boolean> = {};
       result.recommendations.forEach(r => {
         initial[r.id] = r.selected_by_default ?? true;
       });
       setSelectedChartIds(initial);
-      setActiveStage(5); // all stages finished
     }
+    setPublishError(null);
   }, [result]);
 
-  // Animated telemetry step progression while waiting for server response
-  useEffect(() => {
-    if (isProcessing && !result) {
-      setActiveStage(1);
-      const timer1 = setTimeout(() => setActiveStage(2), 700);
-      const timer2 = setTimeout(() => setActiveStage(3), 1600);
-      const timer3 = setTimeout(() => setActiveStage(4), 2400);
+  if (!isOpen) return null;
 
-      return () => {
-        clearTimeout(timer1);
-        clearTimeout(timer2);
-        clearTimeout(timer3);
-      };
+  const getStageStatus = (stageNum: number): IngestionStageStatus => {
+    if (result) return 'completed';
+    if (stageStatuses && stageStatuses[stageNum]) {
+      return stageStatuses[stageNum];
     }
-  }, [isProcessing, result]);
+    if (isProcessing) {
+      return stageNum === 1 ? 'running' : 'queued';
+    }
+    return 'queued';
+  };
+
+  const stage1Status = getStageStatus(1);
+  const stage2Status = getStageStatus(2);
+  const stage3Status = getStageStatus(3);
+  const stage4Status = getStageStatus(4);
 
   const toggleStepExpand = (stepNum: number) => {
     setExpandedSteps(prev => ({ ...prev, [stepNum]: !prev[stepNum] }));
@@ -164,10 +186,26 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
     setIsPublishing(true);
     setPublishError(null);
     try {
-      await api.post('/dashboard/publish-recommended', {
-        title: `${(result.domain || 'Enterprise').toUpperCase()} Analytics Dashboard`,
-        items: approvedItems,
-      });
+      const headers: Record<string, string> = {};
+      if (result.dataset?.id) {
+        const version = result.version || result.dataset.currentVersion || 1;
+        selectContext({
+          datasetId: result.dataset.id,
+          version,
+          semanticRevision: 1,
+        });
+        headers['X-Dataset-Id'] = result.dataset.id;
+        headers['X-Dataset-Version'] = String(version);
+        headers['X-Semantic-Revision'] = '1';
+      }
+      await api.post(
+        '/dashboard/publish-recommended',
+        {
+          title: `${(result.domain || 'Enterprise').toUpperCase()} Analytics Dashboard`,
+          items: approvedItems,
+        },
+        { headers }
+      );
       onClose();
       onNavigateToDashboard();
     } catch (err: any) {
@@ -176,11 +214,12 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
     }
   };
 
-  const audit = result?.preprocessing_audit;
-  const domain = result?.domain;
-  const grain = result?.semantic_model?.grain;
-  const fields = result?.semantic_model?.fields || [];
-  const cloudTable = result?.cloud_table?.table_name || `DS_${filename.replace(/\.[^/.]+$/, '').toUpperCase()}_V1`;
+  const effective = result ?? partialResult ?? null;
+  const audit = effective?.preprocessing_audit;
+  const domain = effective?.domain;
+  const grain = effective?.semantic_model?.grain;
+  const fields = effective?.semantic_model?.fields || [];
+  const cloudTable = effective?.cloud_table?.table_name;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-md p-3 sm:p-6 overflow-y-auto animate-fade-in">
@@ -244,9 +283,13 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
             >
               <div className="flex items-center gap-3">
                 <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                  activeStage > 1 || result ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse'
+                  stage1Status === 'completed'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                    : stage1Status === 'running'
+                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse'
+                      : 'bg-slate-800 text-slate-500'
                 }`}>
-                  {activeStage > 1 || result ? <Check className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
+                  {stage1Status === 'completed' ? <Check className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -262,16 +305,18 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
               </div>
 
               <div className="flex items-center gap-2">
-                {activeStage > 1 || result ? (
+                {stage1Status === 'completed' ? (
                   <span className="text-[11px] font-semibold text-emerald-400 flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    Cleaned ({audit?.rows_after ?? '—'} rows)
+                    Cleaned ({audit?.rows_after ?? effective?.rows_processed ?? '—'} rows)
                   </span>
-                ) : (
+                ) : stage1Status === 'running' ? (
                   <span className="text-[11px] font-semibold text-blue-400 animate-pulse flex items-center gap-1">
                     <Activity className="w-3.5 h-3.5 animate-spin" />
                     Sanitizing…
                   </span>
+                ) : (
+                  <span className="text-[11px] text-slate-500">Queued</span>
                 )}
                 {expandedSteps[1] ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
               </div>
@@ -298,7 +343,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
                   </div>
                 </div>
                 <div className="text-slate-400 text-[10.5px] pt-1">
-                  • Hash-signature duplicate check: Complete.<br />
+                  • Hash-signature duplicate check: {stage1Status === 'completed' ? 'Complete.' : 'Pending…'}<br />
                   • Type coercion: Stripped currency symbols ($ € £ ¥), percentage signs, and decimal commas.<br />
                   • Null remediation: Low-missingness measures filled with median; categories tagged with 'Unknown'.
                 </div>
@@ -314,7 +359,11 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
             >
               <div className="flex items-center gap-3">
                 <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                  activeStage > 2 || result ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : activeStage === 2 ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse' : 'bg-slate-800 text-slate-500'
+                  stage2Status === 'completed'
+                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                    : stage2Status === 'running'
+                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse'
+                      : 'bg-slate-800 text-slate-500'
                 }`}>
                   <Brain className="w-4 h-4" />
                 </div>
@@ -332,11 +381,11 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
               </div>
 
               <div className="flex items-center gap-2">
-                {domain ? (
+                {stage2Status === 'completed' && domain ? (
                   <span className="text-[11px] font-bold text-purple-300 bg-purple-950/60 px-2 py-0.5 rounded border border-purple-500/40">
                     {domain}
                   </span>
-                ) : activeStage >= 2 ? (
+                ) : stage2Status === 'running' ? (
                   <span className="text-[11px] font-semibold text-blue-400 animate-pulse flex items-center gap-1">
                     <Activity className="w-3.5 h-3.5 animate-spin" />
                     Reasoning over 5 rows…
@@ -372,7 +421,9 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
                   </div>
                 ) : (
                   <div className="text-slate-400 text-xs italic">
-                    Extracting the first 5 rows and running unconstrained zero-shot reasoning…
+                    {stage2Status === 'running'
+                      ? 'Extracting the first 5 rows and running unconstrained zero-shot reasoning…'
+                      : 'Waiting for Stage 1 preprocessing to finish…'}
                   </div>
                 )}
               </div>
@@ -387,7 +438,11 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
             >
               <div className="flex items-center gap-3">
                 <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                  activeStage > 3 || result ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30' : activeStage === 3 ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse' : 'bg-slate-800 text-slate-500'
+                  stage3Status === 'completed'
+                    ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
+                    : stage3Status === 'running'
+                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse'
+                      : 'bg-slate-800 text-slate-500'
                 }`}>
                   <Database className="w-4 h-4" />
                 </div>
@@ -405,11 +460,11 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
               </div>
 
               <div className="flex items-center gap-2">
-                {result ? (
+                {stage3Status === 'completed' ? (
                   <span className="text-[11px] font-mono text-sky-300">
-                    {cloudTable}
+                    {cloudTable || 'Synced'}
                   </span>
-                ) : activeStage >= 3 ? (
+                ) : stage3Status === 'running' ? (
                   <span className="text-[11px] font-semibold text-blue-400 animate-pulse flex items-center gap-1">
                     <Activity className="w-3.5 h-3.5 animate-spin" />
                     Provisioning HANA…
@@ -423,7 +478,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
 
             {expandedSteps[3] && (
               <div className="p-3.5 border-t border-slate-800/80 space-y-1.5 bg-slate-900/40 text-[10.5px] text-slate-400 font-mono">
-                <div>• Relational Column Store: <span className="text-sky-300 font-bold">{cloudTable}</span></div>
+                <div>• Relational Column Store: <span className="text-sky-300 font-bold">{cloudTable || (stage3Status === 'running' ? 'Creating table…' : 'Pending…')}</span></div>
                 <div>• Vector Dimensions: <span className="text-slate-200">1,536 (REAL_VECTOR)</span> with Cosine Similarity indexing.</div>
                 <div>• Metadata Registry: Pinned to <span className="text-slate-200">DATASETS_METADATA</span> catalog with semantic revision 1.</div>
               </div>
@@ -438,7 +493,11 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
             >
               <div className="flex items-center gap-3">
                 <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                  result?.recommendations ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : activeStage === 4 ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse' : 'bg-slate-800 text-slate-500'
+                  stage4Status === 'completed'
+                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                    : stage4Status === 'running'
+                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse'
+                      : 'bg-slate-800 text-slate-500'
                 }`}>
                   <BarChart3 className="w-4 h-4" />
                 </div>
@@ -456,11 +515,11 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
               </div>
 
               <div className="flex items-center gap-2">
-                {result?.recommendations ? (
+                {stage4Status === 'completed' && effective?.recommendations ? (
                   <span className="text-[11px] font-bold text-amber-300">
-                    {result.recommendations.length} Charts Curated
+                    {effective.recommendations.length} Charts Curated
                   </span>
-                ) : activeStage >= 4 ? (
+                ) : stage4Status === 'running' ? (
                   <span className="text-[11px] font-semibold text-blue-400 animate-pulse flex items-center gap-1">
                     <Activity className="w-3.5 h-3.5 animate-spin" />
                     Formulating charts…

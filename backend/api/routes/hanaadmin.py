@@ -18,18 +18,28 @@ class QueryPayload(BaseModel):
 
 
 @router.get("")
-async def hana_admin_overview():
+async def hana_admin_overview(
+    include_first_table: bool = Query(False, description="Include page-1 rows for the first table"),
+    pageSize: int = Query(25, ge=1, le=500),
+):
     """HANA Cloud Admin Overview: Database connection status, stats, and live tables."""
     require_admin()
     try:
-        stats = await run_in_threadpool(hana_table_service.get_database_stats)
-        tables = await run_in_threadpool(hana_table_service.list_user_tables, include_internal=True)
+        overview = await run_in_threadpool(
+            hana_table_service.get_database_overview,
+            include_internal=True,
+            include_first_table=include_first_table,
+            page_size=pageSize,
+        )
+        stats = overview["stats"]
+        tables = overview["tables"]
         return {
             "success": True,
             "status": "online" if stats.get("connected") else "offline",
             "stats": stats,
             "tableCount": len(tables),
             "tables": tables,
+            "initialTableData": overview.get("initialTableData"),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch HANA Admin overview: {str(e)}")

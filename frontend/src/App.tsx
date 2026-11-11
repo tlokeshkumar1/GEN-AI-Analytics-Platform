@@ -3,28 +3,42 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { CommandPalette } from './components/CommandPalette';
 import type { UserContext } from './screens/EnterpriseSignIn';
-import { clearLocalIdentity, sapRouterRoute, SIGNED_OUT_KEY } from './services/authNavigation';
+import { clearLocalIdentity, getTokenExpiry, refreshAuthSession, sapRouterRoute, SIGNED_OUT_KEY } from './services/authNavigation';
 import { selectedContext, ensureDefaultContext } from './services/executionContext';
 
-const ExecutiveDashboard = lazy(() => import('./screens/ExecutiveDashboard').then(m => ({ default: m.ExecutiveDashboard })));
-const GraphStudio = lazy(() => import('./screens/GraphStudio').then(m => ({ default: m.GraphStudio })));
-const AIAgents = lazy(() => import('./screens/AIAgents').then(m => ({ default: m.AIAgents })));
-const RAGChat = lazy(() => import('./screens/RAGChat').then(m => ({ default: m.RAGChat })));
-const DatasetIngestion = lazy(() => import('./screens/DatasetIngestion').then(m => ({ default: m.DatasetIngestion })));
-const DataExplorer = lazy(() => import('./screens/DataExplorer').then(m => ({ default: m.DataExplorer })));
-const AlertsNotifications = lazy(() => import('./screens/AlertsNotifications').then(m => ({ default: m.AlertsNotifications })));
-const ReportsLibrary = lazy(() => import('./screens/ReportsLibrary').then(m => ({ default: m.ReportsLibrary })));
-const DataSources = lazy(() => import('./screens/DataSources').then(m => ({ default: m.DataSources })));
-const UserManagement = lazy(() => import('./screens/UserManagement').then(m => ({ default: m.UserManagement })));
-const SystemSettings = lazy(() => import('./screens/SystemSettings').then(m => ({ default: m.SystemSettings })));
-const EnterpriseSignIn = lazy(() => import('./screens/EnterpriseSignIn').then(m => ({ default: m.EnterpriseSignIn })));
-const HanaAdmin = lazy(() => import('./screens/HanaAdmin').then(m => ({ default: m.HanaAdmin })));
+const loadExecutiveDashboard = () => import('./screens/ExecutiveDashboard').then(m => ({ default: m.ExecutiveDashboard }));
+const loadGraphStudio = () => import('./screens/GraphStudio').then(m => ({ default: m.GraphStudio }));
+const loadAIAgents = () => import('./screens/AIAgents').then(m => ({ default: m.AIAgents }));
+const loadRAGChat = () => import('./screens/RAGChat').then(m => ({ default: m.RAGChat }));
+const loadDatasetIngestion = () => import('./screens/DatasetIngestion').then(m => ({ default: m.DatasetIngestion }));
+const loadDataExplorer = () => import('./screens/DataExplorer').then(m => ({ default: m.DataExplorer }));
+const loadAlertsNotifications = () => import('./screens/AlertsNotifications').then(m => ({ default: m.AlertsNotifications }));
+const loadReportsLibrary = () => import('./screens/ReportsLibrary').then(m => ({ default: m.ReportsLibrary }));
+const loadDataSources = () => import('./screens/DataSources').then(m => ({ default: m.DataSources }));
+const loadUserManagement = () => import('./screens/UserManagement').then(m => ({ default: m.UserManagement }));
+const loadSystemSettings = () => import('./screens/SystemSettings').then(m => ({ default: m.SystemSettings }));
+const loadEnterpriseSignIn = () => import('./screens/EnterpriseSignIn').then(m => ({ default: m.EnterpriseSignIn }));
+const loadHanaAdmin = () => import('./screens/HanaAdmin').then(m => ({ default: m.HanaAdmin }));
+
+const ExecutiveDashboard = lazy(loadExecutiveDashboard);
+const GraphStudio = lazy(loadGraphStudio);
+const AIAgents = lazy(loadAIAgents);
+const RAGChat = lazy(loadRAGChat);
+const DatasetIngestion = lazy(loadDatasetIngestion);
+const DataExplorer = lazy(loadDataExplorer);
+const AlertsNotifications = lazy(loadAlertsNotifications);
+const ReportsLibrary = lazy(loadReportsLibrary);
+const DataSources = lazy(loadDataSources);
+const UserManagement = lazy(loadUserManagement);
+const SystemSettings = lazy(loadSystemSettings);
+const EnterpriseSignIn = lazy(loadEnterpriseSignIn);
+const HanaAdmin = lazy(loadHanaAdmin);
 
 const ScreenFallback = () => (
   <div className="flex items-center justify-center min-h-[300px] p-12 text-slate-500">
@@ -33,17 +47,27 @@ const ScreenFallback = () => (
   </div>
 );
 
+const getCachedUser = (): UserContext | null => {
+  try {
+    if (localStorage.getItem(SIGNED_OUT_KEY) === 'true') return null;
+    const cached = localStorage.getItem('auth_user');
+    const parsed = cached ? JSON.parse(cached) : null;
+    return parsed && (parsed.user_id || parsed.email) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const formatScopeKey = (ctx: ReturnType<typeof selectedContext>): string =>
+  ctx ? `${ctx.datasetId}:${ctx.version}:${ctx.semanticRevision}` : '';
+
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [currentUser, setCurrentUser] = useState<UserContext | null>(() => {
-    try {
-      const cached = localStorage.getItem('auth_user');
-      return cached ? JSON.parse(cached) : null;
-    } catch {
-      return null;
-    }
+  const [currentUser, setCurrentUser] = useState<UserContext | null>(getCachedUser);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => Boolean(getCachedUser()));
+  const [isCheckingSession, setIsCheckingSession] = useState<boolean>(() => {
+    if (localStorage.getItem(SIGNED_OUT_KEY) === 'true') return false;
+    return !getCachedUser();
   });
-  const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [activePath, setActivePath] = useState<string>(() => {
     try {
       const pathname = window.location.pathname.replace(/^\/+/, '').toLowerCase();
@@ -62,11 +86,29 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [systemTab, setSystemTab] = useState('Connections');
-  const [datasetScope, setDatasetScope] = useState(() => JSON.stringify(selectedContext()));
+  const [datasetScope, setDatasetScope] = useState(() => formatScopeKey(selectedContext()));
+  const lastScopeRef = useRef<string>(datasetScope);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     void ensureDefaultContext();
-  }, []);
+    void loadExecutiveDashboard();
+    const prefetch = () => {
+      void loadGraphStudio();
+      void loadDatasetIngestion();
+      void loadDataSources();
+      void loadDataExplorer();
+      void loadRAGChat();
+    };
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
+    if (typeof w.requestIdleCallback === 'function') {
+      const id = w.requestIdleCallback(prefetch, { timeout: 2500 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(prefetch, 1200);
+    return () => window.clearTimeout(timer);
+  }, [isAuthenticated]);
+
   useEffect(() => {
     const handlePopState = () => {
       try {
@@ -99,7 +141,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const changed = () => setDatasetScope(JSON.stringify(selectedContext()));
+    const changed = () => {
+      const next = formatScopeKey(selectedContext());
+      const prev = lastScopeRef.current;
+      lastScopeRef.current = next;
+      // Avoid remounting the initial screen when hydrating default context from empty
+      if (!prev && next) return;
+      if (prev !== next) setDatasetScope(next);
+    };
     window.addEventListener('dataset-context-changed', changed);
     return () => window.removeEventListener('dataset-context-changed', changed);
   }, []);
@@ -116,13 +165,23 @@ export default function App() {
     let cancelled = false;
     let routerSession = true;
     fetch('/api/auth/me', { credentials: 'same-origin' })
-      .then((res) => {
+      .then(async (res) => {
         if ((res.status === 401 || res.status === 403) && token) {
           routerSession = false;
-          return fetch('/api/auth/me', {
+          const tokenRes = await fetch('/api/auth/me', {
             credentials: 'same-origin',
             headers: { Authorization: `Bearer ${token}` }
           });
+          if (tokenRes.status === 401) {
+            const refreshed = await refreshAuthSession();
+            if (refreshed?.token) {
+              return fetch('/api/auth/me', {
+                credentials: 'same-origin',
+                headers: { Authorization: `Bearer ${refreshed.token}` }
+              });
+            }
+          }
+          return tokenRes;
         }
         return res;
       })
@@ -135,6 +194,7 @@ export default function App() {
         if (user && (user.user_id || user.email)) {
           if (routerSession) {
             localStorage.removeItem('auth_token');
+            sessionStorage.removeItem('auth_token');
             localStorage.removeItem('sap_ias_sso_token');
           }
           localStorage.setItem('auth_user', JSON.stringify(user));
@@ -146,8 +206,7 @@ export default function App() {
       })
       .catch(() => {
         if (cancelled) return;
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem('auth_user');
+        clearLocalIdentity(false);
         setIsAuthenticated(false);
         setCurrentUser(null);
       })
@@ -156,6 +215,34 @@ export default function App() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let timerId: number | undefined;
+    const scheduleRefresh = () => {
+      if (timerId !== undefined) window.clearTimeout(timerId);
+      const token = sessionStorage.getItem('auth_token') || localStorage.getItem('auth_token');
+      if (!token || token.startsWith('dev-token-')) return;
+      const expiresAt = getTokenExpiry();
+      if (!expiresAt) return;
+      // Refresh 60 seconds before token expiry so SSE and API requests never hit 401
+      const delayMs = Math.max(5000, expiresAt - Date.now() - 60_000);
+      timerId = window.setTimeout(() => {
+        void refreshAuthSession().then((refreshed) => {
+          if (refreshed?.token) {
+            scheduleRefresh();
+          }
+        });
+      }, delayMs);
+    };
+
+    scheduleRefresh();
+    window.addEventListener('auth-token-refreshed', scheduleRefresh);
+    return () => {
+      if (timerId !== undefined) window.clearTimeout(timerId);
+      window.removeEventListener('auth-token-refreshed', scheduleRefresh);
+    };
+  }, [isAuthenticated]);
 
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isChatMaximized, setIsChatMaximized] = useState(false);

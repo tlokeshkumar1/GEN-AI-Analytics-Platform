@@ -1,5 +1,6 @@
 import axios, { InternalAxiosRequestConfig } from 'axios';
 import { contextHeaders } from './executionContext';
+import { refreshAuthSession, storeTokenExpiry, TOKEN_EXPIRY_KEY } from './authNavigation';
 
 const api = axios.create({
   baseURL: '/api',
@@ -14,14 +15,18 @@ export function getStoredToken(): string | null {
   return sessionStorage.getItem('auth_token') || localStorage.getItem('auth_token');
 }
 
-export function setAuthToken(token: string | null) {
+export function setAuthToken(token: string | null, expiresInSeconds?: number | null) {
   if (token) {
     sessionStorage.setItem('auth_token', token);
     localStorage.setItem('auth_token', token);
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    if (expiresInSeconds !== undefined) {
+      storeTokenExpiry(expiresInSeconds);
+    }
   } else {
     sessionStorage.removeItem('auth_token');
     localStorage.removeItem('auth_token');
+    storeTokenExpiry(null);
     delete api.defaults.headers.common['Authorization'];
   }
 }
@@ -30,8 +35,11 @@ export function clearAuthStorage() {
   if (typeof window === 'undefined') return;
   sessionStorage.removeItem('auth_token');
   sessionStorage.removeItem('auth_user');
+  sessionStorage.removeItem(TOKEN_EXPIRY_KEY);
   localStorage.removeItem('auth_token');
   localStorage.removeItem('auth_user');
+  localStorage.removeItem(TOKEN_EXPIRY_KEY);
+  delete api.defaults.headers.common['Authorization'];
 }
 
 // Initialize default Authorization header from stored token
@@ -44,6 +52,7 @@ let cachedCsrfToken: string | null = null;
 
 interface ExtendedAxiosRequestConfig extends InternalAxiosRequestConfig {
   _csrfRetried?: boolean;
+  _authRetried?: boolean;
 }
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
@@ -143,6 +152,31 @@ api.interceptors.response.use(
 
     if (axios.isAxiosError(error) && error.response?.status === 401) {
       const detail = String(error.response.data?.detail || '');
+      const requestUrl = String(originalRequest?.url || '');
+      const isAuthMutation =
+        requestUrl.includes('/auth/login') ||
+        requestUrl.includes('/auth/sso') ||
+        requestUrl.includes('/auth/refresh');
+
+      if (
+        originalRequest &&
+        !originalRequest._authRetried &&
+        !isAuthMutation &&
+        getStoredToken()
+      ) {
+        originalRequest._authRetried = true;
+        const refreshed = await refreshAuthSession(cachedCsrfToken);
+        if (refreshed?.token) {
+          setAuthToken(refreshed.token, refreshed.expires_in);
+          if (originalRequest.headers && typeof (originalRequest.headers as any).set === 'function') {
+            (originalRequest.headers as any).set('Authorization', `Bearer ${refreshed.token}`);
+          } else if (originalRequest.headers) {
+            originalRequest.headers['Authorization'] = `Bearer ${refreshed.token}`;
+          }
+          return api(originalRequest);
+        }
+      }
+
       if (detail.includes('SAP XSUAA') || detail.includes('Sign in again') || detail.includes('expired') || detail.includes('invalid')) {
         clearAuthStorage();
         window.dispatchEvent(new CustomEvent('session-expired', { detail: { message: detail } }));

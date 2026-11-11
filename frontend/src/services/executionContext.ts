@@ -35,49 +35,67 @@ export function contextHeaders(): Record<string, string> {
   } : {};
 }
 
+const inFlightDefaultContext = new Map<string, Promise<DatasetContext | null>>();
+
 export async function ensureDefaultContext(): Promise<DatasetContext | null> {
   const existing = selectedContext();
   if (existing) return existing;
-  try {
-    const { getDatasets } = await import('./datasetService');
-    let datasets = await getDatasets().catch(() => []);
-    if (!datasets || datasets.length === 0) {
+
+  const storageKey = key();
+  const pending = inFlightDefaultContext.get(storageKey);
+  if (pending) return pending;
+
+  const promise = (async (): Promise<DatasetContext | null> => {
+    try {
+      const { getDatasets } = await import('./datasetService');
+      let datasets = await getDatasets().catch(() => []);
+      if (!datasets || datasets.length === 0) {
+        try {
+          const { default: api } = await import('./api');
+          const activeRes = await api.get('/datasets/active');
+          if (activeRes.data?.dataset) {
+            datasets = [activeRes.data.dataset];
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (!datasets || datasets.length === 0) return null;
+      const active = datasets.find(d => d.isActive) || datasets[0];
+
+      let revision = 1;
       try {
-        const { default: api } = await import('./api');
-        const activeRes = await api.get('/datasets/active');
-        if (activeRes.data?.dataset) {
-          datasets = [activeRes.data.dataset];
+        const { getSemanticModels } = await import('./semanticService');
+        const models = await getSemanticModels(active.id, active.currentVersion || 1);
+        const approved = models.filter(m => m.status === 'approved');
+        if (approved.length > 0) {
+          revision = Math.max(...approved.map(m => m.revision));
+        } else if (models.length > 0) {
+          revision = Math.max(...models.map(m => m.revision));
         }
       } catch {
-        // ignore
+        revision = 1;
       }
-    }
-    if (!datasets || datasets.length === 0) return null;
-    const active = datasets.find(d => d.isActive) || datasets[0];
 
-    let revision = 1;
-    try {
-      const { getSemanticModels } = await import('./semanticService');
-      const models = await getSemanticModels(active.id, active.currentVersion || 1);
-      const approved = models.filter(m => m.status === 'approved');
-      if (approved.length > 0) {
-        revision = Math.max(...approved.map(m => m.revision));
-      } else if (models.length > 0) {
-        revision = Math.max(...models.map(m => m.revision));
-      }
+      // Re-check in case user explicitly selected a context while waiting
+      const latest = selectedContext();
+      if (latest) return latest;
+
+      const defaultCtx: DatasetContext = {
+        datasetId: active.id,
+        version: active.currentVersion || 1,
+        semanticRevision: revision,
+      };
+      selectContext(defaultCtx);
+      return defaultCtx;
     } catch {
-      revision = 1;
+      return null;
+    } finally {
+      inFlightDefaultContext.delete(storageKey);
     }
+  })();
 
-    const defaultCtx: DatasetContext = {
-      datasetId: active.id,
-      version: active.currentVersion || 1,
-      semanticRevision: revision,
-    };
-    selectContext(defaultCtx);
-    return defaultCtx;
-  } catch {
-    return null;
-  }
+  inFlightDefaultContext.set(storageKey, promise);
+  return promise;
 }
 

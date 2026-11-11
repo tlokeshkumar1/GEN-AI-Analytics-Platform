@@ -1,11 +1,11 @@
 """Read live BTP users through XSUAA SCIM, including local service bindings."""
+import copy
 import logging
 import os
-from datetime import datetime, timezone
-import time
-import copy
-import hashlib
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 try:
     from unittest.mock import Mock
 except ImportError:
@@ -98,7 +98,17 @@ def _resources(session: requests.Session, base_url: str, resource: str) -> list:
 
 def list_users(authorization: str, force_refresh: bool = False) -> dict:
     is_test_mock = hasattr(requests.Session, "mock_calls") or (Mock is not None and isinstance(requests.Session, Mock))
-    cache_key = hashlib.sha256(authorization.encode()).hexdigest() if authorization else "default"
+    credentials = xsuaa_credentials()
+    if not credentials.get("apiurl"):
+        raise HTTPException(503, "The project XSUAA application binding must include apiurl.")
+    admin_collection = os.getenv("XSUAA_ADMIN_ROLE_COLLECTION", "GEN-AI Analytics Platform Administrator")
+    member_collection = os.getenv("XSUAA_MEMBER_ROLE_COLLECTION", "GEN-AI Analytics Platform Member")
+    cache_key = (
+        credentials.get("identityzoneid") or credentials.get("url") or credentials.get("apiurl"),
+        credentials.get("clientid"),
+        admin_collection,
+        member_collection,
+    )
     now = time.time()
     if not force_refresh and not is_test_mock:
         with _USERS_CACHE_LOCK:
@@ -107,51 +117,57 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
                 if now - cached["timestamp"] < _USERS_CACHE_TTL_SECONDS:
                     return copy.deepcopy(cached["data"])
 
-    credentials = xsuaa_credentials()
-    if not credentials.get("apiurl"):
-        raise HTTPException(503, "The project XSUAA application binding must include apiurl.")
-    project_collections = {
-        os.getenv("XSUAA_ADMIN_ROLE_COLLECTION", "GEN-AI Analytics Platform Administrator"),
-        os.getenv("XSUAA_MEMBER_ROLE_COLLECTION", "GEN-AI Analytics Platform Member"),
-    }
+    project_collections = {admin_collection, member_collection}
     try:
-        with requests.Session() as session:
-            # Forward the verified project administrator's token. No technical
-            # account or second XSUAA instance is used for directory reads.
-            session.headers.update({"Authorization": authorization, "Accept": "application/json"})
-            base_url = credentials["apiurl"].rstrip("/")
-            raw_users = _resources(session, base_url, "Users")
-            # Resolve canonical names even when Users supplies an ID as display.
-            raw_groups = _resources(session, base_url, "Groups")
-            groups = {}
-            for group in raw_groups:
-                candidates = [group.get("displayName"), group.get("urn:sap:cloud:scim:schemas:extension:custom:2.0:Group", {}).get("name")]
-                name = next((name for name in candidates if name in project_collections), None) or next((name for name in candidates if isinstance(name, str) and name), None)
-                if not name:
-                    raise ValueError("SCIM group has no name")
-                groups[group["id"]] = name
-            # Groups is a membership directory, not the cockpit's complete role
-            # collection catalog. An empty/unassigned collection may be absent.
-            memberships = {}
-            for group in raw_groups:
-                name = groups[group["id"]]
-                if name in project_collections:
-                    for member in group.get("members", []):
-                        if member.get("value") and str(member.get("type") or "USER").upper() == "USER":
-                            memberships.setdefault(member["value"], set()).add(name)
-            users = []
-            for raw_user in raw_users:
-                raw_user = dict(raw_user)
-                raw_user["groups"] = list(raw_user.get("groups") or []) + [
-                    {"display": name} for name in memberships.get(raw_user["id"], [])
-                ]
-                user = normalize_user(raw_user, groups)
-                assigned = sorted(project_collections.intersection(user["role_collections"]))
-                if not assigned:
-                    continue
-                user["role_collections"] = assigned
-                user["role"] = ", ".join(assigned)
-                users.append(user)
+        base_url = credentials["apiurl"].rstrip("/")
+        if is_test_mock:
+            with requests.Session() as session:
+                # Forward the verified project administrator's token. No technical
+                # account or second XSUAA instance is used for directory reads.
+                session.headers.update({"Authorization": authorization, "Accept": "application/json"})
+                raw_users = _resources(session, base_url, "Users")
+                # Resolve canonical names even when Users supplies an ID as display.
+                raw_groups = _resources(session, base_url, "Groups")
+        else:
+            def _fetch_resource(resource_name: str) -> list:
+                with requests.Session() as session:
+                    session.headers.update({"Authorization": authorization, "Accept": "application/json"})
+                    return _resources(session, base_url, resource_name)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                users_future = executor.submit(_fetch_resource, "Users")
+                groups_future = executor.submit(_fetch_resource, "Groups")
+                raw_users = users_future.result()
+                raw_groups = groups_future.result()
+        groups = {}
+        for group in raw_groups:
+            candidates = [group.get("displayName"), group.get("urn:sap:cloud:scim:schemas:extension:custom:2.0:Group", {}).get("name")]
+            name = next((name for name in candidates if name in project_collections), None) or next((name for name in candidates if isinstance(name, str) and name), None)
+            if not name:
+                raise ValueError("SCIM group has no name")
+            groups[group["id"]] = name
+        # Groups is a membership directory, not the cockpit's complete role
+        # collection catalog. An empty/unassigned collection may be absent.
+        memberships = {}
+        for group in raw_groups:
+            name = groups[group["id"]]
+            if name in project_collections:
+                for member in group.get("members", []):
+                    if member.get("value") and str(member.get("type") or "USER").upper() == "USER":
+                        memberships.setdefault(member["value"], set()).add(name)
+        users = []
+        for raw_user in raw_users:
+            raw_user = dict(raw_user)
+            raw_user["groups"] = list(raw_user.get("groups") or []) + [
+                {"display": name} for name in memberships.get(raw_user["id"], [])
+            ]
+            user = normalize_user(raw_user, groups)
+            assigned = sorted(project_collections.intersection(user["role_collections"]))
+            if not assigned:
+                continue
+            user["role_collections"] = assigned
+            user["role"] = ", ".join(assigned)
+            users.append(user)
     except requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 401:
             raise HTTPException(401, "XSUAA rejected the directory session. Sign out and in again.") from None

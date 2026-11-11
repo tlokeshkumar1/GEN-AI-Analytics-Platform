@@ -3,7 +3,7 @@ import { selectContext, selectedContext } from '../services/executionContext';
 import { SemanticReview } from '../components/dataset/SemanticReview';
 import { DatasetGovernance } from '../components/dataset/DatasetGovernance';
 import { FileImportReview } from '../components/dataset/FileImportReview';
-import { AIAgentIngestionStepper } from '../components/AIAgentIngestionStepper';
+import { AIAgentIngestionStepper, IngestionStageStatus } from '../components/AIAgentIngestionStepper';
 import { getApiErrorMessage } from '../services/api';
 import { DatasetSelector } from '../components/dataset/DatasetSelector';
 import { DatasetActionPanel } from '../components/dataset/DatasetActionPanel';
@@ -12,7 +12,7 @@ import { DatasetEditView } from '../components/dataset/DatasetEditView';
 import { DatasetAppendView } from '../components/dataset/DatasetAppendView';
 import { DatasetDeleteDialog } from '../components/dataset/DatasetDeleteDialog';
 import { DatasetItem, DatasetAction, DATASET_ACTIONS } from '../types/dataset';
-import { UploadResponse } from '../services/uploadService';
+import { UploadResponse, UploadStageEvent } from '../services/uploadService';
 import { getDatasets, getDatasetData, getUserPermissions, rollbackDataset, activateDataset, reindexDataset, getDatasetStatus, reconcileTables } from '../services/datasetService';
 import { listConnections } from '../services/systemService';
 
@@ -40,12 +40,16 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
     isProcessing: boolean;
     filename: string;
     result: UploadResponse | null;
+    partialResult: Partial<UploadResponse> | null;
+    stageStatuses: Record<number, IngestionStageStatus>;
     error?: string | null;
   }>({
     isOpen: false,
     isProcessing: false,
     filename: '',
     result: null,
+    partialResult: null,
+    stageStatuses: {},
     error: null,
   });
   const [error, setError] = useState<string | null>(null);
@@ -979,6 +983,8 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
         isProcessing={ingestionStepper.isProcessing}
         filename={ingestionStepper.filename}
         result={ingestionStepper.result}
+        partialResult={ingestionStepper.partialResult}
+        stageStatuses={ingestionStepper.stageStatuses}
         error={ingestionStepper.error}
         onClose={() => setIngestionStepper(prev => ({ ...prev, isOpen: false }))}
         onNavigateToDashboard={() => onNavigate('dashboard')}
@@ -995,7 +1001,32 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
               isProcessing: true,
               filename,
               result: null,
+              partialResult: null,
+              stageStatuses: { 1: 'running', 2: 'queued', 3: 'queued', 4: 'queued' },
               error: null,
+            });
+          }}
+          onCommitProgress={(event: UploadStageEvent) => {
+            setIngestionStepper(prev => {
+              const nextStatuses: Record<number, IngestionStageStatus> = { ...prev.stageStatuses };
+              if (event.status === 'running') {
+                for (let s = 1; s < event.stage; s += 1) {
+                  if (nextStatuses[s] !== 'completed') nextStatuses[s] = 'completed';
+                }
+                nextStatuses[event.stage] = 'running';
+                for (let s = event.stage + 1; s <= 4; s += 1) {
+                  nextStatuses[s] = 'queued';
+                }
+              } else {
+                nextStatuses[event.stage] = event.status;
+              }
+              return {
+                ...prev,
+                stageStatuses: nextStatuses,
+                partialResult: event.data
+                  ? { ...(prev.partialResult || {}), ...event.data }
+                  : prev.partialResult,
+              };
             });
           }}
           onCommitError={(err) => {
@@ -1020,6 +1051,8 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
               isProcessing: false,
               filename: result.filename,
               result: result,
+              partialResult: result,
+              stageStatuses: { 1: 'completed', 2: 'completed', 3: 'completed', 4: 'completed' },
               error: null,
             });
           }}

@@ -2,8 +2,44 @@ import { hasAdminRole } from './authService';
 import api from './api';
 import { DatasetItem, DatasetRow, DatasetDataResult } from '../types/dataset';
 
-export async function getDatasets(syncTables = false): Promise<DatasetItem[]> {
-  return (await (syncTables ? api.get<DatasetItem[]>('/datasets', { params: { sync_tables: true } }) : api.get<DatasetItem[]>('/datasets'))).data;
+const DATASETS_CACHE_TTL_MS = 15_000;
+let datasetsCache: { data: DatasetItem[]; timestamp: number } | null = null;
+let inFlightDatasetsRequest: Promise<DatasetItem[]> | null = null;
+
+const isTestEnv = (): boolean =>
+  typeof import.meta !== 'undefined' &&
+  Boolean((import.meta as any).vitest || (import.meta as any).env?.MODE === 'test');
+
+export function invalidateDatasetsCache(): void {
+  datasetsCache = null;
+}
+
+export async function getDatasets(syncTables = false, forceRefresh = false): Promise<DatasetItem[]> {
+  if (syncTables) {
+    invalidateDatasetsCache();
+    return (await api.get<DatasetItem[]>('/datasets', { params: { sync_tables: true } })).data;
+  }
+  const useTtlCache = !isTestEnv() && !forceRefresh;
+  if (useTtlCache && datasetsCache && Date.now() - datasetsCache.timestamp < DATASETS_CACHE_TTL_MS) {
+    return datasetsCache.data;
+  }
+  if (!forceRefresh && inFlightDatasetsRequest) {
+    return inFlightDatasetsRequest;
+  }
+  const req = api.get<DatasetItem[]>('/datasets')
+    .then(res => {
+      if (!isTestEnv()) {
+        datasetsCache = { data: res.data, timestamp: Date.now() };
+      }
+      return res.data;
+    })
+    .finally(() => {
+      if (inFlightDatasetsRequest === req) {
+        inFlightDatasetsRequest = null;
+      }
+    });
+  inFlightDatasetsRequest = req;
+  return req;
 }
 
 export async function reconcileTables(): Promise<{
@@ -13,22 +49,26 @@ export async function reconcileTables(): Promise<{
   unbundledCount: number;
   datasets: DatasetItem[];
 }> {
+  invalidateDatasetsCache();
   return (await api.post('/datasets/reconcile-tables')).data;
 }
 
 export async function getDatasetData(datasetId: string, page = 1, pageSize = 10,
-  sortField?: string, sortDir: 'asc' | 'desc' = 'asc', searchQuery?: string, version?: number): Promise<DatasetDataResult> {
+  sortField?: string, sortDir: 'asc' | 'desc' = 'asc', searchQuery?: string, version?: number, signal?: AbortSignal): Promise<DatasetDataResult> {
   const result = (await api.get<DatasetDataResult>(`/datasets/${datasetId}/data`, {
     params: { page, pageSize, sortField, sortDir, search: searchQuery, ...(version ? { version } : {}) },
+    ...(signal ? { signal } : {}),
   })).data;
   return result;
 }
 
 export async function updateDatasetRows(datasetId: string, rows: DatasetRow[]) {
+  invalidateDatasetsCache();
   return (await api.put(`/datasets/${datasetId}/rows`, { rows })).data;
 }
 
 export async function appendDatasetData(datasetId: string, payload: { rows: DatasetRow[]; file?: File }) {
+  invalidateDatasetsCache();
   const form = new FormData();
   if (payload.file) form.append('file', payload.file);
   form.append('rows', JSON.stringify(payload.rows));
@@ -38,22 +78,27 @@ export async function appendDatasetData(datasetId: string, payload: { rows: Data
 }
 
 export async function deleteDatasetRows(datasetId: string, rowIds: string[]) {
+  invalidateDatasetsCache();
   return (await api.delete(`/datasets/${datasetId}/rows`, { data: { rowIds } })).data;
 }
 
 export async function deleteDataset(datasetId: string) {
+  invalidateDatasetsCache();
   return (await api.delete(`/datasets/${datasetId}`)).data;
 }
 
 export async function rollbackDataset(datasetId: string, version: number) {
+  invalidateDatasetsCache();
   return (await api.post(`/datasets/${datasetId}/rollback`, { version })).data;
 }
 
 export async function activateDataset(datasetId: string) {
+  invalidateDatasetsCache();
   return (await api.post(`/datasets/${datasetId}/activate`)).data;
 }
 
 export async function reindexDataset(datasetId: string) {
+  invalidateDatasetsCache();
   return (await api.post(`/datasets/${datasetId}/reindex`)).data;
 }
 

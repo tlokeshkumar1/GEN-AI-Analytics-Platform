@@ -19,6 +19,7 @@ class MetadataStore:
         self.backend = backend or os.getenv("PLATFORM_METADATA_BACKEND", "hana")
         self.path = Path(path or os.getenv("PLATFORM_METADATA_PATH", str(Path(tempfile.gettempdir()) / "platform_runtime" / ".platform.sqlite3")))
         self._cursor = ContextVar(f"metadata_transaction_{id(self)}", default=None)
+        self._write_seq = 0
         if self.backend not in ("sqlite", "hana"):
             raise ValueError("Unsupported metadata backend")
         if os.getenv("VCAP_APPLICATION") and self.backend != "hana":
@@ -101,6 +102,7 @@ class MetadataStore:
             else:
                 cursor.execute("INSERT INTO PLATFORM_DOCUMENTS (NAMESPACE, DOCUMENT_ID, REVISION, PAYLOAD) VALUES (?, ?, ?, ?)",
                                (namespace, key, 1, payload))
+        self._write_seq += 1
         return {"revision": revision + 1, "value": value}
 
     def delete_dataset_metadata(self, workspace_id: str, dataset_id: str) -> int:
@@ -115,6 +117,7 @@ class MetadataStore:
             for pattern in patterns:
                 cursor.execute("DELETE FROM PLATFORM_DOCUMENTS WHERE NAMESPACE LIKE ?", (pattern,))
                 total_deleted += cursor.rowcount if cursor.rowcount > 0 else 0
+            self._write_seq += 1
             return total_deleted
 
 

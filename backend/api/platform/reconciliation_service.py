@@ -179,7 +179,7 @@ class TableReconciliationService:
                     if rows:
                         df = pd.DataFrame(rows)
                         snap = dataset_service._snapshot(entry, cur_v)
-                        sm = domain_classifier_agent.analyze(df=df, dataset_id=ds_id, data_version=cur_v)
+                        sm = domain_classifier_agent.analyze(df=df, dataset_id=ds_id, data_version=cur_v, dataset_name=t_name)
                         semantic_registry.propose(entry, cur_v, snap, overrides=sm.model_dump())
                         logger.info(f"[Reconciler] Proposed semantic model for '{t_name}' ({len(sm.fields)} fields)")
                 except Exception as ex:
