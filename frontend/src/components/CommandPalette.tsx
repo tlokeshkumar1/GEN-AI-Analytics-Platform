@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { SCHEMA_COLUMNS } from '../data/schemaData';
+import { getSemanticModels, SemanticField } from '../services/semanticService';
+import { selectedContext } from '../services/executionContext';
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -15,6 +16,22 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onSelectQuery,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [fields, setFields] = useState<SemanticField[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const ctx = selectedContext();
+    if (!ctx) return;
+    getSemanticModels(ctx.datasetId, ctx.version)
+      .then((models) => {
+        const active =
+          models.find((m) => m.revision === ctx.semanticRevision) ||
+          models.find((m) => m.status === 'approved') ||
+          models[0];
+        if (active?.fields) setFields(active.fields);
+      })
+      .catch(() => { });
+  }, [isOpen]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -22,8 +39,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         e.preventDefault();
         if (isOpen) {
           onClose();
-        } else {
-          // Open handled by parent or toggle
         }
       }
       if (e.key === 'Escape' && isOpen) {
@@ -37,27 +52,41 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   if (!isOpen) return null;
 
   const navigationCommands = [
-    { id: 'executive-dashboard', title: 'Executive Sales & Analytics Dashboard', category: 'Navigation', icon: 'dashboard', hint: 'Live metrics, regional breakdown, SKU leaderboard' },
+    { id: 'executive-dashboard', title: 'Executive Analytics Dashboard', category: 'Navigation', icon: 'dashboard', hint: 'Live KPIs, trends, and published visualizations' },
     { id: 'ai-dashboards-rag-chat', title: 'Conversational Analytics & RAG Chat', category: 'Navigation', icon: 'chat', hint: 'Vector-grounded AI assistant' },
     { id: 'build-your-kpi-graph-studio', title: 'Build Your KPI', category: 'Navigation', icon: 'query_stats', hint: 'KPI builder & custom charts' },
     { id: 'ai-agents', title: 'Autonomous AI Agents Hub', category: 'Navigation', icon: 'smart_toy', hint: 'Multi-agent orchestration, autonomous workflows & reasoning telemetry' },
     { id: 'upload-dataset', title: 'Dataset Management & Ingestion', category: 'Navigation', icon: 'upload_file', hint: 'Upload Excel/CSV to HANA Vector store' },
-    { id: 'hanaadmin', title: 'HANA Cloud Database Admin & Tables (/hanaadmin)', category: 'Administration', icon: 'database', hint: 'Auto-detect future tables, inspect schema, explore records' },
-    { id: 'data-explorer', title: 'Data Explorer & Text-to-SQL Analytics', category: 'Navigation', icon: 'terminal', hint: 'SQL generator across 39 columns' },
-    { id: 'alerts-notifications', title: 'Alerts & Margin Thresholds', category: 'Navigation', icon: 'notifications', hint: 'Breach alerts & trigger logs' },
-    { id: 'reports-library', title: 'Reports Library & Audit Exports', category: 'Navigation', icon: 'folder', hint: 'PDF/Excel board decks' },
-    { id: 'data-sources', title: 'Data Sources & BTP Connectors', category: 'Navigation', icon: 'cloud_sync', hint: 'SAP S/4HANA & HDI containers' },
-    { id: 'user-management', title: 'User Management & Roles', category: 'Navigation', icon: 'group', hint: 'Tier-1 RBAC access controls' },
-    { id: 'system-settings', title: 'System Management', category: 'Navigation', icon: 'settings', hint: 'Embedding models and cache parameters' },
+    { id: 'hanaadmin', title: 'HANA Cloud Database Admin & Tables (/hanaadmin)', category: 'Administration', icon: 'database', hint: 'Auto-detect tables, inspect schema, explore records' },
+    { id: 'data-explorer', title: 'Data Explorer & Query Analytics', category: 'Navigation', icon: 'terminal', hint: 'Structured & NL query builder for active dataset' },
+    { id: 'alerts-notifications', title: 'Alerts & Thresholds', category: 'Navigation', icon: 'notifications', hint: 'Threshold alerts & trigger logs' },
+    { id: 'reports-library', title: 'Reports Library & Audit Exports', category: 'Navigation', icon: 'folder', hint: 'Board decks & analytical exports' },
+    { id: 'data-sources', title: 'Data Sources & BTP Connectors', category: 'Navigation', icon: 'cloud_sync', hint: 'SAP S/4HANA, OData, REST, S3 & HDI containers' },
+    { id: 'user-management', title: 'User Management & Roles', category: 'Navigation', icon: 'group', hint: 'RBAC access controls' },
+    { id: 'system-settings', title: 'System Management', category: 'Navigation', icon: 'settings', hint: 'Connections, sync jobs, AI & storage configuration' },
     { id: 'enterprise-signin', title: 'Log Out / Switch Enterprise Tenant', category: 'Authentication', icon: 'logout', hint: 'End active session and return to Enterprise Sign In' },
   ];
 
-  const quickPrompts = [
-    'Show monthly Net Revenue and Gross Margin comparison across 2024 and 2025',
-    'Compare gross profit margin across top 4 product categories for 2024',
-    'Compare NetRevenueUSD and GrossMarginUSD across Categories',
-    'Top 10 products ranked by total gross margin USD in descending order',
-  ];
+  const measures = fields.filter((f) => f.role === 'measure');
+  const dims = fields.filter((f) => f.role === 'dimension');
+  const timeFields = fields.filter((f) => f.role === 'time');
+  const m1 = measures[0]?.name || 'primary metric';
+  const d1 = dims[0]?.name || 'category';
+  const t1 = timeFields[0]?.name || 'period';
+
+  const quickPrompts = fields.length
+    ? [
+      `Show ${m1} trend across ${t1}`,
+      `Compare ${m1} across top ${d1} values`,
+      `Top 10 ${d1} ranked by ${m1} in descending order`,
+      `Distribution breakdown of ${m1} by ${d1}`,
+    ]
+    : [
+      'Show distribution across primary categories',
+      'Compare top 10 records by primary metric',
+      'Show trend over time',
+      'Summarize key metrics in the active dataset',
+    ];
 
   const filteredNav = navigationCommands.filter(c =>
     c.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -65,10 +94,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     c.hint.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const filteredColumns = SCHEMA_COLUMNS.filter(col =>
+  const filteredColumns = fields.filter(col =>
     col.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    col.description.toLowerCase().includes(searchTerm.toLowerCase())
-  ).slice(0, 5);
+    (col.semantic_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (col.description || '').toLowerCase().includes(searchTerm.toLowerCase())
+  ).slice(0, 6);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-6 sm:pt-20 px-2 sm:px-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
@@ -168,7 +198,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           {filteredColumns.length > 0 && (
             <div className="py-2">
               <div className="px-3 pb-1 text-[10px] uppercase font-semibold text-[#64748B] tracking-wider">
-                HANA Schema Columns ({SCHEMA_COLUMNS.length} Available)
+                Active Semantic Fields ({fields.length} Available)
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 px-1">
                 {filteredColumns.map((col, idx) => (
@@ -177,11 +207,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                     className="p-2 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between"
                   >
                     <div>
-                      <div className="font-label-sm font-semibold text-[#0F172A]">{col.name}</div>
-                      <div className="text-[10px] text-[#64748B]">{col.dataType}</div>
+                      <div className="font-label-sm font-semibold text-[#0F172A]">{col.semantic_name || col.name}</div>
+                      <div className="text-[10px] text-[#64748B]">{col.type}</div>
                     </div>
                     <span className="text-[9px] px-1.5 py-0.5 bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE] rounded font-mono">
-                      {col.type}
+                      {col.role}
                     </span>
                   </div>
                 ))}

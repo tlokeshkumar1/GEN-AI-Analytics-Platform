@@ -7,34 +7,60 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import re
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from api.models.execution_context import current_identity
 from api.platform.contracts import SemanticModel, SemanticField
 from api.platform.semantic import semantic_registry
 from api.services.dataset_service import DatasetService
-from api.services.schema_service import _COLUMN_ALIASES, _MEASURE_COLUMNS, _DEFAULT_AGGREGATIONS, _DATE_COLUMNS
 
 
 def legacy_model(entry, version, snapshot, grain, owner, approve=False):
-    sales = "NetRevenueUSD" in {column["name"] for column in snapshot["columns"]}
     fields = []
     for column in snapshot["columns"]:
         name = column["name"]
-        kind = {"number": "decimal", "percentage": "decimal"}.get(column["type"], column["type"])
-        role = "measure" if sales and name in _MEASURE_COLUMNS else "time" if name in _DATE_COLUMNS else "identifier" if name.lower().endswith(("id", "code", "number")) else "dimension"
-        aliases = [alias for alias, target in _COLUMN_ALIASES.items() if target == name and alias not in ("orders", "order count")] if sales else []
-        if name == "OrderID":
-            aliases += ["orders", "order count"]
+        raw_type = str(column.get("type", "string")).lower()
+        kind = {"number": "decimal", "percentage": "decimal"}.get(raw_type, raw_type)
+        low = name.lower()
+        is_time = any(t in low for t in ("date", "time", "year", "month", "quarter", "period"))
+        is_id = low == "id" or low.endswith(("_id", "id", "_code", "code", "_key", "number"))
+        role = "time" if is_time else "identifier" if is_id else "measure" if kind in ("decimal", "integer", "number") else "dimension"
+        aliases = []
+        if role == "identifier":
+            stem = re.sub(r"(_?id|_?code|_?key|_?number)$", "", low).strip("_ ")
+            if stem:
+                plural = stem if stem.endswith("s") else f"{stem}s"
+                aliases = [plural, f"{stem} count"]
         aggregations = ["SUM", "AVG", "MIN", "MAX", "COUNT", "COUNT_DISTINCT"] if role == "measure" else ["COUNT", "COUNT_DISTINCT"]
-        fields.append(SemanticField(name=name, semantic_name=name, type=kind, role=role, aliases=aliases,
-                                    aggregations=aggregations, default_aggregation=_DEFAULT_AGGREGATIONS.get(name) if role == "measure" else None,
-                                    currency="USD" if name.endswith("USD") else None,
-                                    unit="%" if "Percent" in name else None,
-                                    evidence="Migrated sales mapping; original precision and source business grain require review."))
-    return SemanticModel(dataset_id=entry["id"], data_version=version, revision=1, domain="sales" if sales else "unknown",
-                         grain=grain or "Unconfirmed: one source row", fields=fields,
-                         status="approved" if approve and sales else "proposed", reviewer=f"migration:{owner}" if approve and sales else None,
-                         reviewed_at=datetime.now(timezone.utc).isoformat() if approve and sales else None)
+        default_agg = ("AVG" if ("percent" in low or "pct" in low or "ratio" in low) else "SUM") if role == "measure" else None
+        currency = "USD" if low.endswith("usd") else None
+        unit = "%" if ("percent" in low or "pct" in low) else None
+        fields.append(SemanticField(
+            name=name,
+            semantic_name=name,
+            type=kind,
+            role=role,
+            aliases=aliases,
+            aggregations=aggregations,
+            default_aggregation=default_agg,
+            currency=currency,
+            unit=unit,
+            evidence="Migrated mapping inferred from dataset columns; source business grain requires review.",
+        ))
+    raw_name = str(entry.get("name") or entry.get("id") or "unknown")
+    inferred_domain = re.sub(r"\.(csv|xlsx|xls)$", "", raw_name, flags=re.I).strip().lower() or "unknown"
+    return SemanticModel(
+        dataset_id=entry["id"],
+        data_version=version,
+        revision=1,
+        domain=inferred_domain,
+        grain=grain or "Unconfirmed: one source row",
+        fields=fields,
+        status="approved" if approve else "proposed",
+        reviewer=f"migration:{owner}" if approve else None,
+        reviewed_at=datetime.now(timezone.utc).isoformat() if approve else None,
+    )
 
 
 def migrate(service, workspace, owner, grain, apply=False, approve_sales=False, destination=None):

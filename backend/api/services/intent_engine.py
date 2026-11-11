@@ -35,7 +35,7 @@ def _default_query_plan() -> Dict[str, Any]:
 
 # ── System prompt for intent classification ───────────────────────────────────
 
-_INTENT_SYSTEM_PROMPT = """You are a precise query classification engine for an enterprise sales analytics platform.
+_INTENT_SYSTEM_PROMPT = """You are a precise query classification engine for an open-domain enterprise analytics platform.
 
 Given a user's natural language question, analyze it and return a JSON object representing the query plan.
 
@@ -47,14 +47,13 @@ RULES:
    - "analytical": aggregation questions (total, average, sum, count, max, min)
    - "graph": any request to create/show/plot a chart/graph/visualization
    - "ranking": top N, bottom N, highest, lowest, best, worst
-   - "comparison": compare between time periods, regions, categories
+   - "comparison": compare between time periods, dimensions, or categories
    - "chat": semantic questions, explanations, business context, why questions
-2. "metric" must be an exact column name from the schema if applicable (e.g. "NetRevenueUSD", "GrossMarginUSD")
+2. "metric" must be an exact measure column name from DATASET SCHEMA if applicable
 3. "aggregation" must be one of: "SUM", "AVG", "COUNT", "MIN", "MAX", "COUNT_DISTINCT", null
-4. "dimension" must be an exact column name (e.g. "Region", "CustomerName", "Category")
+4. "dimension" must be an exact dimension or temporal column name from DATASET SCHEMA
 5. "filters" is an array of objects: {{"column": "<exact_col>", "operator": "=|!=|>|<|>=|<=|IN|CONTAINS", "value": "<value>"}}
-6. "date_filter" is null or {{"column": "Year|Quarter|MonthName|OrderDate", "from": "<value>", "to": "<value>"}}
-   - For year filters like "in 2025", use: {{"column": "Year", "from": "2025", "to": "2025"}}
+6. "date_filter" is null or {{"column": "<temporal_col>", "from": "<value>", "to": "<value>"}}
 7. "sort" is null or {{"column": "<col>", "direction": "ASC|DESC"}}
 8. "limit" is null or a positive integer (for top/bottom N)
 9. "chart_type" is null or one of: "bar", "line", "pie", "donut", "scatter", "area", "heatmap", "box", "violin", "funnel", "waterfall", "treemap", "stacked_bar", "horizontal_bar"
@@ -193,10 +192,11 @@ class IntentEngine:
                 plan["intent"] = "ranking"
 
         # 8. Detect sort direction
-        if any(w in p for w in ["bottom", "lowest", "worst", "least", "minimum"]):
-            plan["sort"] = {"column": plan["metric"] or "NetRevenueUSD", "direction": "ASC"}
-        elif plan["intent"] in ("ranking",) or plan.get("limit"):
-            plan["sort"] = {"column": plan["metric"] or "NetRevenueUSD", "direction": "DESC"}
+        fallback_sort_col = plan["metric"] or (schema_service.get_measures()[0] if schema_service.get_measures() else None)
+        if any(w in p for w in ["bottom", "lowest", "worst", "least", "minimum"]) and fallback_sort_col:
+            plan["sort"] = {"column": fallback_sort_col, "direction": "ASC"}
+        elif (plan["intent"] in ("ranking",) or plan.get("limit")) and fallback_sort_col:
+            plan["sort"] = {"column": fallback_sort_col, "direction": "DESC"}
 
         # 9. Set requires_* flags
         if plan["intent"] in ("analytical", "ranking", "comparison"):
@@ -348,18 +348,11 @@ class IntentEngine:
                     if target_word in str(col).lower():
                         return col
 
-        dim_terms = [
-            ("by customer", "CustomerName"), ("by product", "ProductName"),
-            ("by region", "Region"), ("by country", "Country"),
-            ("by category", "Category"), ("by subcategory", "Subcategory"),
-            ("by segment", "CustomerSegment"), ("by channel", "Channel"),
-            ("by industry", "IndustryVertical"), ("by quarter", "Quarter"),
-            ("by month", "MonthName"), ("by year", "Year"),
-            ("by sales rep", "SalesRepName"), ("by rep", "SalesRepName"),
-        ]
-        for term, col in dim_terms:
-            if term in p:
-                return col
+        # Match dynamically against available schema dimensions
+        for col_name in schema_service.get_dimensions():
+            col_lower = col_name.lower()
+            if col_lower in p or col_lower.replace("_", " ") in p:
+                return col_name
         return None
 
     def _detect_chart_type(self, p: str) -> Optional[str]:
@@ -585,8 +578,13 @@ class IntentEngine:
 
         # Set defaults for analytical/ranking/graph if metric is missing
         if plan["intent"] in ("analytical", "ranking", "graph") and not plan.get("metric"):
-            plan["metric"] = "NetRevenueUSD"
-            plan["aggregation"] = "SUM"
+            measures = [k for k, v in meta.items() if getattr(v, "is_measure", False)]
+            if measures:
+                plan["metric"] = measures[0]
+                plan["aggregation"] = getattr(meta[measures[0]], "default_aggregation", "SUM") or "SUM"
+            else:
+                plan["metric"] = "*"
+                plan["aggregation"] = "COUNT"
 
         return plan
 

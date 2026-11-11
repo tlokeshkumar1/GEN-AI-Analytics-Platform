@@ -193,11 +193,7 @@ class DatasetService:
             except Exception:
                 pass
             if not cols:
-                try:
-                    from api.models.database_models import SalesRecord
-                    cols = [{"name": col, "type": "number" if "USD" in col or "Percent" in col or "Quantity" in col else "string", "required": False} for col in SalesRecord.model_fields.keys()]
-                except Exception:
-                    cols = []
+                cols = []
             if cols:
                 snap = {
                     "rows": [],
@@ -789,6 +785,18 @@ class DatasetService:
                     pass
 
             names = {c["name"] for c in columns}
+            col_names = [c["name"] for c in columns if isinstance(c, dict) and c.get("name")]
+            pk_col = next((c for c in col_names if c.lower() in ("id", "row_id", "__rowid")), None)
+            if not pk_col:
+                pk_col = next((c for c in col_names if c.lower().endswith(("_id", "id", "_key", "_code"))), None)
+            if not pk_col and col_names:
+                pk_col = col_names[0]
+
+            def _pk_val(row_obj):
+                if not pk_col:
+                    return None
+                return row_obj.get(pk_col) if row_obj.get(pk_col) is not None else row_obj.get(pk_col.upper())
+
             if operation == "append":
                 if not payload:
                     raise HTTPException(400, "No rows to append.")
@@ -805,14 +813,14 @@ class DatasetService:
                         lookup[str(r["__rowId"])] = r
                     if r.get("id"):
                         lookup[str(r["id"])] = r
-                    for pk_cand in ["ORDERID", "OrderID", "order_id"]:
-                        if r.get(pk_cand):
-                            lookup[str(r[pk_cand])] = r
+                    pk_v = _pk_val(r)
+                    if pk_v is not None and str(pk_v):
+                        lookup[str(pk_v)] = r
 
                 ids = []
                 for r in payload:
                     if operation == "edit":
-                        found_id = str(r.get("__rowId") or r.get("id") or r.get("ORDERID") or r.get("OrderID") or "")
+                        found_id = str(r.get("__rowId") or r.get("id") or _pk_val(r) or "")
                         ids.append(found_id)
                     else:
                         ids.append(str(r))
@@ -827,7 +835,13 @@ class DatasetService:
                         if target_row is not None:
                             target_row.update({k: v for k, v in incoming.items() if k in names})
                 elif operation == "delete_rows":
-                    rows = [r for r in rows if str(r.get("__rowId")) not in set(ids) and str(r.get("ORDERID")) not in set(ids)]
+                    ids_set = set(ids)
+                    rows = [
+                        r for r in rows
+                        if str(r.get("__rowId")) not in ids_set
+                        and str(r.get("id")) not in ids_set
+                        and str(_pk_val(r)) not in ids_set
+                    ]
 
             # ── 1. Direct Physical SAP HANA Cloud Table Update ──
             try:
@@ -835,10 +849,6 @@ class DatasetService:
                 from api.database.hana_client import hana_client
                 phys_table = datasets_metadata_repo._resolve_physical_table(entry.get("physical_table_name") or entry.get("folder") or entry.get("name"))
                 if phys_table and hana_client:
-                    col_names = [c["name"] for c in columns]
-                    pk_cands = ["ORDERID", "OrderID", "ORDER_ID", "ID", "id"]
-                    pk_col = next((c for c in col_names if c.upper() in pk_cands), col_names[0] if col_names else None)
-
                     if operation == "edit" and pk_col:
                         for row_edit in payload:
                             target_pk = row_edit.get(pk_col) or row_edit.get(pk_col.upper()) or row_edit.get("__rowId") or row_edit.get("id")
@@ -871,7 +881,7 @@ class DatasetService:
                     from api.database.vector_client import vector_client
                     from api.services.ai_core_service import ai_core_service
                     for row_edit in payload:
-                        target_pk = str(row_edit.get("ORDERID") or row_edit.get("OrderID") or row_edit.get("__rowId") or row_edit.get("id") or "")
+                        target_pk = str(row_edit.get("__rowId") or row_edit.get("id") or _pk_val(row_edit) or "")
                         full_row = lookup.get(target_pk) or row_edit
                         chunk_text = self._format_row_chunk(full_row, [c["name"] for c in columns], entry["name"])
                         emb = ai_core_service.generate_embedding(chunk_text)
@@ -1022,8 +1032,8 @@ class DatasetService:
             try:
                 from api.database.hana_table_service import hana_table_service
                 for tbl in candidate_tables:
-                    # Do not drop protected system or shared catalog tables
-                    if tbl.upper() in {"DATASETS_METADATA", "PLATFORM_METADATA", "PLATFORM_DOCUMENTS", "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS", "SALES_ANALYTICS"}:
+                    # Do not drop protected system tables
+                    if tbl.upper() in {"DATASETS_METADATA", "PLATFORM_METADATA", "PLATFORM_DOCUMENTS", "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS"}:
                         continue
                     if hana_table_service.table_exists(tbl):
                         res = hana_table_service.drop_table(tbl)

@@ -133,9 +133,11 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000")
     MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
 
-    # Data Freshness Settings
+    # Data Freshness & Connector Defaults
     DATA_REFRESH_INTERVAL_MINUTES: int = int(os.getenv("DATA_REFRESH_INTERVAL_MINUTES", "15"))
     DATA_STALE_MAX_HOURS: float = float(os.getenv("DATA_STALE_MAX_HOURS", "24"))
+    ICSM_DEFAULT_BASE_URL: str = os.getenv("ICSM_DEFAULT_BASE_URL", "https://sandbox.api.sap.com")
+    ICSM_DEFAULT_SERVICE: str = os.getenv("ICSM_DEFAULT_SERVICE", "sap/opu/odata/sap/API_PURCHASEORDER_PROCESS_SRV")
 
     class Config:
         case_sensitive = True

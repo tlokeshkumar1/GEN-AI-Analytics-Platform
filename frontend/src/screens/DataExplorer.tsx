@@ -79,13 +79,32 @@ function ChipSelector({ options, selected, onChange, label }: {
   );
 }
 
-// Quick suggestion chips
-const SUGGESTIONS = [
-  'Total Net Revenue by Sales Region',
-  'Top 5 Products by Quantity Sold',
-  'Monthly Margin trend for 2024',
-  'Average Gross Margin by Quarter',
-];
+// Dynamic quick suggestion builder from active semantic model
+function buildDynamicSuggestions(model: SemanticModel | null): string[] {
+  if (!model || !model.fields.length) {
+    return [
+      'Show record count summary',
+      'Top 5 items by primary measure',
+      'Monthly trend overview',
+      'Compare distributions across categories',
+    ];
+  }
+  const measures = model.fields.filter(f => f.role === 'measure');
+  const dims = model.fields.filter(f => f.role === 'dimension');
+  const timeFields = model.fields.filter(f => f.role === 'time');
+  const m1 = measures[0]?.semantic_name || measures[0]?.name || 'Records';
+  const m2 = measures[1]?.semantic_name || measures[1]?.name || m1;
+  const d1 = dims[0]?.semantic_name || dims[0]?.name;
+  const d2 = dims[1]?.semantic_name || dims[1]?.name || d1;
+  const t1 = timeFields[0]?.semantic_name || timeFields[0]?.name;
+
+  const out: string[] = [];
+  if (d1) out.push(`Total ${m1} by ${d1}`);
+  if (d2) out.push(`Top 5 ${d2} by ${m1}`);
+  if (t1) out.push(`${m1} trend by ${t1}`);
+  if (d1) out.push(`Average ${m2} by ${d1}`);
+  return out.length ? out : ['Show total record count', 'Summarize all numeric measures'];
+}
 
 export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({ onNavigate }) => {
   const [model, setModel] = useState<SemanticModel | null>(null);
@@ -299,7 +318,7 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
 
               {/* Suggestion Chips */}
               <div className="flex flex-wrap gap-2">
-                {SUGGESTIONS.map(s => (
+                {buildDynamicSuggestions(model).map(s => (
                   <button
                     key={s}
                     type="button"

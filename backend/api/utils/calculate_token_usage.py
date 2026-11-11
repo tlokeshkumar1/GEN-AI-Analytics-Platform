@@ -252,12 +252,9 @@ def test_live_api_call(
 # ── Dataset Token Calculation ────────────────────────────────────────────────
 
 def get_dataset_tokens() -> Dict[str, Any]:
-    """Calculates dataset embedding token footprint from snapshot."""
-    candidates = [
-        ROOT_DIR / "backend" / "preprocessing" / "output" / "SAC_Sales_Preprocessed" / ".version_1.json",
-        ROOT_DIR / "preprocessing" / "output" / "SAC_Sales_Preprocessed" / ".version_1.json"
-    ]
-    candidates.extend(list(ROOT_DIR.glob("**/output/*/.version_*.json")))
+    """Calculates dataset embedding token footprint from any active snapshot."""
+    candidates = list(ROOT_DIR.glob("**/output/*/.version_*.json"))
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
     snapshot_path = None
     for c in candidates:

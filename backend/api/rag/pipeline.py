@@ -83,7 +83,7 @@ class RAGPipeline:
                 entry, version = dataset_service.active()
                 if entry:
                     class DummyContext:
-                        dataset_id = entry.get("id", "SAC_Sales_Preprocessed")
+                        dataset_id = entry.get("id", "active_dataset")
                         version = entry.get("currentVersion", 1)
                         semantic_revision = 1
                         def model_dump(self):
@@ -420,9 +420,9 @@ class RAGPipeline:
                 "You are an enterprise AI data assistant explaining dataset definitions and evidence.\n"
                 "Respond in clear, professional GitHub-flavored Markdown:\n"
                 "- Use structured sections with concise headings (###).\n"
-                "- Format numerical data, orders, products, and metrics in clean Markdown tables (| Metric | Value |).\n"
+                "- Format numerical data, records, entities, and metrics in clean Markdown tables (| Metric | Value |).\n"
                 "- Highlight key terms, metrics, and dates in **bold**.\n"
-                "- Never output unformatted key-value lists (e.g. 'OrderID: ...'). Always format as structured Markdown tables or bullet lists.\n"
+                "- Never output unformatted key-value lists (e.g. 'RecordID: ...'). Always format as structured Markdown tables or bullet lists.\n"
                 "- Do not invent numerical totals or calculations not present in the evidence.\n"
                 "- Keep explanations executive, concise, and beautifully structured."
             )
@@ -566,43 +566,96 @@ class RAGPipeline:
             return {'order_id': order_id, 'new_qty': new_qty, 'base_qty': base_qty}
         return None
 
+    def _resolve_record_financials(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """Dynamically resolve quantity, primary amount, cost, margin, and label fields via active SemanticModel then record attributes."""
+        def _pick(hints, exclude=None):
+            excluded = {e.lower() for e in (exclude or ())}
+            for k, v in record.items():
+                if str(k).startswith("_") or v is None or str(k).lower() in excluded:
+                    continue
+                low = str(k).lower()
+                if any(h in low for h in hints):
+                    return str(k), v
+            return None, None
+
+        # Prefer active SemanticModel currency/measure annotations when available
+        sem_rev = sem_cost = sem_qty = sem_pct = None
+        try:
+            from api.models.execution_context import current_selection
+            from api.platform.semantic import semantic_registry
+            sel = current_selection.get()
+            if sel and sel.entry:
+                model = semantic_registry.current(sel.entry, sel.version, sel.semantic_revision)
+                if model:
+                    for f in model.fields:
+                        val = record.get(f.name) if record.get(f.name) is not None else record.get(f.name.upper())
+                        if val is None or f.role != "measure":
+                            continue
+                        low = f.name.lower()
+                        if f.unit == "%" or "percent" in low or low.endswith("pct"):
+                            sem_pct = sem_pct or val
+                        elif any(t in low for t in ("qty", "quantity", "units", "volume", "count")):
+                            sem_qty = sem_qty or val
+                        elif any(t in low for t in ("cost", "expense")):
+                            sem_cost = sem_cost or val
+                        elif sem_rev is None and (f.currency or f.default_aggregation == "SUM"):
+                            sem_rev = val
+        except Exception:
+            pass
+
+        _, qty_raw = (None, sem_qty) if sem_qty is not None else _pick(("quantity", "qty", "units", "volume", "count"))
+        rev_key, rev_raw = (None, sem_rev) if sem_rev is not None else _pick(("revenue", "sales", "amount", "salary", "price", "value", "total"))
+        _, cost_raw = (None, sem_cost) if sem_cost is not None else _pick(("cost", "expense"), exclude=(rev_key,) if rev_key else ())
+        _, margin_raw = _pick(("margin", "profit"))
+        _, pct_raw = (None, sem_pct) if sem_pct is not None else _pick(("percent", "pct"))
+        _, item_label = _pick(("item", "title", "product", "name", "description"))
+        _, entity_label = _pick(("customer", "client", "employee", "department", "vendor"))
+        _, loc_label = _pick(("country", "region", "location", "city", "port", "site"))
+        return {
+            "qty": int(float(qty_raw)) if qty_raw is not None else 1,
+            "rev": rev_raw,
+            "cost": cost_raw,
+            "margin": margin_raw,
+            "pct": pct_raw,
+            "item": item_label or "N/A",
+            "entity": entity_label or "N/A",
+            "location": loc_label or "N/A",
+        }
+
     def _compute_what_if_simulation(self, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Compute financial impact simulation of changing order quantity directly from SAP HANA Cloud."""
+        """Compute financial impact simulation of changing quantity directly from SAP HANA Cloud."""
         order_id = params['order_id']
         new_qty = params['new_qty']
         order_data = data_service.get_order_details(order_id)
         if not order_data:
             return None
 
-        base_qty = params.get('base_qty') or int(order_data.get('Quantity') or order_data.get('Units') or order_data.get('Volume') or 1)
-        rev_val = order_data.get('NetRevenueUSD') or order_data.get('Revenue') or order_data.get('Sales') or order_data.get('TotalAmount')
-        cost_val = order_data.get('TotalCostUSD') or order_data.get('CostUSD') or order_data.get('Cost') or order_data.get('TotalCost')
-        margin_val = order_data.get('GrossMarginUSD') or order_data.get('Profit') or order_data.get('Margin')
+        fields = self._resolve_record_financials(order_data)
+        base_qty = params.get('base_qty') or fields["qty"] or 1
+        rev_val = fields["rev"]
+        cost_val = fields["cost"]
+        margin_val = fields["margin"]
 
         if rev_val is None and cost_val is None:
             return None
 
         revenue = float(rev_val or 0)
         cost = float(cost_val or 0)
-        margin = float(margin_val or (revenue - cost))
+        margin = float(margin_val if margin_val is not None else (revenue - cost))
 
-        unit_price = revenue / base_qty if base_qty > 0 else float(order_data.get('NetUnitPriceUSD') or order_data.get('UnitPrice') or 0)
-        unit_cost = cost / base_qty if base_qty > 0 else float(order_data.get('UnitCostUSD') or order_data.get('UnitCost') or 0)
+        unit_price = revenue / base_qty if base_qty > 0 else 0.0
+        unit_cost = cost / base_qty if base_qty > 0 else 0.0
 
         sim_revenue = unit_price * new_qty
         sim_cost = unit_cost * new_qty
         sim_margin = sim_revenue - sim_cost
         sim_margin_pct = (sim_margin / sim_revenue * 100.0) if sim_revenue > 0 else 0.0
 
-        base_margin_pct = float(order_data.get('GrossMarginPercent') or order_data.get('MarginPercent') or (margin / revenue * 100.0 if revenue > 0 else 0.0))
+        base_margin_pct = float(fields["pct"] if fields["pct"] is not None else (margin / revenue * 100.0 if revenue > 0 else 0.0))
         delta_rev = sim_revenue - revenue
         delta_cost = sim_cost - cost
         delta_margin = sim_margin - margin
         delta_qty = new_qty - base_qty
-
-        product = order_data.get('ProductName') or order_data.get('Product') or order_data.get('Item') or 'N/A'
-        customer = order_data.get('CustomerName') or order_data.get('Customer') or order_data.get('Client') or 'N/A'
-        country = order_data.get('Country') or order_data.get('Region') or 'N/A'
 
         def fmt_curr(val):
             return f"${val:,.2f}"
@@ -612,19 +665,19 @@ class RAGPipeline:
             return f"{sign}${val:,.2f}"
 
         reply = (
-            f"### 🔮 What-If Scenario Analysis: Order **{order_id}**\n\n"
-            f"**Simulation Scenario:** Adjusting order volume from **{base_qty} units** to **{new_qty} units** "
+            f"### 🔮 What-If Scenario Analysis: Record **{order_id}**\n\n"
+            f"**Simulation Scenario:** Adjusting volume from **{base_qty} units** to **{new_qty} units** "
             f"({'increased by +' if delta_qty > 0 else 'reduced by '}{delta_qty} units variance).\n\n"
-            f"#### 📊 Financial Impact Simulation (SAP HANA Cloud)\n"
+            f"#### 📊 Impact Simulation\n"
             f"| Metric | Baseline ({base_qty} units) | Simulated ({new_qty} units) | Variance (Δ) | Impact Analysis |\n"
             f"| :--- | :--- | :--- | :--- | :--- |\n"
-            f"| **Net Revenue** | {fmt_curr(revenue)} | **{fmt_curr(sim_revenue)}** | **{fmt_diff(delta_rev)}** | {'🟢 Revenue Expansion' if delta_rev >= 0 else '🔻 Revenue Contraction'} |\n"
-            f"| **Cost of Goods** | {fmt_curr(cost)} | {fmt_curr(sim_cost)} | {fmt_diff(delta_cost)} | {'🔺 Higher Total Cost' if delta_cost >= 0 else '🟢 Lower Total Cost'} |\n"
-            f"| **Gross Margin ($)** | {fmt_curr(margin)} | **{fmt_curr(sim_margin)}** | **{fmt_diff(delta_margin)}** | {'🟢 Margin Expansion' if delta_margin >= 0 else '🔻 Margin Compression'} |\n"
-            f"| **Gross Margin (%)** | {base_margin_pct:.2f}% | **{sim_margin_pct:.2f}%** | 0.00% | Constant unit economics |\n\n"
-            f"#### 🛍️ Order & Product Context\n"
-            f"- **Product:** {product}\n"
-            f"- **Customer:** {customer} ({country})\n"
+            f"| **Primary Amount / Revenue** | {fmt_curr(revenue)} | **{fmt_curr(sim_revenue)}** | **{fmt_diff(delta_rev)}** | {'🟢 Expansion' if delta_rev >= 0 else '🔻 Contraction'} |\n"
+            f"| **Cost** | {fmt_curr(cost)} | {fmt_curr(sim_cost)} | {fmt_diff(delta_cost)} | {'🔺 Higher Cost' if delta_cost >= 0 else '🟢 Lower Cost'} |\n"
+            f"| **Net Margin** | {fmt_curr(margin)} | **{fmt_curr(sim_margin)}** | **{fmt_diff(delta_margin)}** | {'🟢 Margin Expansion' if delta_margin >= 0 else '🔻 Margin Compression'} |\n"
+            f"| **Margin (%)** | {base_margin_pct:.2f}% | **{sim_margin_pct:.2f}%** | 0.00% | Constant unit economics |\n\n"
+            f"#### 🛍️ Record Context\n"
+            f"- **Item:** {fields['item']}\n"
+            f"- **Entity:** {fields['entity']} ({fields['location']})\n"
             f"- **Effective Unit Price:** {fmt_curr(unit_price)} / unit\n"
             f"- **Effective Unit Cost:** {fmt_curr(unit_cost)} / unit\n"
         )
@@ -650,147 +703,150 @@ class RAGPipeline:
         return None
 
     def _compute_margin_drivers(self, year: Optional[int]) -> Optional[Dict[str, Any]]:
-        """Calculate primary margin drivers directly in SAP HANA Cloud if appropriate columns exist."""
+        """Calculate primary metric drivers dynamically across any SAP HANA Cloud table."""
         from api.database.hana_client import hana_client
-        from api.database.hana_table_service import hana_table_service
         from api.platform.datasets_metadata_repository import datasets_metadata_repo
-        target_year = year or 2024
         from api.models.execution_context import current_selection
         sel = current_selection.get()
-        hint = sel.entry.get("physical_table_name") or sel.entry.get("name") if sel and sel.entry else None
+        hint = sel.entry.get("physical_table_name") or sel.entry.get("tableName") or sel.entry.get("name") if sel and sel.entry else None
         target_table = datasets_metadata_repo._resolve_physical_table(hint)
-
-        # Verify table has required columns for this specific calculation; otherwise fall through to general query planner
-        cols = {c["name"].upper() for c in hana_table_service.get_table_columns(target_table)}
-        if not {"CATEGORY", "NETREVENUEUSD", "GROSSMARGINUSD"}.issubset(cols):
+        if not target_table:
             return None
 
-        has_year = "YEAR" in cols
-        where_clause = "WHERE YEAR = ?" if has_year else ""
-        query_params = (target_year,) if has_year else ()
+        schema = data_service._introspect_hana_table(target_table)
+        if not schema["dimensions"] or not schema["measures"]:
+            return None
+
+        dim_col = schema["dimensions"][0]
+        m1 = schema["measures"][0]
+        m2 = next((m for m in schema["measures"] if any(k in m.lower() for k in ("margin", "profit", "net"))), schema["measures"][1] if len(schema["measures"]) > 1 else m1)
+        year_col = next((t for t in schema["temporal"] if "year" in t.lower()), None)
+
+        dim_q = data_service._quote_ident(dim_col)
+        m1_q = data_service._quote_ident(m1)
+        m2_q = data_service._quote_ident(m2)
+        tbl_q = data_service._quote_ident(target_table)
+        where_clause = f"WHERE {data_service._quote_ident(year_col)} = ?" if (year_col and year) else ""
+        query_params = (year,) if (year_col and year) else ()
 
         sql = f'''
-            SELECT CATEGORY, 
-                   ROUND(SUM(NETREVENUEUSD), 2) AS REVENUE, 
-                   ROUND(SUM(GROSSMARGINUSD), 2) AS MARGIN, 
-                   ROUND(SUM(GROSSMARGINUSD) * 100.0 / NULLIF(SUM(NETREVENUEUSD), 0), 2) AS MARGIN_PCT 
-            FROM "{target_table}" 
+            SELECT {dim_q} AS DIM_VAL,
+                   ROUND(SUM({m1_q}), 2) AS PRIMARY_VAL,
+                   ROUND(SUM({m2_q}), 2) AS SECONDARY_VAL,
+                   ROUND(SUM({m2_q}) * 100.0 / NULLIF(SUM({m1_q}), 0), 2) AS RATIO_PCT
+            FROM {tbl_q}
             {where_clause}
-            GROUP BY CATEGORY 
-            ORDER BY MARGIN DESC
+            GROUP BY {dim_q}
+            ORDER BY SECONDARY_VAL DESC
         '''
         rows = hana_client.execute_query(sql, query_params)
         if not rows:
             return None
 
-        total_rev = sum(float(r.get('REVENUE') or 0) for r in rows)
-        total_margin = sum(float(r.get('MARGIN') or 0) for r in rows)
-        overall_pct = (total_margin / total_rev * 100.0) if total_rev > 0 else 0.0
+        total_1 = sum(float(r.get('PRIMARY_VAL') or 0) for r in rows)
+        total_2 = sum(float(r.get('SECONDARY_VAL') or 0) for r in rows)
+        overall_pct = (total_2 / total_1 * 100.0) if total_1 > 0 else 0.0
 
         table_rows = []
-        for r in rows:
-            cat = r.get('CATEGORY')
-            rev = float(r.get('REVENUE') or 0)
-            marg = float(r.get('MARGIN') or 0)
-            marg_pct = float(r.get('MARGIN_PCT') or 0)
-            share_of_margin = (marg / total_margin * 100.0) if total_margin > 0 else 0.0
-            table_rows.append(
-                f"| **{cat}** | ${rev:,.2f} | **${marg:,.2f}** | **{marg_pct:.2f}%** | {share_of_margin:.1f}% |"
-            )
+        for r in rows[:15]:
+            cat = r.get('DIM_VAL')
+            v1 = float(r.get('PRIMARY_VAL') or 0)
+            v2 = float(r.get('SECONDARY_VAL') or 0)
+            pct = float(r.get('RATIO_PCT') or 0)
+            share = (v2 / total_2 * 100.0) if total_2 > 0 else 0.0
+            table_rows.append(f"| **{cat}** | {v1:,.2f} | **{v2:,.2f}** | **{pct:.2f}%** | {share:.1f}% |")
 
+        year_label = f" ({year})" if (year_col and year) else ""
         reply = (
-            f"### 📈 Primary Drivers of Profit Margins ({target_year})\n\n"
-            f"Here is the category-level profit margin contribution synthesized directly from the **SAP HANA Cloud** column store for fiscal year **{target_year}**:\n\n"
-            f"| Product Category | Net Revenue ($) | Gross Margin ($) | Margin (%) | % of Enterprise Margin |\n"
+            f"### 📈 Primary Drivers of {m2} by {dim_col}{year_label}\n\n"
+            f"Synthesized directly from **SAP HANA Cloud** table `{target_table}`:\n\n"
+            f"| {dim_col} | {m1} | {m2} | Ratio (%) | Share (%) |\n"
             f"| :--- | :--- | :--- | :--- | :--- |\n"
             + "\n".join(table_rows) + "\n"
-            f"| **Enterprise Total** | **${total_rev:,.2f}** | **${total_margin:,.2f}** | **{overall_pct:.2f}%** | **100.0%** |\n\n"
-            f"#### 💡 Key Strategic Insights\n"
-            f"- **Top Margin Contributor:** **{rows[0].get('CATEGORY')}** generated the highest absolute gross profit (${float(rows[0].get('MARGIN') or 0):,.2f}).\n"
-            f"- **Highest Profitability:** The category with the highest margin efficiency is **{max(rows, key=lambda x: float(x.get('MARGIN_PCT') or 0)).get('CATEGORY')}** at **{float(max(rows, key=lambda x: float(x.get('MARGIN_PCT') or 0)).get('MARGIN_PCT') or 0):.2f}%**."
+            f"| **Total** | **{total_1:,.2f}** | **{total_2:,.2f}** | **{overall_pct:.2f}%** | **100.0%** |\n"
         )
         return {
             "reply": reply,
             "sources": [{
-                "ID": f"drivers:{target_year}",
-                "TEXT_CHUNK": f"Margin Drivers {target_year}: Top={rows[0].get('CATEGORY')}, Total Margin=${total_margin:,.2f}, Overall={overall_pct:.2f}%",
+                "ID": f"drivers:{target_table}",
+                "TEXT_CHUNK": f"Drivers for {target_table}: Top={rows[0].get('DIM_VAL')}, Total {m2}={total_2:,.2f}",
                 "SCORE": 1.0,
-                "METADATA": json.dumps({"source": "SAP HANA Cloud In-Memory Aggregation", "year": target_year})
+                "METADATA": json.dumps({"source": "SAP HANA Cloud Aggregation", "table": target_table})
             }],
             "intent": "analytical"
         }
 
     def _is_product_catalog_query(self, query: str) -> bool:
-        """Detect if query is requesting the list or catalog of products."""
+        """Detect if query is requesting a distinct item/entity catalog listing."""
         q = query.lower()
         patterns = [
             'all products', 'all the products', 'list of products', 'product list',
             'what products', 'which products', 'products i have', 'products do we have',
-            'available products', 'our products', 'catalog of products'
+            'available products', 'our products', 'catalog of products', 'all items', 'list of items'
         ]
         return any(p in q for p in patterns)
 
     def _compute_product_catalog(self) -> Optional[Dict[str, Any]]:
-        """Fetch distinct product catalog grouped by category from SAP HANA Cloud if applicable."""
+        """Fetch distinct entity catalog grouped dynamically by primary dimension from SAP HANA Cloud."""
         from api.database.hana_client import hana_client
-        from api.database.hana_table_service import hana_table_service
         from api.platform.datasets_metadata_repository import datasets_metadata_repo
         from api.models.execution_context import current_selection
         sel = current_selection.get()
-        hint = sel.entry.get("physical_table_name") or sel.entry.get("name") if sel and sel.entry else None
+        hint = sel.entry.get("physical_table_name") or sel.entry.get("tableName") or sel.entry.get("name") if sel and sel.entry else None
         target_table = datasets_metadata_repo._resolve_physical_table(hint)
-
-        cols = {c["name"].upper() for c in hana_table_service.get_table_columns(target_table)}
-        if not {"CATEGORY", "PRODUCTNAME"}.issubset(cols):
+        if not target_table:
             return None
 
-        revenue_col = "ROUND(SUM(NETREVENUEUSD), 2) AS TOTAL_REVENUE" if "NETREVENUEUSD" in cols else "COUNT(*) AS TOTAL_REVENUE"
-        order_col = "TOTAL_REVENUE DESC" if "NETREVENUEUSD" in cols else "ORDER_COUNT DESC"
-        sql = f'''
-            SELECT CATEGORY, PRODUCTNAME, COUNT(*) AS ORDER_COUNT, {revenue_col}
-            FROM "{target_table}"
-            GROUP BY CATEGORY, PRODUCTNAME
-            ORDER BY CATEGORY, {order_col}
-        '''
+        schema = data_service._introspect_hana_table(target_table)
+        dims = schema["dimensions"]
+        if len(dims) < 1:
+            return None
+        group_col = dims[0]
+        item_col = dims[1] if len(dims) > 1 else dims[0]
+        m1 = schema["measures"][0] if schema["measures"] else None
+
+        grp_q = data_service._quote_ident(group_col)
+        itm_q = data_service._quote_ident(item_col)
+        tbl_q = data_service._quote_ident(target_table)
+        val_expr = f"ROUND(SUM({data_service._quote_ident(m1)}), 2) AS TOTAL_VAL" if m1 else "COUNT(*) AS TOTAL_VAL"
+
+        if group_col == item_col:
+            sql = f'SELECT {grp_q} AS GRP_VAL, {itm_q} AS ITEM_VAL, COUNT(*) AS REC_COUNT, {val_expr} FROM {tbl_q} GROUP BY {grp_q} ORDER BY TOTAL_VAL DESC LIMIT 100'
+        else:
+            sql = f'SELECT {grp_q} AS GRP_VAL, {itm_q} AS ITEM_VAL, COUNT(*) AS REC_COUNT, {val_expr} FROM {tbl_q} GROUP BY {grp_q}, {itm_q} ORDER BY GRP_VAL, TOTAL_VAL DESC LIMIT 200'
+
         rows = hana_client.execute_query(sql)
         if not rows:
             return None
 
-        # Group by category for an executive breakdown
         by_cat: Dict[str, List] = {}
         for r in rows:
-            cat = r.get('CATEGORY') or 'General'
-            if cat not in by_cat:
-                by_cat[cat] = []
-            by_cat[cat].append(r)
+            cat = r.get('GRP_VAL') or 'General'
+            by_cat.setdefault(cat, []).append(r)
 
+        metric_hdr = m1 or "Count"
         category_sections = []
-        for cat, prods in by_cat.items():
-            prod_lines = [
-                f"| **{p.get('PRODUCTNAME')}** | {p.get('ORDER_COUNT'):,} | ${float(p.get('TOTAL_REVENUE') or 0):,.2f} |"
-                for p in prods[:10]  # Show top 10 per category for executive readability
-            ]
-            section = (
-                f"#### 🏷️ {cat} ({len(prods)} Products)\n"
-                f"| Product Name | Transactions | Total Net Revenue |\n"
+        for cat, items in by_cat.items():
+            lines = [f"| **{p.get('ITEM_VAL')}** | {p.get('REC_COUNT'):,} | {float(p.get('TOTAL_VAL') or 0):,.2f} |" for p in items[:10]]
+            category_sections.append(
+                f"#### 🏷️ {cat} ({len(items)} Entries)\n"
+                f"| {item_col} | Records | {metric_hdr} |\n"
                 f"| :--- | :--- | :--- |\n"
-                + "\n".join(prod_lines)
+                + "\n".join(lines)
             )
-            category_sections.append(section)
 
         reply = (
-            f"### 📦 Enterprise Product Catalog\n\n"
-            f"Retrieved **{len(rows)} distinct enterprise products** across **{len(by_cat)} categories** directly from **SAP HANA Cloud**:\n\n"
+            f"### 📦 Catalog Breakdown ({target_table})\n\n"
+            f"Retrieved **{len(rows)} distinct entries** across **{len(by_cat)} {group_col} groups** directly from **SAP HANA Cloud**:\n\n"
             + "\n\n".join(category_sections)
-            + f"\n\n*Note: Top products by revenue are displayed per category. Full catalog contains {len(rows)} SKUs across all business units.*"
         )
         return {
             "reply": reply,
             "sources": [{
-                "ID": "product_catalog",
-                "TEXT_CHUNK": f"Enterprise Product Catalog: {len(rows)} products across {len(by_cat)} categories",
+                "ID": f"catalog:{target_table}",
+                "TEXT_CHUNK": f"Catalog for {target_table}: {len(rows)} entries across {len(by_cat)} groups",
                 "SCORE": 1.0,
-                "METADATA": json.dumps({"source": "SAP HANA Cloud Distinct Catalog", "count": len(rows)})
+                "METADATA": json.dumps({"source": "SAP HANA Cloud Distinct Catalog", "table": target_table, "count": len(rows)})
             }],
             "intent": "analytical"
         }
@@ -848,14 +904,13 @@ class RAGPipeline:
         return None
 
     def _extract_what_if_params(self, query: str) -> Optional[Dict[str, Any]]:
-        """Extract what-if simulation parameters (target quantity, base quantity, order ID)."""
+        """Extract what-if simulation parameters dynamically for any alphanumeric record ID."""
         q = query.strip().lower()
         if not any(k in q for k in ['what if', 'what happens', 'instead of', 'simulate', 'if i have', 'if we have']):
             return None
-        m_order = re.search(r'\b(SO-\d+)\b', query, re.IGNORECASE)
-        if not m_order:
+        order_id = self._is_order_id_query(query)
+        if not order_id:
             return None
-        order_id = m_order.group(1).upper()
 
         m_instead = re.search(r'(?:only\s+)?(\d+)\s*(?:units?|pieces?|items?|qty)?\s*(?:in\s+quantity\s*(?:ordered)?)?\s*instead\s+of\s*(\d+)?', q)
         new_qty = None
@@ -872,79 +927,6 @@ class RAGPipeline:
         if new_qty is not None:
             return {'order_id': order_id, 'new_qty': new_qty, 'base_qty': base_qty}
         return None
-
-    def _compute_what_if_simulation(self, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Compute financial impact simulation of changing order quantity directly from SAP HANA Cloud."""
-        order_id = params['order_id']
-        new_qty = params['new_qty']
-        order_data = data_service.get_order_details(order_id)
-        if not order_data:
-            return None
-
-        base_qty = params.get('base_qty') or int(order_data.get('Quantity') or order_data.get('Units') or order_data.get('Volume') or 1)
-        rev_val = order_data.get('NetRevenueUSD') or order_data.get('Revenue') or order_data.get('Sales') or order_data.get('TotalAmount')
-        cost_val = order_data.get('TotalCostUSD') or order_data.get('CostUSD') or order_data.get('Cost') or order_data.get('TotalCost')
-        margin_val = order_data.get('GrossMarginUSD') or order_data.get('Profit') or order_data.get('Margin')
-
-        if rev_val is None and cost_val is None:
-            return None
-
-        revenue = float(rev_val or 0)
-        cost = float(cost_val or 0)
-        margin = float(margin_val or (revenue - cost))
-
-        unit_price = revenue / base_qty if base_qty > 0 else float(order_data.get('NetUnitPriceUSD') or order_data.get('UnitPrice') or 0)
-        unit_cost = cost / base_qty if base_qty > 0 else float(order_data.get('UnitCostUSD') or order_data.get('UnitCost') or 0)
-
-        sim_revenue = unit_price * new_qty
-        sim_cost = unit_cost * new_qty
-        sim_margin = sim_revenue - sim_cost
-        sim_margin_pct = (sim_margin / sim_revenue * 100.0) if sim_revenue > 0 else 0.0
-
-        base_margin_pct = float(order_data.get('GrossMarginPercent') or order_data.get('MarginPercent') or (margin / revenue * 100.0 if revenue > 0 else 0.0))
-        delta_rev = sim_revenue - revenue
-        delta_cost = sim_cost - cost
-        delta_margin = sim_margin - margin
-        delta_qty = new_qty - base_qty
-
-        product = order_data.get('ProductName') or order_data.get('Product') or order_data.get('Item') or 'N/A'
-        customer = order_data.get('CustomerName') or order_data.get('Customer') or order_data.get('Client') or 'N/A'
-        country = order_data.get('Country') or order_data.get('Region') or 'N/A'
-
-        def fmt_curr(val):
-            return f"${val:,.2f}"
-
-        def fmt_diff(val):
-            sign = "+" if val > 0 else ""
-            return f"{sign}${val:,.2f}"
-
-        reply = (
-            f"### 🔮 What-If Scenario Analysis: Order **{order_id}**\n\n"
-            f"**Simulation Scenario:** Adjusting order volume from **{base_qty} units** to **{new_qty} units** "
-            f"({'increased by +' if delta_qty > 0 else 'reduced by '}{delta_qty} units variance).\n\n"
-            f"#### 📊 Financial Impact Simulation (SAP HANA Cloud)\n"
-            f"| Metric | Baseline ({base_qty} units) | Simulated ({new_qty} units) | Variance (Δ) | Impact Analysis |\n"
-            f"| :--- | :--- | :--- | :--- | :--- |\n"
-            f"| **Net Revenue** | {fmt_curr(revenue)} | **{fmt_curr(sim_revenue)}** | **{fmt_diff(delta_rev)}** | {'🟢 Revenue Expansion' if delta_rev >= 0 else '🔻 Revenue Contraction'} |\n"
-            f"| **Cost of Goods** | {fmt_curr(cost)} | {fmt_curr(sim_cost)} | {fmt_diff(delta_cost)} | {'🔺 Higher Total Cost' if delta_cost >= 0 else '🟢 Lower Total Cost'} |\n"
-            f"| **Gross Margin ($)** | {fmt_curr(margin)} | **{fmt_curr(sim_margin)}** | **{fmt_diff(delta_margin)}** | {'🟢 Margin Expansion' if delta_margin >= 0 else '🔻 Margin Compression'} |\n"
-            f"| **Gross Margin (%)** | {base_margin_pct:.2f}% | **{sim_margin_pct:.2f}%** | 0.00% | Constant unit economics |\n\n"
-            f"#### 🛍️ Order & Product Context\n"
-            f"- **Product:** {product}\n"
-            f"- **Customer:** {customer} ({country})\n"
-            f"- **Effective Unit Price:** {fmt_curr(unit_price)} / unit\n"
-            f"- **Effective Unit Cost:** {fmt_curr(unit_cost)} / unit\n"
-        )
-        return {
-            "reply": reply,
-            "sources": [{
-                "ID": f"what_if:{order_id}",
-                "TEXT_CHUNK": f"What-If Simulation for {order_id}: Base Qty={base_qty}, Sim Qty={new_qty}, Rev Δ={fmt_diff(delta_rev)}, Margin Δ={fmt_diff(delta_margin)}",
-                "SCORE": 1.0,
-                "METADATA": current_source_metadata(order_id)
-            }],
-            "intent": "simulation"
-        }
 
     # ── Main Pipeline ─────────────────────────────────────────────────────────
 
@@ -1239,7 +1221,7 @@ class RAGPipeline:
         """Handle graph generation requests with pre-validated data."""
 
         meta = schema_service.get_metadata()
-        default_metric = next((k for k, v in meta.items() if getattr(v, "is_measure", False) or getattr(v, "type", "") == "number"), "NetRevenueUSD")
+        default_metric = next((k for k, v in meta.items() if getattr(v, "is_measure", False) or getattr(v, "is_numeric", False)), "*")
         metric = plan.get("metric") or default_metric
         dimension = plan.get("dimension")
         chart_type = plan.get("chart_type", "bar")
@@ -1327,7 +1309,7 @@ class RAGPipeline:
         """Handle analytical/ranking/comparison requests with structured data."""
 
         meta = schema_service.get_metadata()
-        default_metric = next((k for k, v in meta.items() if getattr(v, "is_measure", False) or getattr(v, "type", "") == "number"), "NetRevenueUSD")
+        default_metric = next((k for k, v in meta.items() if getattr(v, "is_measure", False) or getattr(v, "is_numeric", False)), "*")
         metric = plan.get("metric") or default_metric
         dimension = plan.get("dimension")
         aggregation = plan.get("aggregation", "SUM")
@@ -1433,7 +1415,9 @@ class RAGPipeline:
         Streaming variant of _handle_analytical.
         Uses generate_stream() and emits token events during LLM generation.
         """
-        metric = plan.get("metric", "NetRevenueUSD")
+        meta = schema_service.get_metadata()
+        default_metric = next((k for k, v in meta.items() if getattr(v, "is_measure", False) or getattr(v, "is_numeric", False)), "*")
+        metric = plan.get("metric") or default_metric
         dimension = plan.get("dimension")
         aggregation = plan.get("aggregation", "SUM")
 
@@ -1537,6 +1521,28 @@ class RAGPipeline:
 
     # ── Chat Handler ──────────────────────────────────────────────────────────
 
+    def _build_record_context_chunk(self, record_id: str, record_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Serialize any record's dynamic attributes and unit metrics into a RAG context chunk."""
+        attrs = [f"{k}: {v}" for k, v in record_data.items() if not str(k).startswith("_") and v is not None]
+        fields = self._resolve_record_financials(record_data)
+        unit_notes = ""
+        if fields["rev"] is not None and fields["qty"] > 0:
+            rev = float(fields["rev"] or 0)
+            cost = float(fields["cost"] or 0)
+            margin = float(fields["margin"] if fields["margin"] is not None else (rev - cost))
+            qty = fields["qty"]
+            unit_notes = (
+                f" | Calculated Unit Value: {rev / qty:,.2f}/unit, "
+                f"Calculated Unit Cost: {cost / qty:,.2f}/unit, "
+                f"Calculated Unit Net: {margin / qty:,.2f}/unit"
+            )
+        return {
+            "ID": record_id,
+            "TEXT_CHUNK": f"Exact Record Data for {record_id}: " + ", ".join(attrs) + unit_notes,
+            "SCORE": 1.0,
+            "METADATA": current_source_metadata(record_id),
+        }
+
     def _handle_chat(self, user_message: str, plan: Dict[str, Any],
                      steps: List, ctx: RequestContext, top_k: int,
                      order_id: str = None,
@@ -1568,39 +1574,11 @@ class RAGPipeline:
                 step_calc["message"] = "No additional metadata needed for this query."
                 self._emit(cb, "calculation", "completed", step_calc["message"])
 
-        # If order_id with analytical context (what-if scenarios)
+        # If record ID with analytical context (what-if scenarios)
         if order_id and not self._is_pure_order_lookup(user_message):
             order_data = data_service.get_order_details(order_id)
             if order_data:
-                revenue = float(order_data.get('NetRevenueUSD', 0) or 0)
-                cost = float(order_data.get('TotalCostUSD', order_data.get('CostUSD', 0)) or 0)
-                margin = float(order_data.get('GrossMarginUSD', 0) or 0)
-                margin_pct = float(order_data.get('GrossMarginPercent', 0) or 0)
-                qty = int(order_data.get('Quantity', 1) or 1)
-                unit_price = (revenue / qty) if qty > 0 else 0
-                unit_cost = (cost / qty) if qty > 0 else 0
-                unit_margin = (margin / qty) if qty > 0 else 0
-
-                order_context_chunk = {
-                    "ID": order_id,
-                    "TEXT_CHUNK": (
-                        f"Exact Order Data for {order_id}: "
-                        f"Product Name: {order_data.get('ProductName', 'N/A')}, "
-                        f"Category: {order_data.get('Category', 'N/A')}, SubCategory: {order_data.get('SubCategory', order_data.get('Subcategory', 'N/A'))}, "
-                        f"Customer: {order_data.get('CustomerName', 'N/A')}, Country: {order_data.get('Country', 'N/A')}, "
-                        f"Original Quantity Ordered: {qty} units, "
-                        f"Original Total Net Revenue: ${revenue:,.2f}, "
-                        f"Original Total Cost of Goods: ${cost:,.2f}, "
-                        f"Original Total Gross Margin: ${margin:,.2f}, "
-                        f"Gross Margin %: {margin_pct:.2f}%, "
-                        f"Calculated Unit Selling Price: ${unit_price:,.2f} per unit, "
-                        f"Calculated Unit Cost: ${unit_cost:,.2f} per unit, "
-                        f"Calculated Unit Gross Margin: ${unit_margin:,.2f} per unit."
-                    ),
-                    "SCORE": 1.0,
-                    "METADATA": current_source_metadata(order_id)
-                }
-                context_chunks.append(order_context_chunk)
+                context_chunks.append(self._build_record_context_chunk(order_id, order_data))
 
         # Stage: Vector retrieval (Unconditional for all chat RAG responses)
         self._emit(cb, "retrieval", "running", "Searching Vector DB...")
@@ -1688,39 +1666,11 @@ class RAGPipeline:
                 step_calc["message"] = "No additional metadata needed for this query."
                 self._emit(cb, "calculation", "completed", step_calc["message"])
 
-        # If order_id with analytical context (what-if scenarios)
+        # If record ID with analytical context (what-if scenarios)
         if order_id and not self._is_pure_order_lookup(user_message):
             order_data = data_service.get_order_details(order_id)
             if order_data:
-                revenue = float(order_data.get('NetRevenueUSD', 0) or 0)
-                cost = float(order_data.get('TotalCostUSD', order_data.get('CostUSD', 0)) or 0)
-                margin = float(order_data.get('GrossMarginUSD', 0) or 0)
-                margin_pct = float(order_data.get('GrossMarginPercent', 0) or 0)
-                qty = int(order_data.get('Quantity', 1) or 1)
-                unit_price = (revenue / qty) if qty > 0 else 0
-                unit_cost = (cost / qty) if qty > 0 else 0
-                unit_margin = (margin / qty) if qty > 0 else 0
-
-                order_context_chunk = {
-                    "ID": order_id,
-                    "TEXT_CHUNK": (
-                        f"Exact Order Data for {order_id}: "
-                        f"Product Name: {order_data.get('ProductName', 'N/A')}, "
-                        f"Category: {order_data.get('Category', 'N/A')}, SubCategory: {order_data.get('SubCategory', order_data.get('Subcategory', 'N/A'))}, "
-                        f"Customer: {order_data.get('CustomerName', 'N/A')}, Country: {order_data.get('Country', 'N/A')}, "
-                        f"Original Quantity Ordered: {qty} units, "
-                        f"Original Total Net Revenue: ${revenue:,.2f}, "
-                        f"Original Total Cost of Goods: ${cost:,.2f}, "
-                        f"Original Total Gross Margin: ${margin:,.2f}, "
-                        f"Gross Margin %: {margin_pct:.2f}%, "
-                        f"Calculated Unit Selling Price: ${unit_price:,.2f} per unit, "
-                        f"Calculated Unit Cost: ${unit_cost:,.2f} per unit, "
-                        f"Calculated Unit Gross Margin: ${unit_margin:,.2f} per unit."
-                    ),
-                    "SCORE": 1.0,
-                    "METADATA": current_source_metadata(order_id)
-                }
-                context_chunks.append(order_context_chunk)
+                context_chunks.append(self._build_record_context_chunk(order_id, order_data))
 
         # Stage: Vector retrieval
         self._emit(cb, "retrieval", "running", "Searching SAP HANA Cloud Vector DB...")

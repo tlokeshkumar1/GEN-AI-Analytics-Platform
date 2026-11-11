@@ -60,17 +60,17 @@ def validate_token(token: str, credentials: dict | None = None) -> tuple:
     is_dev = os.getenv("APP_ENV", "").lower() == "development" and not os.getenv("VCAP_APPLICATION")
     if is_dev and token.startswith("dev-token-"):
         logger.warning("Local development mock token used. This is strictly prohibited in production.")
+        from urllib.parse import unquote
+        parts = token.split(":")
+        user_email = unquote(parts[1]) if len(parts) > 1 else os.getenv("DEV_AUTH_EMAIL", "dev-admin@localhost")
+        user_name = unquote(parts[2]) if len(parts) > 2 else os.getenv("DEV_AUTH_NAME", "Local Dev Admin")
+        user_id = parts[3] if len(parts) > 3 else "dev-admin-user"
+
         class LocalDevSecurityContext:
             def check_local_scope(self, scope: str) -> bool:
                 return True
             def get_logon_name(self) -> str:
-                return "admin@sap.corp"
-
-        from urllib.parse import unquote
-        parts = token.split(":")
-        user_email = unquote(parts[1]) if len(parts) > 1 else "lokesh@neovatic.com"
-        user_name = unquote(parts[2]) if len(parts) > 2 else "Lokesh Kumar (Admin)"
-        user_id = parts[3] if len(parts) > 3 else "dev-admin-user"
+                return user_email
 
         claims = {
             "user_id": user_id,

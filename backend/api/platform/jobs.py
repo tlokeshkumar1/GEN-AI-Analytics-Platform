@@ -262,17 +262,64 @@ class JobService:
             progress("committing", prepared_checkpoint=checkpoint)
             if binding.get("mode", "replace") == "replace":
                 receipt = self.datasets.upload(content, filename, async_index=True, transformation_plan=plan,
-                                               ingestion_id=key, target_dataset_id=binding.get("dataset_id"), source_id=payload["binding_id"])
+                                               ingestion_id=key, target_dataset_id=binding.get("dataset_id"), source_id=payload["binding_id"],
+                                               table_name=binding.get("table_name"))
             else:
                 if not binding.get("dataset_id"):
                     raise HTTPException(422, "Append and upsert require an existing target dataset.")
                 receipt = self.datasets.ingest_rows(binding["dataset_id"], records, binding["mode"], key, payload["binding_id"],
                                                     binding.get("keys"), binding.get("duplicate_policy", "keep"), binding.get("deletion_field"))
+            self._enrich_synced_dataset(receipt, binding)
         # Checkpoints move only after the dataset receipt was committed. Retrying reuses that receipt.
         latest = self.store.get(namespace, payload["binding_id"])
         self.store.put(namespace, payload["binding_id"], {**latest["value"], "dataset_id": receipt["dataset"]["id"],
                        "checkpoint": checkpoint, "last_ingestion_id": key, "last_synced_at": now()}, latest["revision"])
         return {"dataset_id": receipt["dataset"]["id"], "version": receipt["version"]}
+
+    def _enrich_synced_dataset(self, receipt, binding):
+        """Auto-propose open-domain semantic model and sync HANA table for connector datasets."""
+        try:
+            ds_id = receipt["dataset"]["id"]
+            version = receipt["version"]
+            catalog = self.datasets._catalog()
+            entry = self.datasets._entry(catalog, ds_id)
+            snapshot = self.datasets._snapshot(entry, version)
+            if not snapshot or not snapshot.get("rows") or not snapshot.get("columns"):
+                return
+            frame = self.datasets._frame(snapshot["rows"], snapshot["columns"])
+
+            # 1. Propose open-domain semantic model if none exists for this version
+            from api.platform.semantic import SemanticRegistry
+            registry = SemanticRegistry(self.store)
+            if not registry.list(entry, version):
+                try:
+                    from api.platform.agent_domain_classifier import domain_classifier_agent
+                    model = domain_classifier_agent.analyze(df=frame, dataset_id=ds_id, data_version=version)
+                    registry.propose(entry, version, snapshot, overrides=model.model_dump())
+                except Exception:
+                    registry.propose(entry, version, snapshot)
+
+            # 2. Persist synced dataframe to dynamic HANA table when HANA is connected
+            try:
+                from api.database.connection import db_manager
+                from api.database.hana_table_service import hana_table_service
+                if db_manager.get_connection() is not None:
+                    folder = entry.get("folder") or binding.get("name") or ds_id
+                    active_table = binding.get("table_name") or entry.get("tableName") or f"DS_{folder[:18].upper()}_V{version}"
+                    action = "append" if binding.get("mode") == "append" else "replace"
+                    res = hana_table_service.persist_dataframe(df=frame, table_name=active_table, action=action)
+                    if res.get("success") and not entry.get("tableName"):
+                        with self.datasets._writer():
+                            cat = self.datasets._catalog()
+                            rentry = self.datasets._entry(cat, ds_id)
+                            rentry["tableName"] = active_table
+                            rentry["table_name"] = active_table
+                            if hasattr(self.datasets, "_write_json") and hasattr(self.datasets, "catalog_path"):
+                                self.datasets._write_json(self.datasets.catalog_path, cat)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
 
 job_service = JobService()

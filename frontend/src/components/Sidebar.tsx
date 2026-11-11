@@ -310,12 +310,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
               </div>
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-semibold text-slate-900 truncate" title={user?.name || 'Analytics Admin'}>
-                  {user?.name || 'Analytics Admin'}
+                <div className="text-xs font-semibold text-slate-900 truncate" title={user?.name || displayRole}>
+                  {user?.name || displayRole}
                 </div>
-                <div className="text-[10px] text-slate-500 truncate font-mono" title={user?.email || 'admin@sap.corp'}>
-                  {user?.email || 'admin@sap.corp'}
-                </div>
+                {user?.email && (
+                  <div className="text-[10px] text-slate-500 truncate font-mono" title={user.email}>
+                    {user.email}
+                  </div>
+                )}
               </div>
               <span className={`text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded shrink-0 ${
                 isAdmin ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-700'

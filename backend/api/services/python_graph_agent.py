@@ -66,39 +66,6 @@ _CHART_KEYWORDS: Dict[str, str] = {
     "bar":         "bar",
 }
 
-_DIM_KEYWORDS: Dict[str, str] = {
-    "category":    "Category",
-    "subcategory": "Subcategory",
-    "country":     "Country",
-    "region":      "Region",
-    "segment":     "CustomerSegment",
-    "industry":    "IndustryVertical",
-    "vertical":    "IndustryVertical",
-    "channel":     "Channel",
-    "product":     "ProductName",
-    "quarter":     "Quarter",
-    "month":       "MonthName",
-    "sales rep":   "SalesRepName",
-    "rep":         "SalesRepName",
-}
-
-_MEASURE_KEYWORDS: Dict[str, str] = {
-    "gross profit": "GrossMarginUSD",
-    "gross margin": "GrossMarginUSD",
-    "margin usd":  "GrossMarginUSD",
-    "margin %":    "GrossMarginPercent",
-    "margin percent": "GrossMarginPercent",
-    "profit":   "GrossMarginUSD",
-    "margin":   "GrossMarginUSD",
-    "quantity": "Quantity",
-    "units":    "Quantity",
-    "discount": "DiscountPercent",
-    "cost":     "TotalCostUSD",
-    "price":    "UnitListPriceUSD",
-    "revenue":  "NetRevenueUSD",
-    "sales":    "NetRevenueUSD",
-}
-
 # Aggregation function mapping
 _AGG_MAP = {
     "SUM": "sum",
@@ -109,6 +76,16 @@ _AGG_MAP = {
     "MAX": "max",
     "COUNT_DISTINCT": "nunique",
 }
+
+
+def _is_currency_hint(col: str) -> bool:
+    low = str(col).lower()
+    return any(k in low for k in ("usd", "eur", "inr", "revenue", "sales", "salary", "cost", "price", "margin", "amount", "budget", "profit"))
+
+
+def _is_pct_hint(col: str) -> bool:
+    low = str(col).lower()
+    return any(k in low for k in ("percent", "pct", "ratio", "rate"))
 
 
 class PythonGraphAgent:
@@ -131,36 +108,25 @@ class PythonGraphAgent:
             import tempfile
             return Path(tempfile.gettempdir()) / "HANA_ACTIVE_DATASET.pkl"
 
-    def _get_schema_summary(self) -> str:
-        """Return a rich schema description including sample values."""
+    def _get_schema_summary(self, df: Optional[pd.DataFrame] = None) -> str:
+        """Return a rich schema description including sample values dynamically."""
         try:
-            df = excel_dataset_service.get_df()
+            target_df = df if df is not None else excel_dataset_service.get_df()
+            if target_df is None or target_df.empty:
+                return "No active dataset schema available."
             lines: list[str] = []
-            for col in df.columns:
-                dtype = str(df[col].dtype)
-                if pd.api.types.is_numeric_dtype(df[col]):
-                    mn, mx = df[col].min(), df[col].max()
+            for col in target_df.columns:
+                dtype = str(target_df[col].dtype)
+                if pd.api.types.is_numeric_dtype(target_df[col]):
+                    mn, mx = target_df[col].min(), target_df[col].max()
                     lines.append(f"  - {col} [{dtype}] — range: {mn} → {mx}")
                 else:
-                    unique_vals = df[col].dropna().unique()[:6].tolist()
+                    unique_vals = target_df[col].dropna().unique()[:6].tolist()
                     samples = ", ".join(str(v) for v in unique_vals)
                     lines.append(f"  - {col} [{dtype}] — sample values: {samples}")
             return "\n".join(lines)
         except Exception:
-            return (
-                "  - NetRevenueUSD [int64]\n"
-                "  - Quantity [int64]\n"
-                "  - Category [object]\n"
-                "  - Subcategory [object]\n"
-                "  - Region [object]\n"
-                "  - Country [object]\n"
-                "  - MonthName [object]\n"
-                "  - Quarter [object]\n"
-                "  - GrossMarginPercent [float64]\n"
-                "  - DiscountPercent [float64]\n"
-                "  - TotalCostUSD [int64]\n"
-                "  - UnitListPriceUSD [float64]"
-            )
+            return "No active dataset schema available."
 
     # ── Step 5: Intent parsing (dimension / measure / chart type) ─────────────
 
@@ -178,21 +144,19 @@ class PythonGraphAgent:
             return "pie"
         return "bar"
 
+    def _get_active_semantic_model(self):
+        try:
+            from api.models.execution_context import current_selection
+            sel = current_selection.get()
+            if sel and sel.entry:
+                from api.platform.semantic import semantic_registry
+                return semantic_registry.get(sel.entry, sel.context.version, sel.context.semantic_revision, approved=False)
+        except Exception:
+            pass
+        return None
+
     def _infer_dim(self, prompt: str, df: Optional[pd.DataFrame] = None) -> str:
         p = prompt.lower()
-        # Check for multi-year composite dimensions first
-        import re as _re
-        years = _re.findall(r'\b(20[12]\d)\b', p)
-        multi_year = len(set(years)) > 1
-        if multi_year:
-            quarterly_words = ["quarterly", "quarter", "each quarter"]
-            monthly_words = ["monthly", "month", "each month"]
-            separately_words = ["separately", "each", "broken down"]
-            if any(w in p for w in quarterly_words) or (any(w in p for w in separately_words) and "quarter" in p):
-                return "Year, Quarter"
-            if any(w in p for w in monthly_words) or (any(w in p for w in separately_words) and "month" in p):
-                return "Year, MonthName"
-
         target_df = df
         if target_df is None:
             try:
@@ -201,30 +165,33 @@ class PythonGraphAgent:
             except Exception:
                 pass
 
+        model = self._get_active_semantic_model()
+        if model and model.fields:
+            for f in [f for f in model.fields if f.role in ("dimension", "time", "identifier")]:
+                candidates = [f.name.lower(), f.semantic_name.lower()] + [a.lower() for a in (f.aliases or [])]
+                if any(re.search(r"\b" + re.escape(c) + r"\b", p) for c in candidates if c):
+                    return f.name
+
         if target_df is not None and not target_df.empty:
             cats = [c for c in target_df.columns if not str(c).lower().endswith(('id', 'code', 'key'))]
             for col in cats:
                 clean = str(col).lower()
                 if clean in p or clean.replace('_', ' ') in p:
                     return col
-            # Check by/per/across regex
-            m_by = _re.search(r'\b(?:by|per|across|for each|split by|group by)\s+([a-zA-Z0-9_]+)', p)
+            m_by = re.search(r'\b(?:by|per|across|for each|split by|group by)\s+([a-zA-Z0-9_]+)', p)
             if m_by:
                 word = m_by.group(1).lower()
                 for col in target_df.columns:
                     if word in str(col).lower():
                         return col
 
-        for kw, col in _DIM_KEYWORDS.items():
-            if kw in p:
-                return col
+            str_cats = [c for c in target_df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            if str_cats:
+                return str_cats[0]
+            if len(target_df.columns) > 0:
+                return str(target_df.columns[0])
 
-        if target_df is not None and not target_df.empty:
-            cats = [c for c in target_df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-            if cats:
-                return cats[0]
-
-        return "Region"
+        return ""
 
     def _infer_measure(self, prompt: str, df: Optional[pd.DataFrame] = None) -> str:
         p = prompt.lower()
@@ -236,17 +203,13 @@ class PythonGraphAgent:
             except Exception:
                 pass
 
-        # 1. First check explicit keyword dictionary (e.g. "gross margin" -> GrossMarginUSD)
-        for kw, col in _MEASURE_KEYWORDS.items():
-            if kw in p:
-                if target_df is not None and not target_df.empty:
-                    # Resolve against actual column in dataframe
-                    matched = next((c for c in target_df.columns if c.lower() == col.lower() or c.lower().replace("_", "") == col.lower()), None)
-                    if matched:
-                        return matched
-                return col
+        model = self._get_active_semantic_model()
+        if model and model.fields:
+            for f in [f for f in model.fields if f.role == "measure"]:
+                candidates = [f.name.lower(), f.semantic_name.lower()] + [a.lower() for a in (f.aliases or [])]
+                if any(re.search(r"\b" + re.escape(c) + r"\b", p) for c in candidates if c):
+                    return f.name
 
-        # 2. Check matching column names in target_df
         if target_df is not None and not target_df.empty:
             nums = [
                 c for c in target_df.select_dtypes(include=['number']).columns
@@ -255,22 +218,18 @@ class PythonGraphAgent:
             ]
             for col in nums:
                 clean = str(col).lower()
-                clean_no_usd = clean.replace('usd', '').replace('eur', '').replace('inr', '')
-                if clean in p or clean_no_usd in p or clean.replace('_', ' ') in p:
+                clean_no_curr = re.sub(r'(?:usd|eur|inr|gbp)$', '', clean)
+                if clean in p or (clean_no_curr and clean_no_curr in p) or clean.replace('_', ' ') in p:
                     return col
-            if nums and any(k in p for k in ["total", "sum", "average", "avg", "salary", "cost", "price", "rate", "revenue", "count"]):
-                return nums[0]
-
-        if target_df is not None and not target_df.empty:
-            nums = [
-                c for c in target_df.select_dtypes(include=['number']).columns
-                if not str(c).lower().endswith(('id', 'code', 'key'))
-                and str(c).lower() not in ('year', 'month', 'monthnum', 'quarter', 'day', 'week')
-            ]
             if nums:
                 return nums[0]
+            all_nums = target_df.select_dtypes(include=['number']).columns.tolist()
+            if all_nums:
+                return str(all_nums[0])
+            if len(target_df.columns) > 0:
+                return str(target_df.columns[0])
 
-        return "NetRevenueUSD"
+        return ""
 
     # ──────────────────────────────────────────────────────────────────────────
     # NEW: Deterministic Pre-Computation & Reconciliation
@@ -382,15 +341,14 @@ class PythonGraphAgent:
         if isinstance(target, dict):
             plan = target
             chart_type = plan.get("chart_type", "bar")
-            dim = plan.get("dimension") or plan.get("dim") or "Region"
-            measure = plan.get("measure", "NetRevenueUSD")
+            dim = plan.get("dimension") or plan.get("dim") or ""
+            measure = plan.get("measure", "")
             aggregation = plan.get("aggregation", "SUM")
             filters = plan.get("filters", [])
             date_filter = plan.get("date_filter")
             limit = plan.get("top_n") or plan.get("limit")
             sort_dir = plan.get("sort_dir", "DESC")
             if df is None:
-                # Expecting df as 2nd arg if 1st arg is dict: _compute_graph_dataset(plan, df)
                 if dim is not None and isinstance(dim, pd.DataFrame):
                     df = dim
         else:
@@ -404,19 +362,21 @@ class PythonGraphAgent:
         # Apply filters
         filtered = self._apply_filters(df, filters, date_filter)
 
+        # Dynamically resolve fallback dim/measure if empty
+        if not measure and filtered is not None and not filtered.empty:
+            nums = [c for c in filtered.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            measure = nums[0] if nums else str(filtered.columns[0])
+        if not dim and filtered is not None and not filtered.empty:
+            cats = [c for c in filtered.select_dtypes(include=['object', 'string']).columns if c != measure and not str(c).lower().endswith(('id', 'code', 'key'))]
+            dim = cats[0] if cats else str(filtered.columns[0])
+
         # For heatmap/correlation:
         if chart_type == "heatmap":
             sec_dim = None
             if dim and dim in filtered.columns and measure and measure in filtered.columns:
-                for candidate in ["CATEGORY", "Category", "QUARTER", "Quarter", "CHANNEL", "Channel", "CUSTOMERSEGMENT", "CustomerSegment", "SUBCATEGORY", "Subcategory"]:
-                    match = next((c for c in filtered.columns if c.lower() == candidate.lower()), None)
-                    if match and match.lower() != str(dim).lower():
-                        sec_dim = match
-                        break
-                if not sec_dim:
-                    cats = [c for c in filtered.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
-                    if cats:
-                        sec_dim = cats[0]
+                cats = [c for c in filtered.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
+                if cats:
+                    sec_dim = cats[0]
 
             if sec_dim and dim and measure:
                 pivot = filtered.pivot_table(index=dim, columns=sec_dim, values=measure, aggfunc=_AGG_MAP.get(aggregation, "sum"), fill_value=0)
@@ -450,7 +410,8 @@ class PythonGraphAgent:
             for part in dim_parts:
                 if part not in filtered.columns:
                     logger.warning(f"[PreCompute] Composite dim part '{part}' not in columns, falling back")
-                    dim = "Region"
+                    cats = [c for c in filtered.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+                    dim = cats[0] if cats else str(filtered.columns[0])
                     is_composite = False
                     break
 
@@ -481,11 +442,14 @@ class PythonGraphAgent:
             return agg
 
         if chart_type == "stacked_bar":
-            sec_dim = "Category" if dim != "Category" else "Region"
-            if sec_dim not in filtered.columns:
-                sec_dims = [c for c in filtered.columns if c != dim and filtered[c].dtype == object]
-                sec_dim = sec_dims[0] if sec_dims else "Region"
-            agg = filtered.groupby([dim, sec_dim])[measure].agg(agg_func).reset_index()
+            sec_dims = [c for c in filtered.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
+            if not sec_dims:
+                sec_dims = [c for c in filtered.columns if c != dim and c != measure]
+            sec_dim = sec_dims[0] if sec_dims else dim
+            if sec_dim == dim:
+                agg = filtered.groupby(dim)[measure].agg(agg_func).reset_index()
+            else:
+                agg = filtered.groupby([dim, sec_dim])[measure].agg(agg_func).reset_index()
         else:
             agg = filtered.groupby(dim)[measure].agg(agg_func).reset_index()
 
@@ -530,8 +494,8 @@ class PythonGraphAgent:
         if isinstance(target, dict):
             plan = target
             chart_type = plan.get("chart_type", "bar")
-            dim = plan.get("dimension") or plan.get("dim") or "Region"
-            measure = plan.get("measure", "NetRevenueUSD")
+            dim = plan.get("dimension") or plan.get("dim") or ""
+            measure = plan.get("measure", "")
             aggregation = plan.get("aggregation", "SUM")
             filters = plan.get("filters", [])
             date_filter = plan.get("date_filter")
@@ -544,6 +508,12 @@ class PythonGraphAgent:
             filters = []
         if df is None:
             df = excel_dataset_service.get_df()
+        if not measure and df is not None and not df.empty:
+            nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            measure = nums[0] if nums else str(df.columns[0])
+        if not dim and df is not None and not df.empty:
+            cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if c != measure and not str(c).lower().endswith(('id', 'code', 'key'))]
+            dim = cats[0] if cats else str(df.columns[0])
 
         # Skip reconciliation for chart types that don't aggregate
         if chart_type in ("heatmap", "scatter", "box", "violin"):
@@ -599,8 +569,8 @@ class PythonGraphAgent:
         clean_output: str,
         df_agg: Optional[pd.DataFrame] = None,
         chart_type: str = "bar",
-        dim: str = "Region",
-        measure: str = "NetRevenueUSD",
+        dim: str = "",
+        measure: str = "",
     ) -> str:
         schema = self._get_schema_summary()
         read_stmt = (
@@ -743,7 +713,8 @@ Generate complete Python code only. No explanation."""
     def _generate_python_code(
         self, prompt: str, output_img_path: str, fallback_mode: bool = False,
         df_agg: Optional[pd.DataFrame] = None,
-        chart_type: str = "bar", dim: str = "Region", measure: str = "NetRevenueUSD",
+        chart_type: str = "bar", dim: str = "", measure: str = "",
+        df: Optional[pd.DataFrame] = None,
     ) -> str:
         """
         Step 6 — Synthesize a standalone Python visualization script.
@@ -778,7 +749,7 @@ Generate complete Python code only. No explanation."""
 
         # ── Deterministic fallback ───────────────────────────────────────────
         logger.info(f"[Graph Agent] Deterministic fallback → chart={chart_type}, dim={dim}, measure={measure}")
-        return self._deterministic_code(chart_type, dim, measure, clean_ds, clean_out, read_stmt, df_agg)
+        return self._deterministic_code(chart_type, dim, measure, clean_ds, clean_out, read_stmt, df_agg, df=df)
 
     # ── Deterministic code templates ──────────────────────────────────────────
 
@@ -786,7 +757,14 @@ Generate complete Python code only. No explanation."""
         self, chart_type: str, dim: str, measure: str,
         clean_ds: str, clean_out: str, read_stmt: str,
         df_agg: Optional[pd.DataFrame] = None,
+        df: Optional[pd.DataFrame] = None,
     ) -> str:
+        source_df = df
+        if source_df is None:
+            try:
+                source_df = excel_dataset_service.get_df()
+            except Exception:
+                source_df = pd.DataFrame()
         # Check composite dimensions
         is_composite_dim = ", " in str(dim)
         if is_composite_dim:
@@ -831,9 +809,14 @@ PALETTE = sns.color_palette("Blues_r", 10)
 {ds_load}
 
 def fmt_val(v, col):
-    if col in ("NetRevenueUSD", "TotalCostUSD", "GrossMarginUSD") and abs(v) >= 1e6:
+    low = str(col).lower()
+    is_curr = any(k in low for k in ("usd", "eur", "inr", "revenue", "sales", "salary", "cost", "price", "margin", "amount", "budget", "profit"))
+    is_pct = any(k in low for k in ("percent", "pct", "ratio", "rate"))
+    if is_curr and abs(v) >= 1e6:
         return f"${{v/1e6:.2f}}M"
-    if col in ("GrossMarginPercent", "DiscountPercent"):
+    if is_curr:
+        return f"${{v:,.2f}}" if abs(v) < 1000 else f"${{v:,.0f}}"
+    if is_pct:
         return f"{{v:.1f}}%"
     return f"{{v:,.0f}}"
 """
@@ -882,16 +865,10 @@ for spine in ["top", "right", "left"]:
         # ── Heatmap / Correlation ─────────────────────────────────────────────
         if chart_type == "heatmap":
             sec_dim = None
-            if dim in df.columns and measure in df.columns:
-                for candidate in ["CATEGORY", "Category", "QUARTER", "Quarter", "CHANNEL", "Channel", "CUSTOMERSEGMENT", "CustomerSegment"]:
-                    match = next((c for c in df.columns if c.lower() == candidate.lower()), None)
-                    if match and match.lower() != str(dim).lower():
-                        sec_dim = match
-                        break
-                if not sec_dim:
-                    cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
-                    if cats:
-                        sec_dim = cats[0]
+            if source_df is not None and not source_df.empty and dim in source_df.columns and measure in source_df.columns:
+                cats = [c for c in source_df.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
+                if cats:
+                    sec_dim = cats[0]
 
             if sec_dim:
                 return header + f"""
@@ -912,7 +889,7 @@ corr = df[num_cols].corr() if len(num_cols) >= 2 else df.select_dtypes(include=[
 fig, ax = plt.subplots(figsize=(10, 7), dpi=300)
 sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", linewidths=0.5,
             annot_kws={{"size": 8, "weight": "bold"}}, ax=ax)
-ax.set_title("Correlation Matrix — Financial & Sales Metrics",
+ax.set_title("Correlation Matrix — Numeric Metrics",
              fontsize=14, fontweight="bold", pad=15, color="#0f172a")
 plt.xticks(rotation=30, ha="right")
 plt.yticks(rotation=0)
@@ -920,7 +897,15 @@ plt.yticks(rotation=0)
 
         # ── Stacked Bar ───────────────────────────────────────────────────────
         if chart_type == "stacked_bar":
-            sec_dim = "Category" if "Category" not in dim else "Region"
+            sec_dim = None
+            if df_agg is not None and not df_agg.empty:
+                other_cols = [c for c in df_agg.columns if c not in (dim, label_col, measure)]
+                if other_cols:
+                    sec_dim = other_cols[0]
+            if not sec_dim and source_df is not None and not source_df.empty:
+                cats = [c for c in source_df.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
+                sec_dim = cats[0] if cats else dim
+            sec_dim = sec_dim or dim
             if agg_read:
                 pivot_src = f"""{agg_read}
 pivot = agg.pivot_table(index="{label_col}" if "{label_col}" in agg.columns else agg.columns[0], columns="{sec_dim}", values="{measure}", fill_value=0)
@@ -967,13 +952,11 @@ ax.set_title(f"Share of {measure} by {label_col}",
 
         # ── Line / Area ───────────────────────────────────────────────────────
         if chart_type in ("line", "area"):
-            if is_composite_dim:
-                line_x_col = label_col
-            else:
-                line_x_col = "Quarter" if "quarter" in dim.lower() else ("MonthName" if "month" in dim.lower() else dim)
+            line_x_col = label_col if is_composite_dim else dim
             agg_src = agg_block(f'''agg = df.groupby("{line_x_col}")["{measure}"].sum().reset_index()
 ''')
             fill = f"ax.fill_between(range(len(agg)), agg['{measure}'], color='#38bdf8', alpha=0.3)" if chart_type == "area" else ""
+            is_curr = _is_currency_hint(measure)
             return header + f"""
 {agg_src}
 fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
@@ -988,7 +971,7 @@ ax.set_xlabel("{line_x_col}", fontsize=11, fontweight="bold", color="#334155")
 ax.set_ylabel("{measure}", fontsize=11, fontweight="bold", color="#334155")
 plt.xticks(rotation=20, ha="right")
 ax.yaxis.set_major_formatter(mticker.FuncFormatter(
-    lambda x, _: f"${{x/1e6:.1f}}M" if "{measure}" in ("NetRevenueUSD", "TotalCostUSD") and x >= 1e6 else f"{{x:,.0f}}"
+    lambda x, _: f"${{x/1e6:.1f}}M" if {is_curr} and x >= 1e6 else f"{{x:,.0f}}"
 ))
 """ + save
 
@@ -1057,7 +1040,14 @@ plt.xticks(rotation=30, ha="right")
 
         # ── Scatter ───────────────────────────────────────────────────────────
         if chart_type == "scatter":
-            sec = "DiscountPercent" if measure != "DiscountPercent" else "GrossMarginPercent"
+            sec = None
+            if source_df is not None and not source_df.empty:
+                other_nums = [
+                    c for c in source_df.select_dtypes(include=['number']).columns
+                    if c != measure and not str(c).lower().endswith(('id', 'code', 'key'))
+                ]
+                sec = other_nums[0] if other_nums else measure
+            sec = sec or measure
             s_dim = dim_parts[0] if is_composite_dim else dim
             return header + f"""
 sample = df.sample(n=min(1200, len(df)), random_state=42)
@@ -1072,6 +1062,7 @@ plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
         # ── Default: Bar chart / Grouped Bar chart ────────────────────────────
         agg_src = agg_block()
         x_col = label_col
+        is_curr = _is_currency_hint(measure)
 
         return header + f"""
 {agg_src}
@@ -1093,7 +1084,7 @@ ax.set_xlabel("{label_col}", fontsize=11, fontweight="bold", color="#334155")
 ax.set_ylabel("Total {measure}", fontsize=11, fontweight="bold", color="#334155")
 plt.xticks(rotation=30, ha="right")
 ax.yaxis.set_major_formatter(mticker.FuncFormatter(
-    lambda x, _: f"${{x/1e6:.1f}}M" if "{measure}" in ("NetRevenueUSD", "TotalCostUSD", "GrossMarginUSD") and x >= 1e6 else f"{{x:,.0f}}"
+    lambda x, _: f"${{x/1e6:.1f}}M" if {is_curr} and x >= 1e6 else f"{{x:,.0f}}"
 ))
 for bar in bars:
     h = bar.get_height()
@@ -1118,14 +1109,15 @@ for bar in bars:
 
     # ── Step 8 + cleanup insights ─────────────────────────────────────────────
 
-    def _build_insights(self, prompt: str, chart_type: str, dim: str, measure: str, script_name: str, verified: bool = True) -> str:
+    def _build_insights(self, prompt: str, chart_type: str, dim: str, measure: str, script_name: str, verified: bool = True, dataset_name: Optional[str] = None) -> str:
         chart_label = chart_type.replace("_", " ").title()
         verification_note = "✅ Data verified" if verified else "⚠️ Verification failed — using deterministic fallback"
+        ds_label = dataset_name or "Active Dataset"
         return (
             f"• **AI Graph Agent** generated a **{chart_label} Chart** for your request.\n"
             f"• Visualizing **{measure}** grouped by **{dim}**.\n"
             f"• {verification_note}\n"
-            f"• Dataset: `SAC_Sales_Preprocessed` — temp script `{script_name}` auto-deleted after execution."
+            f"• Dataset: `{ds_label}` — temp script `{script_name}` auto-deleted after execution."
         )
 
     # ── Step 3–10: Main entry point ───────────────────────────────────────────
@@ -1230,7 +1222,7 @@ for bar in bars:
                 measure = resolved_m
             elif measure not in df.columns:
                 nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                fallback_meas = nums[0] if nums else (df.columns[0] if len(df.columns) > 0 else "NetRevenueUSD")
+                fallback_meas = nums[0] if nums else (df.columns[0] if len(df.columns) > 0 else "")
                 logger.warning(f"[Graph Agent] Metric '{measure}' not found. Falling back to {fallback_meas}.")
                 measure = fallback_meas
 
@@ -1244,16 +1236,16 @@ for bar in bars:
                         resolved_parts.append(rp)
                     else:
                         cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                        fallback_dim = cats[0] if cats else (df.columns[0] if len(df.columns) > 0 else "Region")
+                        fallback_dim = cats[0] if cats else (df.columns[0] if len(df.columns) > 0 else "")
                         resolved_parts.append(fallback_dim)
-                dim = ", ".join(resolved_parts)
+                dim = ", ".join([p for p in resolved_parts if p])
             else:
                 resolved_d = resolve_col(dim)
                 if resolved_d:
                     dim = resolved_d
                 elif dim not in df.columns:
                     cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                    fallback_dim = cats[0] if cats else (df.columns[0] if len(df.columns) > 0 else "Region")
+                    fallback_dim = cats[0] if cats else (df.columns[0] if len(df.columns) > 0 else "")
                     logger.warning(f"[Graph Agent] Dimension '{dim}' not found. Falling back to {fallback_dim}.")
                     dim = fallback_dim
 
@@ -1288,6 +1280,7 @@ for bar in bars:
             py_code = self._generate_python_code(
                 prompt, str(temp_image), fallback_mode=(not verified),
                 df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure,
+                df=locals().get("df"),
             )
 
             temp_script.parent.mkdir(parents=True, exist_ok=True)
@@ -1310,6 +1303,7 @@ for bar in bars:
                 fallback_code = self._generate_python_code(
                     prompt, str(temp_image), fallback_mode=True,
                     df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure,
+                    df=locals().get("df"),
                 )
                 temp_script.parent.mkdir(parents=True, exist_ok=True)
                 with open(temp_script, "w", encoding="utf-8") as fh:
@@ -1357,7 +1351,15 @@ for bar in bars:
                 img_b64 = base64.b64encode(img_fh.read()).decode("utf-8")
 
             data_uri = f"data:image/png;base64,{img_b64}"
-            insights = self._build_insights(prompt, chart_type, dim, measure, temp_script.name, verified=verified)
+            active_ds_name = None
+            try:
+                from api.models.execution_context import current_selection
+                sel = current_selection.get()
+                if sel and sel.entry:
+                    active_ds_name = sel.entry.get("displayName") or sel.entry.get("name")
+            except Exception:
+                pass
+            insights = self._build_insights(prompt, chart_type, dim, measure, temp_script.name, verified=verified, dataset_name=active_ds_name)
 
             elapsed_ms = int((time.time() - request_start) * 1000)
             logger.info(

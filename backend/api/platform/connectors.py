@@ -258,8 +258,9 @@ class SAPICSMAdapter(ODataAdapter):
     outer/inner label barcodes (CFG, ITIP), subcontracting components, and clinical supply logistics.
     """
     def __init__(self, config, *args, **kwargs):
-        service = config.get("api_service", "sap/opu/odata/sap/API_PURCHASEORDER_PROCESS_SRV")
-        base = config.get("base_url", "https://sandbox.api.sap.com").rstrip("/")
+        from api.config import settings
+        service = config.get("api_service", settings.ICSM_DEFAULT_SERVICE)
+        base = config.get("base_url", settings.ICSM_DEFAULT_BASE_URL).rstrip("/")
         if service and not base.endswith(service.strip("/")):
             if "sandbox.api.sap.com" in base and "/s4hanacloud" not in base and not service.startswith("s4hanacloud"):
                 base = f"{base}/s4hanacloud/{service.strip('/')}"
@@ -278,7 +279,6 @@ class SAPICSMAdapter(ODataAdapter):
         candidates = [
             spec_path,
             str(Path(__file__).resolve().parent.parent / "data" / "specifications" / "SAP_ICSM_PurchaseOrderExt.json"),
-            str(Path(r"c:\Users\Lokesh Kumar T\Downloads\SAP_ICSM_PurchaseOrderExt.json")),
         ]
         if not spec:
             for c in candidates:
@@ -304,29 +304,13 @@ class SAPICSMAdapter(ODataAdapter):
                     "description": (path_item.get("get", {}).get("summary") or name)
                 })
             return {
-                "title": spec.get("info", {}).get("title", "SAP ICSM Purchase Order for Clinical Trials"),
-                "version": spec.get("info", {}).get("version", "2.0.0"),
+                "title": spec.get("info", {}).get("title", "SAP ICSM OData Service"),
+                "version": spec.get("info", {}).get("version", "1.0.0"),
                 "entities": entities,
                 "service": "sap_icsm"
             }
 
-        try:
-            return super().discover()
-        except Exception:
-            return {
-                "title": "SAP ICSM Purchase Order for Clinical Trials",
-                "version": "2.0.0",
-                "entities": [
-                    {"name": "A_PurchaseOrder", "type": "A_PurchaseOrderType"},
-                    {"name": "A_PurchaseOrderItem", "type": "A_PurchaseOrderItemType"},
-                    {"name": "A_PurchaseOrderItemCFGBarcode", "type": "A_PurchaseOrderItemCFGBarcodeType"},
-                    {"name": "A_POSubcontractingComponent", "type": "A_POSubcontractingComponentType"},
-                    {"name": "A_PurchaseOrderScheduleLine", "type": "A_PurchaseOrderScheduleLineType"},
-                    {"name": "A_PurOrdAccountAssignment", "type": "A_PurOrdAccountAssignmentType"},
-                    {"name": "A_PurOrdPricingElement", "type": "A_PurOrdPricingElementType"}
-                ],
-                "service": "sap_icsm"
-            }
+        return super().discover()
 
 
 class SACAdapter(ODataAdapter):

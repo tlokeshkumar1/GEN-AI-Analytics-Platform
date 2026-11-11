@@ -30,17 +30,17 @@ FIRST 5 SAMPLE ROWS:
 
 Return ONLY a valid JSON object with this exact JSON structure:
 {{
-  "domain": "Specific free-form domain or industry name (e.g., Precision Agriculture, Maritime Shipping, Video Game Telemetry, Commercial Real Estate, Clinical Trials, Aviation Logistics)",
-  "grain": "What a single row represents (e.g., One vessel waypoint ping, One harvest batch, One patient test record)",
+  "domain": "Concise domain or subject area inferred solely from the dataset filename/title, column headers, and sample rows",
+  "grain": "What a single row or record in this dataset represents",
   "column_annotations": {{
     "<exact_column_name>": {{
       "semantic_name": "Human-friendly label",
       "role": "measure" or "dimension" or "time" or "identifier",
       "default_aggregation": "SUM" or "AVG" or "COUNT" or "COUNT_DISTINCT" or null,
-      "unit": "e.g. kg, liters, km/h, %, knots, ms, or null",
-      "currency": "e.g. USD, EUR, or null",
-      "description": "Short business explanation of this column",
-      "synonyms": ["3 to 5 natural language synonyms or search phrases a domain specialist would ask in chat"]
+      "unit": "Measured physical/numeric unit inferred from column/values (or null)",
+      "currency": "Currency code if monetary column (or null)",
+      "description": "Short explanation of this column based strictly on the dataset context",
+      "synonyms": ["3 to 5 natural language synonyms or search phrases relevant to this column"]
     }}
   }}
 }}

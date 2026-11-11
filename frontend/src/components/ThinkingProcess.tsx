@@ -56,8 +56,8 @@ export const resolveIntentDetails = (rawIntent?: string, steps?: ProcessingStep[
   ) {
     return {
       key: 'order_lookup',
-      label: 'Order Lookup',
-      description: 'SAP S/4HANA Sales & Distribution ERP document verification',
+      label: 'Record Lookup',
+      description: 'Structured entity record lookup and attribute verification',
       dotColor: 'bg-blue-500',
       pillClass: 'bg-blue-50/80 text-blue-700 border-blue-200/80',
       icon: Layers,

@@ -40,6 +40,7 @@ export function FileImportReview({
       : fileBase;
     return combined.toUpperCase() || 'UPLOADED_TABLE';
   };
+  const defaultTableName = deriveDefaultTableName(options.sheet);
   const [newTableName, setNewTableName] = useState<string>(() => deriveDefaultTableName());
   const [tableUserEdited, setTableUserEdited] = useState(false);
   const [existingTableName, setExistingTableName] = useState<string>('');
@@ -239,7 +240,7 @@ export function FileImportReview({
             <input
               type="text"
               className={`${input} font-mono uppercase text-xs mt-1 bg-white`}
-              placeholder="e.g. SALES_DATA_2024"
+              placeholder="e.g. ENTERPRISE_DATASET_V1"
               value={newTableName}
               onChange={e => {
                 setNewTableName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'));

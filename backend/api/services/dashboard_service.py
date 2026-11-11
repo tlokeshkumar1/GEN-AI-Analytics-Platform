@@ -1,102 +1,131 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+import re
 import pandas as pd
 from api.services.data_service import data_service
+from api.services.schema_service import schema_service
 from api.utils.logger import get_logger
 
 logger = get_logger("services.dashboard_service")
 
+
+def _humanize(name: str) -> str:
+    return re.sub(r"([a-z])([A-Z])", r"\1 \2", name.replace("_", " ")).strip().title()
+
+
+def _format_metric(val: float, name: str) -> str:
+    low = name.lower()
+    if any(k in low for k in ("pct", "percent", "ratio", "rate")):
+        return f"{val:.1f}%"
+    if any(k in low for k in ("usd", "revenue", "sales", "salary", "cost", "price", "margin", "amount", "budget", "profit")):
+        return f"${val:,.0f}"
+    return f"{val:,.0f}"
+
+
+def _pct_change(curr: float, prev: float) -> tuple[str, str]:
+    if prev == 0:
+        return "0.0%", "neutral"
+    diff = ((curr - prev) / abs(prev)) * 100.0
+    sign = "+" if diff > 0 else ""
+    trend = "up" if diff > 0 else ("down" if diff < 0 else "neutral")
+    return f"{sign}{diff:.1f}%", trend
+
+
 class DashboardService:
     def get_dashboard_data(self) -> Dict[str, Any]:
-        """Get dashboard data from preprocessed Excel file (cached in session)."""
-        kpis = data_service.get_kpis()
+        """Get dynamic KPIs and chart series from the active dataset or HANA table."""
         df = data_service.get_dataframe()
-        
-        # When no data is available or revenue is 0, return all zeros with neutral 0.0% change
-        if df.empty or kpis.get("total_revenue", 0) == 0:
+        kpis = data_service.get_kpis()
+
+        if df is None or df.empty:
             formatted_kpis = [
-                {"title": "Total Net Revenue", "value": "$0", "change": "0.0%", "trend": "neutral"},
-                {"title": "Total Quantity Sold", "value": "0", "change": "0.0%", "trend": "neutral"},
-                {"title": "Gross Margin", "value": "0.0%", "change": "0.0%", "trend": "neutral"},
-                {"title": "Active Countries", "value": "0", "change": "0.0%", "trend": "neutral"}
+                {"title": "Primary Metric", "value": f"{kpis.get('total_revenue', 0):,.0f}", "change": "0.0%", "trend": "neutral"},
+                {"title": "Secondary Metric", "value": f"{kpis.get('total_quantity', 0):,}", "change": "0.0%", "trend": "neutral"},
+                {"title": "Average Value", "value": f"{kpis.get('avg_margin', 0):,.1f}", "change": "0.0%", "trend": "neutral"},
+                {"title": "Distinct Categories", "value": str(kpis.get('country_count', 0)), "change": "0.0%", "trend": "neutral"},
             ]
         else:
-            # Calculate changes dynamically if historical periods exist
-            rev_change_str = "0.0%"
-            rev_trend = "neutral"
-            qty_change_str = "0.0%"
-            qty_trend = "neutral"
-            margin_change_str = "0.0%"
-            margin_trend = "neutral"
-            country_change_str = "0.0%"
-            country_trend = "neutral"
+            meta = schema_service._build_metadata(df)
+            measures = [k for k, v in meta.items() if v.is_measure]
+            dimensions = [k for k, v in meta.items() if v.is_dimension and not v.is_identifier]
+            date_cols = [k for k, v in meta.items() if v.is_date]
 
-            try:
-                sort_cols = []
-                if "Year" in df.columns and "MonthNum" in df.columns:
-                    sort_cols = ["Year", "MonthNum"]
-                elif "OrderDate" in df.columns:
+            m1 = measures[0] if measures else None
+            m2 = measures[1] if len(measures) > 1 else None
+            d1 = dimensions[0] if dimensions else None
+
+            m1_change, m1_trend = "0.0%", "neutral"
+            m2_change, m2_trend = "0.0%", "neutral"
+            avg_change, avg_trend = "0.0%", "neutral"
+            d1_change, d1_trend = "0.0%", "neutral"
+
+            if date_cols and (m1 or d1):
+                try:
+                    t_col = date_cols[0]
                     temp_df = df.copy()
-                    temp_df["_dt"] = pd.to_datetime(temp_df["OrderDate"], errors="coerce")
-                    temp_df = temp_df.dropna(subset=["_dt"])
-                    temp_df["_Year"] = temp_df["_dt"].dt.year
-                    temp_df["_Month"] = temp_df["_dt"].dt.month
-                    df = temp_df
-                    sort_cols = ["_Year", "_Month"]
+                    temp_df["_period_sort"] = pd.to_datetime(temp_df[t_col], errors="coerce")
+                    if temp_df["_period_sort"].notna().sum() >= 2:
+                        temp_df = temp_df.dropna(subset=["_period_sort"])
+                        temp_df["_period_key"] = temp_df["_period_sort"].dt.to_period("M").astype(str)
+                    else:
+                        temp_df["_period_key"] = temp_df[t_col].astype(str)
+                        temp_df = temp_df[temp_df["_period_key"].str.strip() != ""]
 
-                if sort_cols:
-                    has_revenue = "NetRevenueUSD" in df.columns
-                    has_qty = "Quantity" in df.columns
-                    has_margin = "GrossMarginUSD" in df.columns
-                    has_country = "Country" in df.columns
+                    agg_spec: Dict[str, Any] = {"row_cnt": (df.columns[0], "count")}
+                    if m1:
+                        agg_spec["m1_sum"] = (m1, "sum")
+                        agg_spec["m1_avg"] = (m1, "mean")
+                    if m2:
+                        agg_spec["m2_sum"] = (m2, "sum")
+                    if d1:
+                        agg_spec["d1_uniq"] = (d1, lambda s: s.dropna().astype(str).str.strip().loc[lambda x: x != ""].nunique())
 
-                    periods = df.groupby(sort_cols).agg(
-                        revenue=("NetRevenueUSD", "sum") if has_revenue else ("OrderID", "count"),
-                        quantity=("Quantity", "sum") if has_qty else ("OrderID", "count"),
-                        margin_usd=("GrossMarginUSD", "sum") if has_margin else ("OrderID", "count"),
-                        countries=("Country", lambda x: x.dropna().astype(str).str.strip().loc[lambda s: s != ""].nunique()) if has_country else ("OrderID", "count")
-                    ).reset_index()
-
-                    periods = periods.sort_values(sort_cols)
-
+                    periods = temp_df.groupby("_period_key").agg(**agg_spec).reset_index().sort_values("_period_key")
                     if len(periods) >= 2:
-                        curr = periods.iloc[-1]
-                        prev = periods.iloc[-2]
+                        curr, prev = periods.iloc[-1], periods.iloc[-2]
+                        if m1:
+                            m1_change, m1_trend = _pct_change(float(curr["m1_sum"]), float(prev["m1_sum"]))
+                            avg_change, avg_trend = _pct_change(float(curr["m1_avg"]), float(prev["m1_avg"]))
+                        if m2:
+                            m2_change, m2_trend = _pct_change(float(curr["m2_sum"]), float(prev["m2_sum"]))
+                        else:
+                            m2_change, m2_trend = _pct_change(float(curr["row_cnt"]), float(prev["row_cnt"]))
+                        if d1:
+                            d1_change, d1_trend = _pct_change(float(curr["d1_uniq"]), float(prev["d1_uniq"]))
+                except Exception as exc:
+                    logger.debug(f"Period-over-period calculation skipped: {exc}")
 
-                        # Revenue change
-                        if prev["revenue"] > 0:
-                            rev_diff = ((curr["revenue"] - prev["revenue"]) / prev["revenue"]) * 100
-                            rev_change_str = f"{'+' if rev_diff > 0 else ''}{rev_diff:.1f}%"
-                            rev_trend = "up" if rev_diff > 0 else ("down" if rev_diff < 0 else "neutral")
-
-                        # Quantity change
-                        if prev["quantity"] > 0:
-                            qty_diff = ((curr["quantity"] - prev["quantity"]) / prev["quantity"]) * 100
-                            qty_change_str = f"{'+' if qty_diff > 0 else ''}{qty_diff:.1f}%"
-                            qty_trend = "up" if qty_diff > 0 else ("down" if qty_diff < 0 else "neutral")
-
-                        # Margin change (weighted margin percentage difference)
-                        curr_margin_pct = (curr["margin_usd"] / curr["revenue"] * 100.0) if curr["revenue"] > 0 else 0.0
-                        prev_margin_pct = (prev["margin_usd"] / prev["revenue"] * 100.0) if prev["revenue"] > 0 else 0.0
-                        margin_diff = curr_margin_pct - prev_margin_pct
-                        margin_change_str = f"{'+' if margin_diff > 0 else ''}{margin_diff:.1f}%"
-                        margin_trend = "up" if margin_diff > 0 else ("down" if margin_diff < 0 else "neutral")
-
-                        # Country change
-                        country_diff = curr["countries"] - prev["countries"]
-                        if prev["countries"] > 0:
-                            country_pct = (country_diff / prev["countries"]) * 100
-                            country_change_str = f"{'+' if country_pct > 0 else ''}{country_pct:.1f}%"
-                            country_trend = "up" if country_pct > 0 else ("down" if country_pct < 0 else "neutral")
-            except Exception as e:
-                logger.error(f"Error calculating KPI changes: {e}")
+            m1_sum = float(pd.to_numeric(df[m1], errors="coerce").sum()) if m1 else float(len(df))
+            m1_avg = float(pd.to_numeric(df[m1], errors="coerce").mean()) if m1 else 0.0
+            m2_sum = float(pd.to_numeric(df[m2], errors="coerce").sum()) if m2 else float(len(df))
+            d1_uniq = int(df[d1].dropna().nunique()) if d1 else int(len(df))
 
             formatted_kpis = [
-                {"title": "Total Net Revenue", "value": f"${kpis['total_revenue']:,.0f}", "change": rev_change_str, "trend": rev_trend},
-                {"title": "Total Quantity Sold", "value": f"{kpis['total_quantity']:,}", "change": qty_change_str, "trend": qty_trend},
-                {"title": "Gross Margin", "value": f"{kpis['avg_margin']:.1f}%", "change": margin_change_str, "trend": margin_trend},
-                {"title": "Active Countries", "value": str(kpis['country_count']), "change": country_change_str, "trend": country_trend}
+                {
+                    "title": f"Total {_humanize(m1)}" if m1 else "Total Records",
+                    "value": _format_metric(m1_sum, m1) if m1 else f"{len(df):,}",
+                    "change": m1_change,
+                    "trend": m1_trend,
+                },
+                {
+                    "title": f"Total {_humanize(m2)}" if m2 else "Record Count",
+                    "value": _format_metric(m2_sum, m2) if m2 else f"{len(df):,}",
+                    "change": m2_change,
+                    "trend": m2_trend,
+                },
+                {
+                    "title": f"Average {_humanize(m1)}" if m1 else "Average",
+                    "value": _format_metric(m1_avg, m1) if m1 else "0",
+                    "change": avg_change,
+                    "trend": avg_trend,
+                },
+                {
+                    "title": f"Active {_humanize(d1)}" if d1 else "Unique Records",
+                    "value": f"{d1_uniq:,}",
+                    "change": d1_change,
+                    "trend": d1_trend,
+                },
             ]
-        
+
         return {
             "kpis": formatted_kpis,
             "revenue_trend": data_service.get_revenue_trend(),
@@ -104,7 +133,8 @@ class DashboardService:
             "country_breakdown": data_service.get_country_breakdown(),
             "category_breakdown": data_service.get_category_breakdown(),
             "quarterly_performance": data_service.get_quarterly_performance(),
-            "top_products": data_service.get_top_products()
+            "top_products": data_service.get_top_products(),
         }
+
 
 dashboard_service = DashboardService()

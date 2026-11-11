@@ -106,7 +106,9 @@ def classify_request(prompt):
         if not proposal or proposal.get("clarification"):
             clarif = proposal.get("clarification") if proposal else None
             if not clarif or clarif.strip().lower() in ("question", "none", "null"):
-                clarif = "Please specify which metric (e.g. Net Revenue, Gross Margin) and dimension you would like to analyze."
+                sample_m = ", ".join(measures_names[:2]) or "a numeric measure"
+                sample_d = ", ".join(dimensions_names[:2]) or "a grouping dimension"
+                clarif = f"Please specify which metric (e.g. {sample_m}) and dimension (e.g. {sample_d}) you would like to analyze."
             raise HTTPException(422, clarif)
         try:
             plan = QueryPlan.model_validate(proposal)

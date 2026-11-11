@@ -25,7 +25,7 @@ def decimal(value):
 
 TEMPORAL_DIMENSIONS = {
     "year", "quarter", "month", "monthname", "monthlabel", "monthnum",
-    "orderdate", "date", "period", "day", "time", "created_at", "updated_at"
+    "date", "period", "day", "time", "created_at", "updated_at"
 }
 
 

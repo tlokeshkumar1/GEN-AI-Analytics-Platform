@@ -43,13 +43,13 @@ Traditional enterprise BI tools suffer from rigid semantic schemas, manual ETL d
 The **GEN-AI Analytics Platform** fulfills seven core enterprise business requirements:
 
 1. **Zero-Hardcode Open-Domain Intelligence**:
-   - Any arbitrary dataset (e.g., Sales, HR, Precision Agriculture, Maritime Shipping, Clinical Genomics, Telemetry) can be uploaded without predefined domain dictionaries.
+   - Any uploaded file or connected enterprise data source is profiled automatically from its own schema and sample records—inferring domain, grain, column roles, and visualizations dynamically with zero fixed domain lists.
    - An autonomous **3-Agent Pipeline** cleans raw tables (including complex multi-row Excel headers), samples the **first 5 rows** via zero-shot LLM reasoning to infer domain, grain, column roles, units, and synonyms, and recommends curated KPIs/charts automatically.
 2. **Dual-Path Mathematical Verification**:
    - Eliminates LLM numerical hallucinations by executing analytical query plans against immutable dataset snapshots and HANA column tables using Pydantic AST validation and 38-digit Python `Decimal` arithmetic.
    - LLMs interpret intent and summarize insights; deterministic engines calculate totals, margins, ratios, and deltas.
 3. **100% Cloud-Native Retrieval & Dynamic HANA Persistence**:
-   - Runtime analytics and RAG retrieval operate directly on **SAP HANA Cloud** (dynamic `DS_*` column tables, `SALES_ANALYTICS`, and `VECTOR_TABLE` with `REAL_VECTOR(1536)` cosine similarity) with zero runtime dependency on local preprocessing disk files.
+   - Runtime analytics and RAG retrieval operate directly on **SAP HANA Cloud** (dynamic `DS_*` column tables and `VECTOR_TABLE` with `REAL_VECTOR(1536)` cosine similarity) with zero runtime dependency on local preprocessing disk files.
 4. **Multi-Table Scoping & Dynamic Cross-Table Joins**:
    - Multi-sheet Excel workbooks are unbundled into independent first-class datasets backed by dedicated HANA tables, reconciled automatically with `DATASETS_METADATA`.
    - Join discovery (`join_service.py`) dynamically detects cross-table key relationships via schema matching, semantic role scoring, and live value overlap.
@@ -97,7 +97,7 @@ flowchart TB
     subgraph Data_Storage_Tier["SAP HANA Cloud & Object Persistence"]
         HANA_Store[("SAP HANA Cloud Database")]
         subgraph HANA_Tables["HANA Schemas & Tables"]
-            SA[("Dynamic DS_* & SALES_ANALYTICS\nColumn Store Tables")]
+            SA[("Dynamic DS_* Column\nStore Tables")]
             VT[("VECTOR_TABLE\nREAL_VECTOR(1536)")]
             DM[("DATASETS_METADATA\nDataset Catalog & Versions")]
             PM[("PLATFORM_METADATA\nDashboards, Connections & Jobs")]
@@ -155,7 +155,8 @@ Dedicated administration console (`/hanaadmin`, `HanaAdmin.tsx`, `hana_table_ser
 
 ### 7. Enterprise Data Connectors & Sync Engine
 Managed via **Data Sources** (`DataSources.tsx`) and **System Management** (`SystemSettings.tsx`):
-- **Supported Sources**: SAP S/4HANA (OData), SAP Analytics Cloud (SAC FactData/MasterData), SAP HANA Cloud, REST APIs, OData v2/v4, SOAP (Zeep WSDL), AWS S3, Google Cloud Storage, and Azure Blob Storage.
+- **Supported Sources**: SAP S/4HANA (OData), SAP ICSM (`sap_icsm`), SAP Analytics Cloud (SAC FactData/MasterData), SAP HANA Cloud, REST APIs, OData v2/v4, SOAP (Zeep WSDL), AWS S3, Google Cloud Storage, and Azure Blob Storage.
+- **Auto-Semantic & HANA Sync**: Every connector sync automatically runs open-domain semantic classification and dynamic SAP HANA Cloud table provisioning (`DS_*`) alongside immutable snapshot versioning.
 - **Recoverable Worker Queue**: Persistent jobs (`jobs.py`) using compare-and-swap claims, dataset leases, heartbeats, cooperative cancellation, and idempotency receipts.
 - **Encrypted Credential Vault**: Connector secrets encrypted at rest with Fernet (`PLATFORM_CREDENTIAL_KEY`).
 
@@ -284,13 +285,12 @@ GEN-AI-Analytics-Platform/
 │   │   └── src/schema/
 │   │       ├── datasets_metadata.hdbtable
 │   │       ├── platform_documents.hdbtable
-│   │       ├── sales.hdbtable
 │   │       └── vector_table.hdbtable
 │   │
 │   ├── chart-worker/                 # Isolated Docker container for custom chart code
 │   │   └── Dockerfile
 │   │
-│   └── tests/                        # 17 Backend Unit & Integration Test Suites
+│   └── tests/                        # 18 Backend Unit & Integration Test Suites
 │       ├── test_advanced_analytics.py
 │       ├── test_cascade_dataset_deletion.py
 │       ├── test_chat_history.py
@@ -307,7 +307,8 @@ GEN-AI-Analytics-Platform/
 │       ├── test_platform_foundation.py
 │       ├── test_platform_integration.py
 │       ├── test_semantic_ingestion.py
-│       └── test_xsuaa_users.py
+│       ├── test_xsuaa_users.py
+│       └── test_zero_hardcode_dynamic.py
 │
 ├── frontend/                         # React 19 + TypeScript SPA
 │   ├── vite.config.ts                # Vite build & /api proxy configuration
@@ -449,7 +450,7 @@ HANA_ADDRESS=your-hana-instance.hanadb.ondemand.com
 HANA_PORT=443
 HANA_USER=DBADMIN
 HANA_PASSWORD=YourStrongHanaPassword!
-HANA_SCHEMA=SALES_ANALYTICS
+HANA_SCHEMA=your-hana-schema
 HANA_VALIDATE_CERT=true
 HANA_POOL_SIZE=20
 HANA_POOL_TIMEOUT=30.0
@@ -719,9 +720,9 @@ Dedicated vector storage for dataset-scoped RAG retrieval:
 - `EMBEDDING` (`REAL_VECTOR(1536)`): 1536-dimensional embedding vector computed by `nemotron-3-embed-1b`.
 - `METADATA` (NCLOB): Structured JSON metadata (`dataset_id`, `version`, `table_name`, order/record identifiers).
 
-### 4. Dynamic Dataset Tables (`DS_*`) & `SALES_ANALYTICS`
-- Every ingested dataset/sheet can automatically provision and populate a typed SAP HANA column table (`DS_<NAME>_V<N>` or custom `target_table_name`).
-- The built-in 39-column `SALES_ANALYTICS` table supports enterprise sales analytics out of the box.
+### 4. Dynamic Dataset & Connector Tables (`DS_*`)
+- Every uploaded file, workbook sheet, or connector sync can automatically provision and populate a typed SAP HANA Cloud column table (`DS_<NAME>_V<N>` or custom `target_table_name`).
+- Schema introspection, KPIs, RAG queries, cross-table joins, and visualizations adapt dynamically to any domain's columns without hardcoded table or field assumptions.
 
 ---
 
@@ -748,7 +749,7 @@ Dedicated vector storage for dataset-scoped RAG retrieval:
 Run the backend and frontend test suites to verify core functionality, multi-table scoping, cross-table joins, cascade deletions, and UI rendering:
 
 ```bash
-# 1. Run all 17 backend unit & integration test suites
+# 1. Run all 18 backend unit & integration test suites
 python -m unittest discover -s backend/tests -v
 
 # 2. Run frontend unit tests (Vitest)

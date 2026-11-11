@@ -365,10 +365,17 @@ class DatasetsMetadataRepository:
                 col_type = "number" if isinstance(val, (int, float)) else "string"
                 columns.append({"name": col_name, "type": col_type, "required": False})
 
+            # Dynamically detect best identifier column for frontend row keys
+            sample_keys = [str(k) for k in sample.keys()]
+            id_key = next((k for k in sample_keys if k.lower() in ("id", "row_id")), None)
+            if not id_key:
+                id_key = next((k for k in sample_keys if k.lower().endswith(("_id", "id", "_key", "_code"))), None)
+
             # Ensure every row has __rowId for frontend tables
             for idx, r in enumerate(rows):
                 if "__rowId" not in r:
-                    r["__rowId"] = str(r.get("ORDERID") or r.get("OrderId") or r.get("id") or f"row_{idx}")
+                    row_val = r.get(id_key) if id_key else None
+                    r["__rowId"] = str(row_val if row_val not in (None, "") else (r.get("id") or f"row_{idx}"))
 
             return rows, columns
         except Exception as exc:

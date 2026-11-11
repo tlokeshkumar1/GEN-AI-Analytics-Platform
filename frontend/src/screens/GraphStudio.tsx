@@ -47,10 +47,10 @@ const ADVANCED_PYTHON_TYPES = [
 ];
 
 const SUGGESTED_PROMPTS = [
-  'Generate a seaborn distribution heatmap of Gross Margin across Sales Regions',
-  'Pareto 80/20 cumulative revenue analysis by Product SKU',
-  'Monthly margin trend violin plot with outlier detection',
-  'Waterfall chart of Net Revenue across Customer Segments',
+  'Generate a correlation heatmap across primary numeric measures and categories',
+  'Compare top categories by cumulative total with a Pareto 80/20 curve',
+  'Plot period-over-period distribution and outlier trends',
+  'Render a nested breakdown across the leading categorical dimensions',
 ];
 
 const TEN_STEPS = [
@@ -111,8 +111,8 @@ export function GraphStudio({
   const [agentResult, setAgentResult] = useState<PythonGraphAgentResponse | null>(null);
 
   // Mode 3: Data-Driven Automated Custom Graph (No Prompt)
-  const [selectedDataMetric, setSelectedDataMetric] = useState('GrossMarginUSD');
-  const [selectedDataDimension, setSelectedDataDimension] = useState('Region');
+  const [selectedDataMetric, setSelectedDataMetric] = useState('');
+  const [selectedDataDimension, setSelectedDataDimension] = useState('');
   const [selectedAdvancedChart, setSelectedAdvancedChart] = useState('heatmap');
   const [selectedPalette, setSelectedPalette] = useState('Blues');
   const [dataLimit, setDataLimit] = useState<number>(10);
@@ -217,11 +217,11 @@ export function GraphStudio({
       setAggregation('COUNT');
       setDimension('');
 
-      // Update Mode 3 fields
-      const measures = approved.fields.filter(f => f.role === 'measure' || f.name.includes('USD') || f.name.includes('Quantity'));
+      // Update Mode 3 fields dynamically from active semantic model
+      const measures = approved.fields.filter(f => f.role === 'measure' || ['decimal', 'integer', 'number'].includes(f.type));
       const dims = approved.fields.filter(f => ['dimension', 'identifier', 'time'].includes(f.role));
-      if (measures.length > 0) setSelectedDataMetric(measures[0].name);
-      if (dims.length > 0) setSelectedDataDimension(dims[0].name);
+      setSelectedDataMetric(measures.length > 0 ? measures[0].name : '*');
+      setSelectedDataDimension(dims.length > 0 ? dims[0].name : '');
     } catch (err) {
       setError(getApiErrorMessage(err, `Failed to load semantic model for table "${targetDs.name}".`));
     }
@@ -262,10 +262,10 @@ export function GraphStudio({
     setModel(approved);
 
     // Mode 3 initial selection from the approved model
-    const measures = approved.fields.filter(f => f.role === 'measure' || f.name.includes('USD') || f.name.includes('Quantity'));
+    const measures = approved.fields.filter(f => f.role === 'measure' || ['decimal', 'integer', 'number'].includes(f.type));
     const dims = approved.fields.filter(f => ['dimension', 'identifier', 'time'].includes(f.role));
-    if (measures.length > 0) setSelectedDataMetric(measures[0].name);
-    if (dims.length > 0) setSelectedDataDimension(dims[0].name);
+    setSelectedDataMetric(measures.length > 0 ? measures[0].name : '*');
+    setSelectedDataDimension(dims.length > 0 ? dims[0].name : '');
 
     const [recommendations, pubRes] = await Promise.all([
       getRecommendations(),
@@ -908,7 +908,7 @@ export function GraphStudio({
               <div className="relative">
                 <textarea
                   className="border border-slate-300 rounded-lg p-3 pr-14 w-full text-xs resize-y focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all outline-none"
-                  placeholder="e.g., Generate a seaborn distribution heatmap of Gross Margin across Sales Regions..."
+                  placeholder="e.g., Generate a distribution heatmap across primary measures and dimensions..."
                   rows={3}
                   value={promptInput}
                   onChange={e => setPromptInput(e.target.value)}

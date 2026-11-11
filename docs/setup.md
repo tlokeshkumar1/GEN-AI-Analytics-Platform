@@ -62,11 +62,9 @@ Local Vite does not provide the deployed SAP session. Backend profile requests r
 
 ## Dataset
 
-The standard file is `backend/preprocessing/output/SAC_Sales_Preprocessed.xlsx`. The loader can also use `backend/preprocessing/input/SAC_Sales_Flat_SingleSheet.xlsx` when available. Dataset Ingestion uploads replace the standard file and update the handling process's cache.
+Datasets are ingested dynamically through **Dataset Ingestion** (`POST /api/datasets/upload`) or **Enterprise Connectors** into scoped `DS_<DATASET>_V<N>` SAP HANA column tables and vector embeddings, with no fixed schema requirement. Uploading any CSV, TSV, JSON, or Excel workbook triggers the 3-agent pipeline (`PreprocessingAgent`, `DomainClassifierAgent`, and `ChartRecommenderAgent`) to clean rows, discover open-domain semantics, and recommend analytical widgets.
 
-Calculations expect columns such as `NetRevenueUSD`, `GrossMarginUSD`, `Quantity`, `Region`, `Country`, `Category`, and time dimensions. Upload validates parsing, rather than enforcing every expected sales column. XLSX and CSV use installed dependencies; XLS is accepted by filename validation but may require an additional reader engine.
-
-An empty dataset produces zero/empty dashboard values; analytics can return example fallback results. Upload saves files without generating vectors. HANA history and vector retrieval require a working database connection.
+An empty workspace produces zero/empty dashboard states until a dataset is activated. HANA history and vector retrieval require a working database connection (or `PLATFORM_METADATA_BACKEND=sqlite` for offline local testing).
 
 ## Build and checks
 
@@ -76,7 +74,7 @@ npm run lint --prefix frontend
 python -m unittest discover -s backend/tests
 ```
 
-Build writes `frontend/dist/`; lint runs TypeScript checking. Backend unit tests cover XSUAA user management. These checks do not establish live SAP/NVIDIA connectivity.
+Build writes `frontend/dist/`; lint runs TypeScript checking. Backend unit tests cover zero-hardcode dynamic ingestion, analytics, cross-table joins, cascade deletion, and XSUAA user management. These checks do not establish live SAP/NVIDIA connectivity.
 
 `npm start` runs the router, which additionally needs service bindings, destination configuration, and built assets in `router/resources/`. The MTA build assembles these assets.
 
@@ -87,7 +85,7 @@ Build writes `frontend/dist/`; lint runs TypeScript checking. Backend unit tests
 | Vite API requests fail | Backend listening on port 8000 |
 | Chat/embeddings fail | NVIDIA key, endpoints, and models |
 | Graph code generation fails | AI Core credentials/deployment and fallback logs |
-| Missing sales data | Dataset path, columns, upload status |
+| Missing dataset metrics | Active dataset selection, semantic model approval, upload status |
 | History unavailable | HANA connectivity/schema/table privileges |
 | Profile returns 401 | Bearer token locally or active router session |
 | Directory returns 403/503 | Role collections, fresh token, matching binding with `apiurl` |

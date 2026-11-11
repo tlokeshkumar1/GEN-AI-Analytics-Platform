@@ -69,7 +69,7 @@ export function parseTemporalSortKey(value: unknown): number | null {
 export function isTemporalColumn(columnName: string, sampleValues: unknown[]): boolean {
   if (!columnName) return false;
   const lower = columnName.toLowerCase().replace(/[\s_-]+/g, '');
-  const temporalNames = ['year', 'orderdate', 'date', 'quarter', 'month', 'monthname', 'monthlabel', 'monthnum', 'period', 'day', 'time'];
+  const temporalNames = ['year', 'date', 'quarter', 'month', 'monthname', 'monthlabel', 'monthnum', 'period', 'day', 'time'];
   if (temporalNames.includes(lower) || /year|month|date|quarter|period/.test(lower)) {
     return true;
   }
@@ -81,25 +81,15 @@ export function isTemporalColumn(columnName: string, sampleValues: unknown[]): b
 
 export function humanizeColumnName(col: string): string {
   if (!col) return '';
-  const lower = col.toLowerCase();
-  if (lower === 'grossmarginusd') return 'Gross Margin (USD)';
-  if (lower === 'netrevenueusd') return 'Net Revenue (USD)';
-  if (lower === 'monthlabel') return 'Month';
-  if (lower === 'country') return 'Country';
-  if (lower === 'productname' || lower === 'product') return 'Product';
-  if (lower === 'customername' || lower === 'customer') return 'Customer';
-  if (lower === 'salesregion' || lower === 'region') return 'Region';
-  if (lower === 'orderdate') return 'Order Date';
-  if (lower === 'quantitysold' || lower === 'quantity') return 'Quantity Sold';
   if (col.endsWith('USD') || col.endsWith('usd')) {
-    const base = col.slice(0, -3).replace(/([A-Z])/g, ' $1').trim();
+    const base = col.slice(0, -3).replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
     return `${base} (USD)`;
   }
   return col
     .replace(/_/g, ' ')
-    .replace(/([A-Z])/g, ' $1')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
     .trim()
-    .split(' ')
+    .split(/\s+/)
     .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(' ');
 }

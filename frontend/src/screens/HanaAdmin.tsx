@@ -80,7 +80,7 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
   const [cascadeDatasetClean, setCascadeDatasetClean] = useState<boolean>(true);
 
   // SQL Console state
-  const [sqlQuery, setSqlQuery] = useState<string>('SELECT * FROM "SALES_ANALYTICS" LIMIT 20');
+  const [sqlQuery, setSqlQuery] = useState<string>('SELECT TABLE_NAME, RECORD_COUNT FROM SYS.M_TABLES WHERE SCHEMA_NAME = CURRENT_SCHEMA ORDER BY RECORD_COUNT DESC');
   const [queryResult, setQueryResult] = useState<QueryResultResponse | null>(null);
   const [executingQuery, setExecutingQuery] = useState<boolean>(false);
   const [queryError, setQueryError] = useState<string>('');
@@ -107,7 +107,9 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
       setTables(data.tables || []);
       if (!selectedTableName && data.tables?.length > 0) {
         const businessTable = data.tables.find(t => !t.isInternal);
-        setSelectedTableName(businessTable ? businessTable.name : data.tables[0].name);
+        const firstTbl = businessTable ? businessTable.name : data.tables[0].name;
+        setSelectedTableName(firstTbl);
+        setSqlQuery(`SELECT * FROM "${firstTbl}" LIMIT 20`);
       }
     } catch (err: any) {
       setError(getApiErrorMessage(err, 'Failed to connect to SAP HANA Cloud.'));
@@ -873,24 +875,31 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
           {/* Quick Query Templates */}
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             <span className="text-slate-400 text-[11px] font-semibold">Templates:</span>
-            {[
-              {
-                label: 'Top 10 Sales Records',
-                query: 'SELECT * FROM "SALES_ANALYTICS" LIMIT 10',
-              },
-              {
-                label: 'Vector Table Sample',
-                query: 'SELECT "ID", "TEXT_CHUNK", "CREATED_AT" FROM "VECTOR_TABLE" LIMIT 10',
-              },
-              {
-                label: 'Revenue by Category',
-                query: 'SELECT "CATEGORY", COUNT(*) AS RECORD_COUNT, SUM("NETREVENUEUSD") AS TOTAL_REVENUE FROM "SALES_ANALYTICS" GROUP BY "CATEGORY" ORDER BY TOTAL_REVENUE DESC',
-              },
-              {
-                label: 'System Catalog Overview',
-                query: 'SELECT TABLE_NAME, RECORD_COUNT FROM SYS.M_TABLES WHERE SCHEMA_NAME = CURRENT_SCHEMA ORDER BY RECORD_COUNT DESC',
-              },
-            ].map((tmpl) => (
+            {(() => {
+              const activeTbl = selectedTableName || tables.find(t => !t.isInternal)?.name || tables[0]?.name || 'DATASETS_METADATA';
+              const firstCol = tableData?.columns?.[0]?.name;
+              const colGroupTemplate = firstCol
+                ? `SELECT "${firstCol}", COUNT(*) AS RECORD_COUNT FROM "${activeTbl}" GROUP BY "${firstCol}" ORDER BY RECORD_COUNT DESC LIMIT 20`
+                : `SELECT COUNT(*) AS TOTAL_ROWS FROM "${activeTbl}"`;
+              return [
+                {
+                  label: `Preview ${activeTbl}`,
+                  query: `SELECT * FROM "${activeTbl}" LIMIT 20`,
+                },
+                {
+                  label: `Group by ${firstCol || 'Count'}`,
+                  query: colGroupTemplate,
+                },
+                {
+                  label: 'Vector Table Sample',
+                  query: 'SELECT "ID", "TEXT_CHUNK", "CREATED_AT" FROM "VECTOR_TABLE" LIMIT 10',
+                },
+                {
+                  label: 'System Catalog Overview',
+                  query: 'SELECT TABLE_NAME, RECORD_COUNT FROM SYS.M_TABLES WHERE SCHEMA_NAME = CURRENT_SCHEMA ORDER BY RECORD_COUNT DESC',
+                },
+              ];
+            })().map((tmpl) => (
               <button
                 key={tmpl.label}
                 type="button"
@@ -909,7 +918,7 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
               value={sqlQuery}
               onChange={(e) => setSqlQuery(e.target.value)}
               className="w-full font-mono text-xs p-3 bg-slate-900 text-emerald-400 rounded-lg outline-none border border-slate-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              placeholder="SELECT * FROM &quot;SALES_ANALYTICS&quot; LIMIT 10"
+              placeholder={`SELECT * FROM "${selectedTableName || tables.find(t => !t.isInternal)?.name || 'TABLE_NAME'}" LIMIT 20`}
             />
           </div>
 

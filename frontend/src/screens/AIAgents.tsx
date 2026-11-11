@@ -1,4 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { getDatasets } from '../services/datasetService';
+import { getSemanticModels, SemanticModel } from '../services/semanticService';
+import { selectedContext, ensureDefaultContext } from '../services/executionContext';
 
 interface AIAgentsProps {
   onNavigate: (path: string) => void;
@@ -31,13 +34,50 @@ export const AIAgents: React.FC<AIAgentsProps> = ({ onNavigate }) => {
   const [selectedAgentId, setSelectedAgentId] = useState<string>('agent-rag');
   const [activeTab, setActiveTab] = useState<'all' | 'data' | 'reasoning' | 'synthesis'>('all');
   const [simulationRunning, setSimulationRunning] = useState<boolean>(false);
+  const [activeDatasetName, setActiveDatasetName] = useState<string>('Active Dataset');
+  const [activeRowCount, setActiveRowCount] = useState<number>(0);
+  const [activeModel, setActiveModel] = useState<SemanticModel | null>(null);
   const [logs, setLogs] = useState<Array<{ time: string; agent: string; message: string; type: 'info' | 'success' | 'warn' }>>([
-    { time: '14:40:12', agent: 'RAG Retriever', message: 'HANA REAL_VECTOR(1536) index synchronized with active dataset partition.', type: 'success' },
-    { time: '14:41:05', agent: 'Data Engineer', message: 'Auto-profiled 20,000 rows across 39 columns; 0 type conflicts identified.', type: 'info' },
-    { time: '14:42:33', agent: 'Semantic Modeller', message: 'Discovered and validated 14 business metrics and 8 hierarchical dimensions.', type: 'success' },
-    { time: '14:44:19', agent: 'Analytics Planner', message: 'Executed deterministic query plan for NetRevenueUSD by MonthLabel in 26ms.', type: 'info' },
-    { time: '14:45:01', agent: 'Graph Synthesizer', message: 'Isolated sandbox worker standing by for high-resolution visual rendering.', type: 'info' },
+    { time: '--:--:--', agent: 'Orchestrator', message: 'Connecting to active workspace dataset and semantic registry…', type: 'info' },
   ]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [datasets, ctx] = await Promise.all([
+          getDatasets().catch(() => []),
+          Promise.resolve(selectedContext()).then((c) => c || ensureDefaultContext()),
+        ]);
+        const ds = datasets.find((d) => d.id === ctx?.datasetId) || datasets.find((d) => d.isActive) || datasets[0];
+        if (!ds) {
+          setLogs([
+            { time: new Date().toLocaleTimeString(), agent: 'Orchestrator', message: 'No active dataset loaded. Upload a dataset or sync a connector to start profiling.', type: 'warn' },
+          ]);
+          return;
+        }
+        setActiveDatasetName(ds.name);
+        setActiveRowCount(ds.rowCount || 0);
+        const models = await getSemanticModels(ds.id, ds.currentVersion || 1).catch(() => []);
+        const model = models.find((m) => m.status === 'approved') || models[0] || null;
+        setActiveModel(model);
+        const fieldCount = model?.fields.length || ds.columns?.length || 0;
+        const measureCount = model?.fields.filter((f) => f.role === 'measure').length || 0;
+        const dimCount = model?.fields.filter((f) => ['dimension', 'time'].includes(f.role)).length || 0;
+        const m1 = model?.fields.find((f) => f.role === 'measure')?.name || 'primary measure';
+        const d1 = model?.fields.find((f) => f.role === 'time' || f.role === 'dimension')?.name || 'dimension';
+        const tNow = new Date().toLocaleTimeString();
+        setLogs([
+          { time: tNow, agent: 'RAG Retriever', message: `HANA REAL_VECTOR(1536) index scoped to '${ds.name}' (v${ds.currentVersion || 1}).`, type: 'success' },
+          { time: tNow, agent: 'Data Engineer', message: `Profiled ${(ds.rowCount || 0).toLocaleString()} rows across ${fieldCount} columns in '${ds.name}'.`, type: 'info' },
+          { time: tNow, agent: 'Semantic Modeller', message: `Domain '${model?.domain || 'Open-Domain'}': ${measureCount} measures and ${dimCount} dimensions registered.`, type: 'success' },
+          { time: tNow, agent: 'Analytics Planner', message: `Ready to execute deterministic query plans for ${m1} by ${d1}.`, type: 'info' },
+          { time: tNow, agent: 'Graph Synthesizer', message: 'Isolated sandbox worker standing by for dynamic visual rendering.', type: 'info' },
+        ]);
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
 
   const agents: AgentInfo[] = [
     {
@@ -172,23 +212,27 @@ export const AIAgents: React.FC<AIAgentsProps> = ({ onNavigate }) => {
       ...prev
     ]);
 
+    const fieldCount = activeModel?.fields.length || 0;
+    const relCount = activeModel?.relationships?.length || 0;
+    const domainName = activeModel?.domain || 'Open-Domain';
+
     setTimeout(() => {
       setLogs(prev => [
-        { time: new Date().toLocaleTimeString(), agent: 'Data Engineer', message: 'Scanned schema integrity: 39 columns verified against SAP S/4HANA schema standards.', type: 'success' },
+        { time: new Date().toLocaleTimeString(), agent: 'Data Engineer', message: `Scanned schema integrity for '${activeDatasetName}': ${fieldCount} columns (${activeRowCount.toLocaleString()} rows) verified.`, type: 'success' },
         ...prev
       ]);
     }, 700);
 
     setTimeout(() => {
       setLogs(prev => [
-        { time: new Date().toLocaleTimeString(), agent: 'Semantic Modeller', message: 'Derived verified relationships: ProductKey ↔ OrderItemKey validated with zero orphan records.', type: 'success' },
+        { time: new Date().toLocaleTimeString(), agent: 'Semantic Modeller', message: `Validated '${domainName}' semantic contract (${relCount} cross-table join relationships active).`, type: 'success' },
         ...prev
       ]);
     }, 1400);
 
     setTimeout(() => {
       setLogs(prev => [
-        { time: new Date().toLocaleTimeString(), agent: 'Analytics Planner', message: 'KPI cache pre-warmed for executive sales widgets (100% hits).', type: 'info' },
+        { time: new Date().toLocaleTimeString(), agent: 'Analytics Planner', message: `Query plan cache verified for '${activeDatasetName}' dashboard widgets.`, type: 'info' },
         ...prev
       ]);
     }, 2100);

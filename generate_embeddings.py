@@ -30,15 +30,13 @@ except ImportError as e:
 
 def detect_id_column(df: pd.DataFrame) -> str:
     """Dynamically scan columns to find the most probable unique identifier."""
-    # Common business keys / ID columns
-    candidates = ["row_id", "rowid", "id", "key", "uuid", "order_id", "orderid", "transaction_id", "transactionid"]
+    exact_candidates = ("row_id", "rowid", "id", "key", "uuid")
     for col in df.columns:
-        if str(col).lower() in candidates:
+        if str(col).lower() in exact_candidates:
             return col
-    # Any column ending with ID or Key
     for col in df.columns:
         col_lower = str(col).lower()
-        if col_lower.endswith("id") or col_lower.endswith("key"):
+        if col_lower.endswith(("_id", "id", "_key", "key", "_code")):
             return col
     return ""
 
@@ -48,11 +46,8 @@ def format_row_to_text(row: pd.Series) -> str:
     for col, val in row.items():
         if pd.isna(val) or val == "" or str(val).strip().lower() == "nan":
             continue
-        # Convert floats ending in .0 to integers for cleaner readable text
         if isinstance(val, float) and val.is_integer():
             val = int(val)
-        
-        # Format column name nicely (e.g., GrossMarginUSD -> Gross Margin USD or sales_amount -> Sales amount)
         col_name = str(col).replace("_", " ").strip()
         parts.append(f"{col_name}: {val}.")
     return " ".join(parts)
@@ -114,6 +109,11 @@ def process_and_upload(df: pd.DataFrame, source_name: str, sheet_name: str, batc
     else:
         logger.warning("No ID column detected. Falling back to row indices.")
 
+    cat_cols = [
+        c for c in df.select_dtypes(include=["object", "string", "category"]).columns
+        if str(c) != id_col and not str(c).lower().endswith(("_id", "id", "_key", "key"))
+    ][:8]
+
     # Prepare rows with target document IDs, SHA256 content hash, and textual representation
     rows_to_process = []
     for idx, row in df.iterrows():
@@ -125,7 +125,7 @@ def process_and_upload(df: pd.DataFrame, source_name: str, sheet_name: str, batc
         row_text = format_row_to_text(row)
         content_hash = hashlib.sha256(row_text.encode("utf-8")).hexdigest()
 
-        # Extract useful filter metadata
+        # Extract useful filter metadata dynamically from non-ID categorical columns
         meta = {
             "source": source_name,
             "sheet": sheet_name,
@@ -133,9 +133,9 @@ def process_and_upload(df: pd.DataFrame, source_name: str, sheet_name: str, batc
             "content_hash": content_hash,
             "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        for col_name in ["Country", "Region", "CustomerName", "Customer", "ProductName", "Product", "Category"]:
+        for col_name in cat_cols:
             if col_name in row and pd.notna(row[col_name]):
-                meta[col_name.lower()] = str(row[col_name])
+                meta[str(col_name).lower()] = str(row[col_name])
 
         rows_to_process.append({
             "doc_id": doc_id,

@@ -820,15 +820,20 @@ class HANATableService:
             if not col_names:
                 raise ValueError(f"No columns found for table '{clean_table}'.")
 
-            target_id_col = col_names[0]
+            target_id_col = None
             if id_col and id_col.upper() in [c.upper() for c in col_names]:
                 target_id_col = next(c for c in col_names if c.upper() == id_col.upper())
             else:
-                for candidate in ["ID", "ORDERID", "SESSION_ID", "ROW_ID", "KEY", col_names[0]]:
-                    matched = next((c for c in col_names if c.upper() == candidate.upper()), None)
+                for candidate in ("ID", "ROW_ID", "SESSION_ID", "KEY"):
+                    matched = next((c for c in col_names if c.upper() == candidate), None)
                     if matched:
                         target_id_col = matched
                         break
+                if not target_id_col:
+                    target_id_col = next(
+                        (c for c in col_names if c.lower().endswith(("_id", "id", "_key", "_code"))),
+                        col_names[0],
+                    )
 
             deleted_count = 0
             clean_id_col = target_id_col.replace('"', '""')

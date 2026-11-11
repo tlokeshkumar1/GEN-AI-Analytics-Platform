@@ -67,10 +67,10 @@ class SemanticRegistry:
                                             role=role, aggregations=aggregations, unit=column.get("unit"), currency=column.get("currency"),
                                             default_aggregation=None,
                                             evidence="Inferred from source values and field name; aggregation and business meaning require review."))
-            names = " ".join(f.name.lower() for f in fields)
-            domain = "sales" if "revenue" in names else "hr" if "employee" in names or "salary" in names else "manufacturing" if "machine" in names or "production" in names else "unknown"
+            raw_name = str(entry.get("folder") or entry.get("name") or "").rsplit(".", 1)[0]
+            clean_domain = " ".join(part for part in raw_name.replace("_", " ").replace("-", " ").split() if part).title() or "Open-Domain"
             model = SemanticModel(dataset_id=entry["id"], data_version=version, revision=revision,
-                                  domain=domain, fields=fields)
+                                  domain=clean_domain, fields=fields)
         physical = {c["name"] for c in snapshot["columns"]}
         names = [f.name for f in model.fields]
         if len(set(names)) != len(names) or set(names) != physical:
