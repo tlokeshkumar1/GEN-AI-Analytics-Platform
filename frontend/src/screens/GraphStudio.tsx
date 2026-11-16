@@ -13,6 +13,8 @@ import {
   getSemanticModels,
   proposeRecommendations,
   reviewDefinition,
+  deleteDefinition,
+  deleteDefinitions,
   saveDefinition,
   generatePythonGraphAgent,
   PythonGraphAgentResponse,
@@ -21,6 +23,7 @@ import {
   JoinResolution,
 } from '../services/semanticService';
 import { AnalyticsWidget } from '../components/AnalyticsWidget';
+import { invalidateDashboardCache } from './ExecutiveDashboard';
 
 const DISPLAY_TYPES = [
   { id: 'kpi', label: 'Stat KPI', icon: 'pin' },
@@ -68,6 +71,17 @@ const TEN_STEPS = [
 
 type CreationMode = 'visual' | 'prompt' | 'data_options';
 
+interface CachedStudioState {
+  datasets: DatasetItem[];
+  model: SemanticModel | null;
+  items: AnalyticsDefinition[];
+  selectedDatasetId: string;
+  publishedKeys: string[];
+  selectedKeys: string[];
+}
+
+let cachedStudioState: CachedStudioState | null = null;
+
 export function GraphStudio({
   onNavigate,
   user,
@@ -75,9 +89,9 @@ export function GraphStudio({
   onNavigate: (path: string) => void;
   user?: { role?: string; roles?: string[] } | null;
 }) {
-  const canPublish = hasAdminRole(user);
-  const [model, setModel] = useState<SemanticModel | null>(null);
-  const [items, setItems] = useState<AnalyticsDefinition[]>([]);
+  const canPublish = true;
+  const [model, setModel] = useState<SemanticModel | null>(cachedStudioState?.model ?? null);
+  const [items, setItems] = useState<AnalyticsDefinition[]>(cachedStudioState?.items ?? []);
   const [previews, setPreviews] = useState<Record<string, ExecutionResult>>({});
   const [loadingPreviews, setLoadingPreviews] = useState<Record<string, boolean>>({});
   const [reviewingItems, setReviewingItems] = useState<Record<string, 'approved' | 'rejected'>>({});
@@ -88,8 +102,8 @@ export function GraphStudio({
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   // Available Datasets & Active Selection for Multi-Table Scoping
-  const [datasets, setDatasets] = useState<DatasetItem[]>([]);
-  const [selectedDatasetId, setSelectedDatasetId] = useState<string>('');
+  const [datasets, setDatasets] = useState<DatasetItem[]>(cachedStudioState?.datasets ?? []);
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string>(cachedStudioState?.selectedDatasetId ?? '');
 
   // Active Pathway (3 Modes)
   const [activeMode, setActiveMode] = useState<CreationMode>('visual');
@@ -100,9 +114,12 @@ export function GraphStudio({
   const [aggregation, setAggregation] = useState('COUNT');
   const [dimension, setDimension] = useState('');
   const [kind, setKind] = useState('kpi');
-  const [selected, setSelected] = useState<string[]>([]);
-  const [publishedKeys, setPublishedKeys] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[]>(cachedStudioState?.selectedKeys ?? []);
+  const [publishedKeys, setPublishedKeys] = useState<string[]>(cachedStudioState?.publishedKeys ?? []);
   const [filterDashboard, setFilterDashboard] = useState<'all' | 'published' | 'not_published'>('all');
+  const [deleteSelected, setDeleteSelected] = useState<string[]>([]);
+  const [deletingItems, setDeletingItems] = useState<Record<string, boolean>>({});
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [edit, setEdit] = useState<AnalyticsDefinition | null>(null);
   const [planText, setPlanText] = useState('');
 
@@ -292,14 +309,22 @@ export function GraphStudio({
     const [recommendations, pubRes] = preloadedRecs !== null
       ? [preloadedRecs, preloadedPub]
       : await Promise.all([
-          getRecommendations(),
-          getDashboardPublication().catch(() => ({ title: '', items: [], status: 'unpublished' })),
-        ]);
+        getRecommendations(),
+        getDashboardPublication().catch(() => ({ title: '', items: [], status: 'unpublished' })),
+      ]);
     const itemsList = Array.isArray(pubRes) ? pubRes : ((pubRes as any)?.items || []);
     const pubKeys = itemsList.map((p: any) => `${p.id}:${p.revision}`);
     setPublishedKeys(pubKeys);
     setSelected(pubKeys);
     setItems(recommendations);
+    cachedStudioState = {
+      datasets: allDatasets,
+      model: approved,
+      items: recommendations,
+      selectedDatasetId: resolvedId,
+      publishedKeys: pubKeys,
+      selectedKeys: pubKeys,
+    };
   };
 
   const run = async (operation: () => Promise<void>, actionKey?: string) => {
@@ -362,6 +387,11 @@ export function GraphStudio({
             : existing
         )
       );
+      if (decision === 'approved') {
+        invalidateDashboardCache();
+      window.dispatchEvent(new Event('dashboard_updated'));
+        window.dispatchEvent(new Event('dashboard_updated'));
+      }
       setMessage(
         decision === 'approved'
           ? `Approved definition "${item.title}". It can now be included on the dashboard.`
@@ -378,6 +408,56 @@ export function GraphStudio({
     }
   };
 
+  const removeDeletedKeys = (keysToRemove: string[]) => {
+    const keySet = new Set(keysToRemove);
+    setItems(prev => prev.filter(i => !keySet.has(`${i.id}:${i.revision}`)));
+    setSelected(prev => prev.filter(k => !keySet.has(k)));
+    setPublishedKeys(prev => prev.filter(k => !keySet.has(k)));
+    setDeleteSelected(prev => prev.filter(k => !keySet.has(k)));
+    setPreviews(prev => {
+      const next = { ...prev };
+      keysToRemove.forEach(k => delete next[k]);
+      return next;
+    });
+    invalidateDashboardCache();
+    window.dispatchEvent(new Event('dashboard_updated'));
+  };
+
+  const handleDeleteItem = async (item: AnalyticsDefinition) => {
+    const key = `${item.id}:${item.revision}`;
+    if (deletingItems[key]) return;
+    setDeletingItems(prev => ({ ...prev, [key]: true }));
+    setError('');
+    setPublishedSuccess(false);
+    try {
+      await deleteDefinition(item);
+      removeDeletedKeys([key]);
+      setMessage(`Deleted widget "${item.title}".`);
+    } catch (err) {
+      setError(getApiErrorMessage(err, `Failed to delete "${item.title}".`));
+    } finally {
+      setDeletingItems(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
+  const handleBulkDelete = async (keysToDelete: string[]) => {
+    if (!keysToDelete.length) return;
+    const targets = items
+      .filter(i => keysToDelete.includes(`${i.id}:${i.revision}`))
+      .map(i => ({ id: i.id, revision: i.revision }));
+    if (!targets.length) return;
+    await run(async () => {
+      const res = await deleteDefinitions(targets);
+      removeDeletedKeys(keysToDelete);
+      setConfirmBulkDelete(false);
+      setMessage(`Deleted ${res.deleted} widget${res.deleted === 1 ? '' : 's'}.`);
+    }, 'bulk_delete');
+  };
+
   const saveVisualDefinition = async () => {
     const isCrossTable = dimensionDatasetId && dimensionDatasetId !== selectedDatasetId;
     if (isCrossTable && (!joinResolution || !joinResolution.joinable)) {
@@ -387,32 +467,32 @@ export function GraphStudio({
     const query: any = edit
       ? JSON.parse(planText)
       : {
-          left_dataset_id: selectedDatasetId,
-          metric,
-          aggregation,
-          dimension: dimension || undefined,
-          ...(isCrossTable && joinResolution?.joinable ? {
-            joins: [{
-              right_dataset_id: dimensionDatasetId,
-              left_key: joinResolution.left_key,
-              right_key: joinResolution.right_key,
-              how: 'left'
-            }]
-          } : {})
-        };
+        left_dataset_id: selectedDatasetId,
+        metric,
+        aggregation,
+        dimension: dimension || undefined,
+        ...(isCrossTable && joinResolution?.joinable ? {
+          joins: [{
+            right_dataset_id: dimensionDatasetId,
+            left_key: joinResolution.left_key,
+            right_key: joinResolution.right_key,
+            how: 'left'
+          }]
+        } : {})
+      };
     const item: AnalyticsDefinition = edit
       ? { ...edit, title, query_plan: query, kind }
       : {
-          id: crypto.randomUUID(),
-          title: title || `${aggregation} ${metric}`,
-          kind,
-          revision: 1,
-          semantic_revision: model!.revision,
-          query_plan: query,
-          dependencies: [metric, dimension].filter(v => v && v !== '*'),
-          explanation: isCrossTable ? `Cross-table query linked on ${joinResolution?.left_key} = ${joinResolution?.right_key}` : 'A user-defined query over approved semantic fields.',
-          status: 'proposed',
-        };
+        id: crypto.randomUUID(),
+        title: title || `${aggregation} ${metric}`,
+        kind,
+        revision: 1,
+        semantic_revision: model!.revision,
+        query_plan: query,
+        dependencies: [metric, dimension].filter(v => v && v !== '*'),
+        explanation: isCrossTable ? `Cross-table query linked on ${joinResolution?.left_key} = ${joinResolution?.right_key}` : 'A user-defined query over approved semantic fields.',
+        status: 'proposed',
+      };
     await saveDefinition(item);
     setItems(await getRecommendations());
     setEdit(null);
@@ -521,6 +601,8 @@ export function GraphStudio({
         title: 'Executive Analytics Dashboard',
         items: selectedWidgets.map(i => ({ id: i.id, revision: i.revision })),
       });
+      invalidateDashboardCache();
+      window.dispatchEvent(new Event('dashboard_updated'));
       setPublishedKeys([...selected]);
       setPublishedSuccess(true);
       setMessage(`Successfully published ${selectedWidgets.length} widget(s) to the Executive Dashboard!`);
@@ -552,7 +634,7 @@ export function GraphStudio({
           disabled={busy || !model}
           onClick={() =>
             void run(async () => {
-              const newlyProposed = await proposeRecommendations();
+              const newlyProposed = await proposeRecommendations(true);
               const allItems = await getRecommendations();
               setItems(allItems);
               if (Array.isArray(newlyProposed) && newlyProposed.length > 0) {
@@ -560,7 +642,9 @@ export function GraphStudio({
                   `Added ${newlyProposed.length} new AI-recommended KPI/chart definition${newlyProposed.length === 1 ? '' : 's'}. Existing definitions were preserved.`
                 );
               } else {
-                setMessage('All meaningful KPIs and charts for this dataset are already generated — no duplicates added.');
+                setMessage(
+                  'All distinct AI-recommended KPIs and charts for this dataset are already present. Existing definitions were preserved.'
+                );
               }
             }, 'propose')
           }
@@ -587,9 +671,8 @@ export function GraphStudio({
       {message && (
         <div
           role="status"
-          className={`p-4 rounded-2xl border flex items-center justify-between gap-3 shadow-sm ${
-            publishedSuccess ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-blue-50 border-blue-200 text-blue-900'
-          }`}
+          className={`p-4 rounded-2xl border flex items-center justify-between gap-3 shadow-sm ${publishedSuccess ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-blue-50 border-blue-200 text-blue-900'
+            }`}
         >
           <div className="flex items-center gap-2.5 text-sm font-medium">
             <span className={`material-symbols-outlined text-xl ${publishedSuccess ? 'text-emerald-600' : 'text-blue-600'}`}>
@@ -626,11 +709,10 @@ export function GraphStudio({
         <button
           type="button"
           onClick={() => setActiveMode('visual')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-            activeMode === 'visual'
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeMode === 'visual'
               ? 'bg-white text-blue-700 shadow-2xs border border-slate-200/80'
               : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-          }`}
+            }`}
         >
           <span className="material-symbols-outlined text-[17px]">add_chart</span>
           <span>1. Visual KPI Builder</span>
@@ -639,11 +721,10 @@ export function GraphStudio({
         <button
           type="button"
           onClick={() => setActiveMode('prompt')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-            activeMode === 'prompt'
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeMode === 'prompt'
               ? 'bg-white text-purple-700 shadow-2xs border border-slate-200/80'
               : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-          }`}
+            }`}
         >
           <span className="material-symbols-outlined text-[17px] text-purple-600">psychology</span>
           <span>2. AI Core Graph (Prompt)</span>
@@ -652,11 +733,10 @@ export function GraphStudio({
         <button
           type="button"
           onClick={() => setActiveMode('data_options')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-            activeMode === 'data_options'
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeMode === 'data_options'
               ? 'bg-white text-emerald-700 shadow-2xs border border-slate-200/80'
               : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-          }`}
+            }`}
         >
           <span className="material-symbols-outlined text-[17px] text-emerald-600">auto_graph</span>
           <span>3. Data-Driven Graph (No Prompt)</span>
@@ -667,9 +747,8 @@ export function GraphStudio({
       {activeMode === 'visual' && model && (
         <section
           id="definition-form"
-          className={`bg-white border rounded-xl p-4 shadow-2xs transition-all space-y-3.5 ${
-            edit ? 'border-amber-300 ring-4 ring-amber-400/10' : 'border-slate-200/80'
-          }`}
+          className={`bg-white border rounded-xl p-4 shadow-2xs transition-all space-y-3.5 ${edit ? 'border-amber-300 ring-4 ring-amber-400/10' : 'border-slate-200/80'
+            }`}
         >
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
             <div>
@@ -877,11 +956,10 @@ export function GraphStudio({
                     key={type.id}
                     type="button"
                     onClick={() => setKind(type.id)}
-                    className={`flex flex-col items-center justify-center p-2 rounded-lg border text-[11px] font-semibold transition-all cursor-pointer ${
-                      kind === type.id
+                    className={`flex flex-col items-center justify-center p-2 rounded-lg border text-[11px] font-semibold transition-all cursor-pointer ${kind === type.id
                         ? 'bg-blue-50/80 border-blue-500 text-blue-700 shadow-sm ring-2 ring-blue-500/20'
                         : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-                    }`}
+                      }`}
                   >
                     <span className="material-symbols-outlined text-base mb-0.5">{type.icon}</span>
                     <span>{type.label}</span>
@@ -920,8 +998,8 @@ export function GraphStudio({
                       ? 'Updating...'
                       : 'Saving...'
                     : edit
-                    ? 'Update Definition Proposal'
-                    : 'Save Definition Proposal'}
+                      ? 'Update Definition Proposal'
+                      : 'Save Definition Proposal'}
                 </span>
               </button>
               {edit && (
@@ -1047,13 +1125,12 @@ export function GraphStudio({
                   return (
                     <div
                       key={s.step}
-                      className={`p-2 rounded-lg text-[11px] font-semibold border transition-all ${
-                        isDone
+                      className={`p-2 rounded-lg text-[11px] font-semibold border transition-all ${isDone
                           ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
                           : isCurrent
-                          ? 'bg-white border-purple-500 text-purple-900 shadow-sm ring-2 ring-purple-500/20'
-                          : 'bg-white/60 border-slate-200 text-slate-400 opacity-60'
-                      }`}
+                            ? 'bg-white border-purple-500 text-purple-900 shadow-sm ring-2 ring-purple-500/20'
+                            : 'bg-white/60 border-slate-200 text-slate-400 opacity-60'
+                        }`}
                     >
                       <div className="text-[10px] font-mono capitalize">{s.step.toLowerCase()}</div>
                       <div className="truncate mt-0.5">{s.label}</div>
@@ -1303,11 +1380,10 @@ export function GraphStudio({
                     key={type.id}
                     type="button"
                     onClick={() => setSelectedAdvancedChart(type.id)}
-                    className={`flex flex-col items-center justify-center p-2 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
-                      selectedAdvancedChart === type.id
+                    className={`flex flex-col items-center justify-center p-2 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${selectedAdvancedChart === type.id
                         ? 'bg-emerald-50/80 border-emerald-500 text-emerald-800 shadow-sm ring-2 ring-emerald-500/20'
                         : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-                    }`}
+                      }`}
                   >
                     <span className="material-symbols-outlined text-base mb-0.5">{type.icon}</span>
                     <span className="font-bold text-[11px]">{type.label}</span>
@@ -1382,391 +1458,491 @@ export function GraphStudio({
           if (filterDashboard === 'not_published') return !publishedKeys.includes(key);
           return true;
         });
+        const displayedKeys = displayedItems.map(i => `${i.id}:${i.revision}`);
+        const selectedInView = displayedKeys.filter(k => deleteSelected.includes(k));
+        const allDisplayedSelected = displayedKeys.length > 0 && selectedInView.length === displayedKeys.length;
 
         return (
-        <>
-          {/* CONFIGURED DEFINITIONS STREAM */}
-      <section className="space-y-3 pt-2">
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200/80">
-          <div>
-            <div className="flex items-center gap-2.5">
-              <h2 className="text-sm font-bold text-slate-900">
-                Configured Definitions ({items.length})
-              </h2>
-              {publishedCount > 0 && (
-                <span className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse"></span>
-                  {publishedCount} on Dashboard
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {canPublish
-                ? 'Review and approve definitions. Cards with "Live on Dashboard" are currently active on the Executive Dashboard.'
-                : 'Review definitions and preview charts. Widget publishing to Executive Dashboard is restricted to Admin or Admin+User.'}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Quick Filter Tabs */}
-            {items.length > 0 && (
-              <div className="inline-flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200 text-xs font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setFilterDashboard('all')}
-                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
-                    filterDashboard === 'all'
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  All ({items.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterDashboard('published')}
-                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-                    filterDashboard === 'published'
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'text-slate-600 hover:text-blue-700'
-                  }`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full ${filterDashboard === 'published' ? 'bg-white' : 'bg-blue-600'}`}></span>
-                  Live on Dashboard ({publishedCount})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterDashboard('not_published')}
-                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
-                    filterDashboard === 'not_published'
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Not on Dashboard ({notPublishedCount})
-                </button>
-              </div>
-            )}
-
-            {items.length > 0 && (
-              <div className="text-xs font-semibold px-3 py-1 bg-slate-100 text-slate-700 rounded-full border border-slate-200">
-                {approvedCount} of {items.length} Approved
-              </div>
-            )}
-          </div>
-        </div>
-
-        {model && !items.length && (
-          <div className="p-12 text-center bg-white border border-dashed border-slate-300 rounded-2xl space-y-4 shadow-sm">
-            <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
-              <span className="material-symbols-outlined text-3xl">query_stats</span>
-            </div>
-            <div>
-              <h3 className="font-bold text-slate-900 text-base">No KPI Definitions Found</h3>
-              <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                Click &quot;Propose AI Recommendations&quot; above to auto-generate supported KPI metrics from your schema, or create one using the options above.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {displayedItems.length === 0 && items.length > 0 && (
-          <div className="p-8 text-center bg-white border border-dashed border-slate-200 rounded-2xl text-slate-500 text-xs">
-            No widgets match the selected filter (&quot;{filterDashboard === 'published' ? 'Live on Dashboard' : 'Not on Dashboard'}&quot;).
-            <button
-              type="button"
-              onClick={() => setFilterDashboard('all')}
-              className="ml-2 text-blue-600 font-semibold hover:underline cursor-pointer"
-            >
-              Show all
-            </button>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4.5 items-start">
-          {displayedItems.map(item => {
-            const key = `${item.id}:${item.revision}`;
-            const isPublished = publishedKeys.includes(key);
-            const isSelected = selected.includes(key);
-            const isPreviewOpen = Boolean(previews[key]);
-            const isPreviewLoading = Boolean(loadingPreviews[key]);
-            const reviewingDecision = reviewingItems[key];
-            const isCardReviewing = Boolean(reviewingDecision);
-
-            return (
-              <article
-                key={key}
-                className={`bg-white border rounded-xl p-3.5 shadow-2xs transition-all flex flex-col justify-between h-full space-y-2.5 relative overflow-hidden ${
-                  isPublished
-                    ? 'border-blue-300 ring-2 ring-blue-500/15 bg-blue-50/10'
-                    : isSelected
-                    ? 'border-emerald-300 ring-4 ring-emerald-400/10 bg-emerald-50/10'
-                    : 'border-slate-200/80 hover:border-slate-300 hover:shadow-md'
-                }`}
-              >
-                {/* Header with Title, Kind Badge, Dashboard Status, and Review Status */}
-                <div className="space-y-1.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h3 className="font-bold text-xs sm:text-sm text-slate-900 leading-snug truncate" title={item.title}>
-                          {item.title}
-                        </h3>
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-wide shrink-0">
-                          {item.kind}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 flex-wrap justify-end shrink-0">
-                      {isPublished ? (
-                        <span
-                          title="This KPI is currently active and visible on the Executive Dashboard."
-                          className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs whitespace-nowrap"
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse"></span>
-                          <span>Live on Dashboard</span>
-                        </span>
-                      ) : (
-                        <span
-                          title="This KPI is not currently included on the Executive Dashboard."
-                          className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap"
-                        >
-                          <span className="material-symbols-outlined text-[13px] text-slate-400">dashboard_customize</span>
-                          <span>Not on Dashboard</span>
-                        </span>
-                      )}
-
-                      <span
-                        className={`text-[10px] sm:text-[11px] font-semibold px-2 py-0.5 rounded-full border shrink-0 whitespace-nowrap ${
-                          item.status === 'approved'
-                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                            : item.status === 'rejected'
-                            ? 'bg-rose-50 text-rose-800 border-rose-200'
-                            : 'bg-amber-50 text-amber-800 border-amber-200'
-                        }`}
-                      >
-                        {item.status.charAt(0).toUpperCase() + item.status.slice(1)} (Rev {item.revision})
+          <>
+            {/* CONFIGURED DEFINITIONS STREAM */}
+            <section className="space-y-3 pt-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200/80">
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <h2 className="text-sm font-bold text-slate-900">
+                      Configured Definitions ({items.length})
+                    </h2>
+                    {publishedCount > 0 && (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse"></span>
+                        {publishedCount} on Dashboard
                       </span>
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed" title={item.explanation}>
-                    {item.explanation}
-                  </p>
-
-                  {item.reviewer && (
-                    <p className="text-[10px] text-slate-400 font-mono truncate" title={`Reviewed by ${item.reviewer} · ${new Date(item.reviewed_at || '').toLocaleString()}`}>
-                      Reviewed by {item.reviewer.slice(0, 10)}... · {new Date(item.reviewed_at || '').toLocaleDateString()}
-                    </p>
-                  )}
-                </div>
-
-                {/* Query Plan Accordion */}
-                <details className="text-[11px] text-slate-600 bg-slate-50 rounded-lg p-2 border border-slate-100">
-                  <summary className="cursor-pointer font-medium text-slate-700 select-none flex items-center gap-1.5 text-xs">
-                    <span className="material-symbols-outlined text-sm text-slate-500">code</span>
-                    <span>View Dependencies & Query Plan</span>
-                  </summary>
-                  <div className="mt-2 space-y-1.5">
-                    <p className="text-[11px] truncate">
-                      <strong>Dependencies:</strong> {(item.dependencies || []).join(', ') || 'Source rows count'}
-                    </p>
-                    <pre className="overflow-auto max-h-36 bg-slate-900 text-slate-100 rounded-lg p-2.5 text-[10px] font-mono leading-relaxed">
-                      {JSON.stringify(item.query_plan, null, 2)}
-                    </pre>
-                  </div>
-                </details>
-
-                {/* Calculation Live Preview (Formatted $34.09M values) */}
-                {isPreviewOpen && (
-                  <div className="border border-blue-200 bg-blue-50/20 rounded-xl p-3 mt-1 shadow-inner overflow-hidden">
-                    <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-blue-100 text-xs font-semibold text-blue-900">
-                      <span className="flex items-center gap-1.5 text-xs">
-                        <span className="material-symbols-outlined text-blue-600 text-sm">visibility</span>
-                        <span>Live Calculation Engine Preview</span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void togglePreview(item)}
-                        className="text-slate-400 hover:text-slate-600 cursor-pointer"
-                        title="Hide preview"
-                      >
-                        <span className="material-symbols-outlined text-sm">close</span>
-                      </button>
-                    </div>
-                    <div className="overflow-x-auto max-h-[320px]">
-                      <AnalyticsWidget definition={item} result={previews[key]} showTable={true} />
-                    </div>
-                  </div>
-                )}
-
-                {/* Action Bar */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-slate-100 mt-auto">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <button
-                      type="button"
-                      disabled={busy || isPreviewLoading || isCardReviewing}
-                      onClick={() => void togglePreview(item)}
-                      className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all border cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                        isPreviewOpen
-                          ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
-                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 shadow-2xs'
-                      }`}
-                    >
-                      <span className={`material-symbols-outlined text-[15px] ${isPreviewLoading ? 'animate-spin' : ''}`}>
-                        {isPreviewLoading ? 'progress_activity' : isPreviewOpen ? 'visibility_off' : 'visibility'}
-                      </span>
-                      <span>
-                        {isPreviewLoading ? 'Executing...' : isPreviewOpen ? 'Hide Preview' : 'Preview Live'}
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={busy || isPreviewLoading || isCardReviewing}
-                      onClick={() => {
-                        setEdit(item);
-                        setPlanText(JSON.stringify(item.query_plan, null, 2));
-                        setTitle(item.title);
-                        setKind(item.kind);
-                        setActiveMode('visual');
-                        document.getElementById('definition-form')?.scrollIntoView({ behavior: 'smooth' });
-                      }}
-                      className="px-2 py-1 rounded-lg text-xs font-semibold text-slate-700 border border-slate-200 bg-white hover:bg-slate-50 flex items-center gap-1 transition-all shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <span className="material-symbols-outlined text-[15px]">edit</span>
-                      <span>Edit Query</span>
-                    </button>
-
-                    {item.status === 'proposed' && (
-                      <div className="flex items-center gap-1.5 pl-1.5 border-l border-slate-200">
-                        <button
-                          type="button"
-                          disabled={busy || isPreviewLoading || isCardReviewing}
-                          onClick={() => void handleReviewItem(item, 'approved')}
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                          <span className={`material-symbols-outlined text-[15px] ${reviewingDecision === 'approved' ? 'animate-spin' : ''}`}>
-                            {reviewingDecision === 'approved' ? 'progress_activity' : 'check'}
-                          </span>
-                          <span>{reviewingDecision === 'approved' ? 'Approving...' : 'Approve'}</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={busy || isPreviewLoading || isCardReviewing}
-                          onClick={() => void handleReviewItem(item, 'rejected')}
-                          className="border border-rose-200 text-rose-600 hover:bg-rose-50 font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                          <span className={`material-symbols-outlined text-[15px] ${reviewingDecision === 'rejected' ? 'animate-spin' : ''}`}>
-                            {reviewingDecision === 'rejected' ? 'progress_activity' : 'close'}
-                          </span>
-                          <span>{reviewingDecision === 'rejected' ? 'Rejecting...' : 'Reject'}</span>
-                        </button>
-                      </div>
                     )}
                   </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {canPublish
+                      ? 'Review and approve definitions. Cards with "Live on Dashboard" are currently active on the Executive Dashboard.'
+                      : 'Review definitions and preview charts. Widget publishing to Executive Dashboard is restricted to Admin or Admin+User.'}
+                  </p>
+                </div>
 
-                  {item.status === 'approved' && (
-                    canPublish ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Quick Filter Tabs */}
+                  {items.length > 0 && (
+                    <div className="inline-flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200 text-xs font-semibold">
                       <button
                         type="button"
                         onClick={() => {
-                          setSelected(prev =>
-                            prev.includes(key) ? prev.filter(v => v !== key) : [...prev, key]
-                          );
+                          setFilterDashboard('all');
+                          setConfirmBulkDelete(false);
                         }}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer select-none border shrink-0 ${
-                          isSelected
-                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
-                            : 'bg-white text-slate-700 border-slate-300 hover:border-emerald-500 hover:text-emerald-700'
-                        }`}
+                        className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${filterDashboard === 'all'
+                            ? 'bg-white text-slate-900 shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                          }`}
                       >
-                        <span className="material-symbols-outlined text-[16px]">
-                          {isSelected ? 'check_box' : 'add_box'}
-                        </span>
-                        <span>{isSelected ? 'Included on Dashboard' : 'Include on Dashboard'}</span>
+                        All ({items.length})
                       </button>
-                    ) : (
-                      <div
-                        title="Only Admin or Admin+User accounts have permission to publish widgets to the Executive Dashboard."
-                        className="px-2.5 py-1.5 rounded-xl text-xs font-medium text-slate-400 bg-slate-50 border border-slate-200 flex items-center gap-1.5 shrink-0 select-none cursor-not-allowed"
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFilterDashboard('published');
+                          setConfirmBulkDelete(false);
+                        }}
+                        className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${filterDashboard === 'published'
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'text-slate-600 hover:text-blue-700'
+                          }`}
                       >
-                        <span className="material-symbols-outlined text-[14px] text-slate-400">lock</span>
-                        <span>Publishing (Admin Only)</span>
-                      </div>
-                    )
+                        <span className={`w-1.5 h-1.5 rounded-full ${filterDashboard === 'published' ? 'bg-white' : 'bg-blue-600'}`}></span>
+                        Live on Dashboard ({publishedCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFilterDashboard('not_published');
+                          setConfirmBulkDelete(false);
+                        }}
+                        className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${filterDashboard === 'not_published'
+                            ? 'bg-white text-slate-900 shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                      >
+                        Not on Dashboard ({notPublishedCount})
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Select All & Bulk Delete Controls for Active Filter */}
+                  {displayedItems.length > 0 && (
+                    <div className="inline-flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          setConfirmBulkDelete(false);
+                          if (allDisplayedSelected) {
+                            const viewSet = new Set(displayedKeys);
+                            setDeleteSelected(prev => prev.filter(k => !viewSet.has(k)));
+                          } else {
+                            setDeleteSelected(prev => Array.from(new Set([...prev, ...displayedKeys])));
+                          }
+                        }}
+                        className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${allDisplayedSelected
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 shadow-2xs'
+                          }`}
+                        title={allDisplayedSelected ? 'Deselect all widgets in this filter' : 'Select all widgets in this filter'}
+                      >
+                        <span className="material-symbols-outlined text-[15px]">
+                          {allDisplayedSelected ? 'check_box' : 'select_all'}
+                        </span>
+                        <span>{allDisplayedSelected ? `Deselect All (${displayedKeys.length})` : `Select All (${displayedKeys.length})`}</span>
+                      </button>
+
+                      {selectedInView.length > 0 && !confirmBulkDelete && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setConfirmBulkDelete(true)}
+                          className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <span className="material-symbols-outlined text-[15px]">delete</span>
+                          <span>Delete ({selectedInView.length})</span>
+                        </button>
+                      )}
+
+                      {selectedInView.length > 0 && confirmBulkDelete && (
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handleBulkDelete(selectedInView)}
+                            className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <span className={`material-symbols-outlined text-[15px] ${busyAction === 'bulk_delete' ? 'animate-spin' : ''}`}>
+                              {busyAction === 'bulk_delete' ? 'progress_activity' : 'delete_forever'}
+                            </span>
+                            <span>{busyAction === 'bulk_delete' ? 'Deleting...' : `Confirm Delete (${selectedInView.length})`}</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setConfirmBulkDelete(false)}
+                            className="px-2 py-1.5 rounded-xl text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {items.length > 0 && (
+                    <div className="text-xs font-semibold px-3 py-1 bg-slate-100 text-slate-700 rounded-full border border-slate-200">
+                      {approvedCount} of {items.length} Approved
+                    </div>
                   )}
                 </div>
-              </article>
-            );
-          })}
-        </div>
-      </section>
+              </div>
 
-      {/* Sticky Bottom Publishing Bar */}
-      {canPublish ? (
-        <div className="sticky bottom-4 z-40 bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-              <span className="material-symbols-outlined text-xl">dashboard_customize</span>
-            </div>
-            <div>
-              <div className="text-sm font-bold text-slate-900">
-                {selected.length === 0
-                  ? 'No widgets selected for Executive Dashboard'
-                  : `${selected.length} widget${selected.length > 1 ? 's' : ''} ready to publish (${publishedKeys.length} live on dashboard)`}
-              </div>
-              <div className="text-xs text-slate-500">
-                {selected.length === 0
-                  ? 'Click "Include on Dashboard" on any approved KPI card above.'
-                  : 'Click button to deploy selected widgets live to the Executive Dashboard.'}
-              </div>
-            </div>
-          </div>
+              {model && !items.length && (
+                <div className="p-12 text-center bg-white border border-dashed border-slate-300 rounded-2xl space-y-4 shadow-sm">
+                  <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
+                    <span className="material-symbols-outlined text-3xl">query_stats</span>
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-base">No KPI Definitions Found</h3>
+                    <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                      Click &quot;Propose AI Recommendations&quot; above to auto-generate supported KPI metrics from your schema, or create one using the options above.
+                    </p>
+                  </div>
+                </div>
+              )}
 
-          <button
-            type="button"
-            disabled={busy || selected.length === 0}
-            onClick={() => void handlePublishDashboard()}
-            className={`inline-flex items-center gap-2 font-bold text-sm px-6 py-2.5 rounded-xl shadow-md transition-all ${
-              selected.length > 0
-                ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer hover:shadow-lg'
-                : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
-            }`}
-          >
-            <span className={`material-symbols-outlined text-lg ${busyAction === 'publish' ? 'animate-spin' : ''}`}>
-              {busyAction === 'publish' ? 'progress_activity' : 'publish'}
-            </span>
-            <span>
-              {busyAction === 'publish'
-                ? 'Publishing...'
-                : selected.length === 0
-                ? 'Publish to Dashboard'
-                : `Publish ${selected.length} Widget${selected.length > 1 ? 's' : ''}`}
-            </span>
-          </button>
-        </div>
-      ) : (
-        <div className="sticky bottom-4 z-40 bg-slate-50/95 backdrop-blur-md border border-slate-200/80 shadow-md rounded-2xl p-3.5 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-slate-200/80 text-slate-600 flex items-center justify-center shrink-0">
-              <span className="material-symbols-outlined text-lg">admin_panel_settings</span>
-            </div>
-            <div>
-              <div className="text-xs font-semibold text-slate-800">Publishing Restricted to Administrators</div>
-              <div className="text-[11px] text-slate-500">
-                Only <strong>Admin</strong> or <strong>Admin+User</strong> accounts have permission to publish widgets to the Executive Dashboard.
+              {displayedItems.length === 0 && items.length > 0 && (
+                <div className="p-8 text-center bg-white border border-dashed border-slate-200 rounded-2xl text-slate-500 text-xs">
+                  No widgets match the selected filter (&quot;{filterDashboard === 'published' ? 'Live on Dashboard' : 'Not on Dashboard'}&quot;).
+                  <button
+                    type="button"
+                    onClick={() => setFilterDashboard('all')}
+                    className="ml-2 text-blue-600 font-semibold hover:underline cursor-pointer"
+                  >
+                    Show all
+                  </button>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4.5 items-start">
+                {displayedItems.map(item => {
+                  const key = `${item.id}:${item.revision}`;
+                  const isPublished = publishedKeys.includes(key);
+                  const isSelected = selected.includes(key);
+                  const isDeleteSelected = deleteSelected.includes(key);
+                  const isCardDeleting = Boolean(deletingItems[key]);
+                  const isPreviewOpen = Boolean(previews[key]);
+                  const isPreviewLoading = Boolean(loadingPreviews[key]);
+                  const reviewingDecision = reviewingItems[key];
+                  const isCardReviewing = Boolean(reviewingDecision);
+
+                  return (
+                    <article
+                      key={key}
+                      className={`bg-white border rounded-xl p-3.5 shadow-2xs transition-all flex flex-col justify-between h-full space-y-2.5 relative overflow-hidden ${isDeleteSelected
+                          ? 'border-rose-300 ring-2 ring-rose-500/15 bg-rose-50/10'
+                          : isPublished
+                            ? 'border-blue-300 ring-2 ring-blue-500/15 bg-blue-50/10'
+                            : isSelected
+                              ? 'border-emerald-300 ring-4 ring-emerald-400/10 bg-emerald-50/10'
+                              : 'border-slate-200/80 hover:border-slate-300 hover:shadow-md'
+                        }`}
+                    >
+                      {/* Header with Title, Kind Badge, Dashboard Status, and Review Status */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <input
+                                type="checkbox"
+                                checked={isDeleteSelected}
+                                disabled={busy || isCardDeleting}
+                                aria-label={`Select ${item.title} for deletion`}
+                                title="Select for bulk delete"
+                                onChange={() => {
+                                  setConfirmBulkDelete(false);
+                                  setDeleteSelected(prev =>
+                                    prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+                                  );
+                                }}
+                                className="w-3.5 h-3.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer shrink-0"
+                              />
+                              <h3 className="font-bold text-xs sm:text-sm text-slate-900 leading-snug truncate" title={item.title}>
+                                {item.title}
+                              </h3>
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-wide shrink-0">
+                                {item.kind}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap justify-end shrink-0">
+                            {isPublished ? (
+                              <span
+                                title="This KPI is currently active and visible on the Executive Dashboard."
+                                className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs whitespace-nowrap"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse"></span>
+                                <span>Live on Dashboard</span>
+                              </span>
+                            ) : (
+                              <span
+                                title="This KPI is not currently included on the Executive Dashboard."
+                                className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap"
+                              >
+                                <span className="material-symbols-outlined text-[13px] text-slate-400">dashboard_customize</span>
+                                <span>Not on Dashboard</span>
+                              </span>
+                            )}
+
+                            <span
+                              className={`text-[10px] sm:text-[11px] font-semibold px-2 py-0.5 rounded-full border shrink-0 whitespace-nowrap ${item.status === 'approved'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : item.status === 'rejected'
+                                    ? 'bg-rose-50 text-rose-800 border-rose-200'
+                                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                                }`}
+                            >
+                              {item.status.charAt(0).toUpperCase() + item.status.slice(1)} (Rev {item.revision})
+                            </span>
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed" title={item.explanation}>
+                          {item.explanation}
+                        </p>
+
+                        {item.reviewer && (
+                          <p className="text-[10px] text-slate-400 font-mono truncate" title={`Reviewed by ${item.reviewer} · ${new Date(item.reviewed_at || '').toLocaleString()}`}>
+                            Reviewed by {item.reviewer.slice(0, 10)}... · {new Date(item.reviewed_at || '').toLocaleDateString()}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Query Plan Accordion */}
+                      <details className="text-[11px] text-slate-600 bg-slate-50 rounded-lg p-2 border border-slate-100">
+                        <summary className="cursor-pointer font-medium text-slate-700 select-none flex items-center gap-1.5 text-xs">
+                          <span className="material-symbols-outlined text-sm text-slate-500">code</span>
+                          <span>View Dependencies & Query Plan</span>
+                        </summary>
+                        <div className="mt-2 space-y-1.5">
+                          <p className="text-[11px] truncate">
+                            <strong>Dependencies:</strong> {(item.dependencies || []).join(', ') || 'Source rows count'}
+                          </p>
+                          <pre className="overflow-auto max-h-36 bg-slate-900 text-slate-100 rounded-lg p-2.5 text-[10px] font-mono leading-relaxed">
+                            {JSON.stringify(item.query_plan, null, 2)}
+                          </pre>
+                        </div>
+                      </details>
+
+                      {/* Calculation Live Preview (Formatted $34.09M values) */}
+                      {isPreviewOpen && (
+                        <div className="border border-blue-200 bg-blue-50/20 rounded-xl p-3 mt-1 shadow-inner overflow-hidden">
+                          <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-blue-100 text-xs font-semibold text-blue-900">
+                            <span className="flex items-center gap-1.5 text-xs">
+                              <span className="material-symbols-outlined text-blue-600 text-sm">visibility</span>
+                              <span>Live Calculation Engine Preview</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void togglePreview(item)}
+                              className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                              title="Hide preview"
+                            >
+                              <span className="material-symbols-outlined text-sm">close</span>
+                            </button>
+                          </div>
+                          <div className="overflow-x-auto max-h-[320px]">
+                            <AnalyticsWidget definition={item} result={previews[key]} showTable={true} />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Action Bar */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-slate-100 mt-auto">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            disabled={busy || isPreviewLoading || isCardReviewing}
+                            onClick={() => void togglePreview(item)}
+                            className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all border cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${isPreviewOpen
+                                ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 shadow-2xs'
+                              }`}
+                          >
+                            <span className={`material-symbols-outlined text-[15px] ${isPreviewLoading ? 'animate-spin' : ''}`}>
+                              {isPreviewLoading ? 'progress_activity' : isPreviewOpen ? 'visibility_off' : 'visibility'}
+                            </span>
+                            <span>
+                              {isPreviewLoading ? 'Executing...' : isPreviewOpen ? 'Hide Preview' : 'Preview Live'}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={busy || isPreviewLoading || isCardReviewing || isCardDeleting}
+                            onClick={() => {
+                              setEdit(item);
+                              setPlanText(JSON.stringify(item.query_plan, null, 2));
+                              setTitle(item.title);
+                              setKind(item.kind);
+                              setActiveMode('visual');
+                              document.getElementById('definition-form')?.scrollIntoView({ behavior: 'smooth' });
+                            }}
+                            className="px-2 py-1 rounded-lg text-xs font-semibold text-slate-700 border border-slate-200 bg-white hover:bg-slate-50 flex items-center gap-1 transition-all shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <span className="material-symbols-outlined text-[15px]">edit</span>
+                            <span>Edit Query</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={busy || isPreviewLoading || isCardReviewing || isCardDeleting}
+                            onClick={() => void handleDeleteItem(item)}
+                            title="Delete this widget"
+                            className="px-2 py-1 rounded-lg text-xs font-semibold text-rose-600 border border-rose-200 bg-white hover:bg-rose-50 flex items-center gap-1 transition-all shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <span className={`material-symbols-outlined text-[15px] ${isCardDeleting ? 'animate-spin' : ''}`}>
+                              {isCardDeleting ? 'progress_activity' : 'delete'}
+                            </span>
+                            <span>{isCardDeleting ? 'Deleting...' : 'Delete'}</span>
+                          </button>
+
+                          {item.status === 'proposed' && (
+                            <div className="flex items-center gap-1.5 pl-1.5 border-l border-slate-200">
+                              <button
+                                type="button"
+                                disabled={busy || isPreviewLoading || isCardReviewing}
+                                onClick={() => void handleReviewItem(item, 'approved')}
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                              >
+                                <span className={`material-symbols-outlined text-[15px] ${reviewingDecision === 'approved' ? 'animate-spin' : ''}`}>
+                                  {reviewingDecision === 'approved' ? 'progress_activity' : 'check'}
+                                </span>
+                                <span>{reviewingDecision === 'approved' ? 'Approving...' : 'Approve'}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={busy || isPreviewLoading || isCardReviewing}
+                                onClick={() => void handleReviewItem(item, 'rejected')}
+                                className="border border-rose-200 text-rose-600 hover:bg-rose-50 font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                              >
+                                <span className={`material-symbols-outlined text-[15px] ${reviewingDecision === 'rejected' ? 'animate-spin' : ''}`}>
+                                  {reviewingDecision === 'rejected' ? 'progress_activity' : 'close'}
+                                </span>
+                                <span>{reviewingDecision === 'rejected' ? 'Rejecting...' : 'Reject'}</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {item.status === 'approved' && (
+                          canPublish ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelected(prev =>
+                                  prev.includes(key) ? prev.filter(v => v !== key) : [...prev, key]
+                                );
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer select-none border shrink-0 ${isSelected
+                                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                                  : 'bg-white text-slate-700 border-slate-300 hover:border-emerald-500 hover:text-emerald-700'
+                                }`}
+                            >
+                              <span className="material-symbols-outlined text-[16px]">
+                                {isSelected ? 'check_box' : 'add_box'}
+                              </span>
+                              <span>{isSelected ? 'Included on Dashboard' : 'Include on Dashboard'}</span>
+                            </button>
+                          ) : (
+                            <div
+                              title="Only Admin or Admin+User accounts have permission to publish widgets to the Executive Dashboard."
+                              className="px-2.5 py-1.5 rounded-xl text-xs font-medium text-slate-400 bg-slate-50 border border-slate-200 flex items-center gap-1.5 shrink-0 select-none cursor-not-allowed"
+                            >
+                              <span className="material-symbols-outlined text-[14px] text-slate-400">lock</span>
+                              <span>Publishing (Admin Only)</span>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
-            </div>
-          </div>
-          <span className="text-[11px] font-semibold text-slate-500 bg-slate-200/70 border border-slate-300/80 px-2.5 py-1 rounded-lg select-none">
-            Read-Only
-          </span>
-        </div>
-      )}
-        </>
+            </section>
+
+            {/* Sticky Bottom Publishing Bar */}
+            {canPublish ? (
+              <div className="sticky bottom-4 z-40 bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                    <span className="material-symbols-outlined text-xl">dashboard_customize</span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-slate-900">
+                      {selected.length === 0
+                        ? 'No widgets selected for Executive Dashboard'
+                        : `${selected.length} widget${selected.length > 1 ? 's' : ''} ready to publish (${publishedKeys.length} live on dashboard)`}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {selected.length === 0
+                        ? 'Click "Include on Dashboard" on any approved KPI card above.'
+                        : 'Click button to deploy selected widgets live to the Executive Dashboard.'}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={busy || selected.length === 0}
+                  onClick={() => void handlePublishDashboard()}
+                  className={`inline-flex items-center gap-2 font-bold text-sm px-6 py-2.5 rounded-xl shadow-md transition-all ${selected.length > 0
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer hover:shadow-lg'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                    }`}
+                >
+                  <span className={`material-symbols-outlined text-lg ${busyAction === 'publish' ? 'animate-spin' : ''}`}>
+                    {busyAction === 'publish' ? 'progress_activity' : 'publish'}
+                  </span>
+                  <span>
+                    {busyAction === 'publish'
+                      ? 'Publishing...'
+                      : selected.length === 0
+                        ? 'Publish to Dashboard'
+                        : `Publish ${selected.length} Widget${selected.length > 1 ? 's' : ''}`}
+                  </span>
+                </button>
+              </div>
+            ) : (
+              <div className="sticky bottom-4 z-40 bg-slate-50/95 backdrop-blur-md border border-slate-200/80 shadow-md rounded-2xl p-3.5 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-slate-200/80 text-slate-600 flex items-center justify-center shrink-0">
+                    <span className="material-symbols-outlined text-lg">admin_panel_settings</span>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-slate-800">Publishing Restricted to Administrators</div>
+                    <div className="text-[11px] text-slate-500">
+                      Only <strong>Admin</strong> or <strong>Admin+User</strong> accounts have permission to publish widgets to the Executive Dashboard.
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-semibold text-slate-500 bg-slate-200/70 border border-slate-300/80 px-2.5 py-1 rounded-lg select-none">
+                  Read-Only
+                </span>
+              </div>
+            )}
+          </>
         );
       })()}
     </div>

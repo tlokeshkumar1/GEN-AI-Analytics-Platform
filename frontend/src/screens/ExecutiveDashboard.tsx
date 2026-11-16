@@ -1,25 +1,40 @@
 import React, { useEffect, useState } from 'react';
 import api, { getApiErrorMessage } from '../services/api';
-import { ensureDefaultContext } from '../services/executionContext';
+import { ensureDefaultContext, selectedContext } from '../services/executionContext';
 import { AnalyticsWidget, formatTableCell } from '../components/AnalyticsWidget';
 import { AnalyticsDefinition, ExecutionResult } from '../services/semanticService';
 
+type DashboardData = {
+  title: string;
+  widgets: { definition: AnalyticsDefinition; result: ExecutionResult }[];
+  status: string;
+};
+
+let cachedDashboardPayload: DashboardData | null = null;
+
+export function invalidateDashboardCache() {
+  cachedDashboardPayload = null;
+}
+
 export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) => void }) {
-  const [dashboard, setDashboard] = useState<{
-    title: string;
-    widgets: { definition: AnalyticsDefinition; result: ExecutionResult }[];
-    status: string;
-  } | null>(null);
+  const [dashboard, setDashboard] = useState<DashboardData | null>(cachedDashboardPayload);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cachedDashboardPayload);
 
   const load = async (forceRefresh = false) => {
-    setLoading(true);
+    const shouldBypass = forceRefresh || !cachedDashboardPayload;
+    if (shouldBypass) {
+      setLoading(true);
+    }
     setError('');
     try {
-      await ensureDefaultContext();
-      const endpoint = forceRefresh ? '/dashboard?refresh=true' : '/dashboard';
-      setDashboard((await api.get(endpoint)).data);
+      if (!selectedContext()) {
+        await ensureDefaultContext();
+      }
+      const endpoint = shouldBypass ? '/dashboard?refresh=true' : '/dashboard';
+      const data = (await api.get(endpoint)).data;
+      cachedDashboardPayload = data;
+      setDashboard(data);
     } catch (err) {
       setError(getApiErrorMessage(err, 'Dashboard could not be loaded.'));
     } finally {
@@ -29,6 +44,15 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
 
   useEffect(() => {
     void load();
+
+    const handleDashboardUpdated = () => {
+      cachedDashboardPayload = null;
+      void load(true);
+    };
+    window.addEventListener('dashboard_updated', handleDashboardUpdated);
+    return () => {
+      window.removeEventListener('dashboard_updated', handleDashboardUpdated);
+    };
   }, []);
 
   const widgets = dashboard?.widgets ?? [];
@@ -180,9 +204,14 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
                   <h2 className="text-xs sm:text-sm font-bold text-slate-900 truncate">
                     {definition.title}
                   </h2>
-                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
                     {definition.kind.replace("_", " ")}
                   </span>
+                  {(definition as any).dataset_name && (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 truncate max-w-[160px]">
+                      {(definition as any).dataset_name}
+                    </span>
+                  )}
                 </div>
                 <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
                   Live

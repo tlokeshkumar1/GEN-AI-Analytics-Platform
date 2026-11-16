@@ -54,6 +54,7 @@ describe('AIAgentIngestionStepper sequential stages & first-upload publish', () 
     vi.mocked(api.post).mockResolvedValue({ data: { status: 'success' } });
     const onClose = vi.fn();
     const onNavigateToDashboard = vi.fn();
+    const onNavigateToBuildKpi = vi.fn();
 
     const result: IngestionResult = {
       filename: 'Projects.xlsx',
@@ -84,6 +85,7 @@ describe('AIAgentIngestionStepper sequential stages & first-upload publish', () 
         result={result}
         onClose={onClose}
         onNavigateToDashboard={onNavigateToDashboard}
+        onNavigateToBuildKpi={onNavigateToBuildKpi}
       />
     );
 
@@ -95,7 +97,8 @@ describe('AIAgentIngestionStepper sequential stages & first-upload publish', () 
       });
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Publish 1 Accepted Charts to Dashboard/i }));
+    expect(screen.getByRole('button', { name: /Build Your KPI/i })).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /Publish on Dashboard \(1\)/i }));
 
     await waitFor(() => {
       expect(api.post).toHaveBeenCalledWith(

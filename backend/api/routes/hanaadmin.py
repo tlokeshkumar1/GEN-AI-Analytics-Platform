@@ -21,6 +21,7 @@ class QueryPayload(BaseModel):
 async def hana_admin_overview(
     include_first_table: bool = Query(False, description="Include page-1 rows for the first table"),
     pageSize: int = Query(25, ge=1, le=500),
+    refresh: bool = Query(False, description="Bypass cache and force refresh"),
 ):
     """HANA Cloud Admin Overview: Database connection status, stats, and live tables."""
     require_admin()
@@ -30,6 +31,7 @@ async def hana_admin_overview(
             include_internal=True,
             include_first_table=include_first_table,
             page_size=pageSize,
+            refresh=refresh,
         )
         stats = overview["stats"]
         tables = overview["tables"]

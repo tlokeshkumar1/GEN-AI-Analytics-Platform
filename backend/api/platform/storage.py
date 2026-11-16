@@ -1,4 +1,5 @@
 """Content-addressed durable objects and transactional dataset catalog manifests."""
+import base64
 import copy
 import hashlib
 import json
@@ -11,12 +12,17 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from api.platform.store import metadata_store
 
 
 class ArtifactStore:
+    OBJECT_NAMESPACE = "platform:objects"
+
     def __init__(self, backend=None, root=None):
-        self.backend = backend or os.getenv("PLATFORM_OBJECT_BACKEND", "local")
+        default_backend = "hana" if os.getenv("PLATFORM_METADATA_BACKEND", "hana") == "hana" else "local"
+        self.backend = backend or os.getenv("PLATFORM_OBJECT_BACKEND", default_backend)
         self.root = Path(root or os.getenv("PLATFORM_OBJECT_ROOT", str(Path(tempfile.gettempdir()) / "platform_runtime" / ".objects")))
         self.bucket = os.getenv("PLATFORM_OBJECT_BUCKET", "")
         if os.getenv("VCAP_APPLICATION") and self.backend == "local":
@@ -46,6 +52,17 @@ class ArtifactStore:
                 temporary.write_bytes(content)
                 os.replace(temporary, destination)
             return key
+        if self.backend == "hana":
+            store = metadata_store()
+            if store.get(self.OBJECT_NAMESPACE, key) is None:
+                payload = {"encoding": "base64", "data": base64.b64encode(content).decode("ascii")}
+                try:
+                    store.put(self.OBJECT_NAMESPACE, key, payload, expected_revision=0)
+                except HTTPException as exc:
+                    # Content-addressed keys are immutable; a 409 means another writer stored the identical hash.
+                    if exc.status_code != 409:
+                        raise
+            return key
         client = self._client()
         try:
             if self.backend == "s3":
@@ -64,6 +81,12 @@ class ArtifactStore:
             raise ValueError("Invalid artifact reference")
         if self.backend == "local":
             content = (self.root / key).read_bytes()
+        elif self.backend == "hana":
+            record = metadata_store().get(self.OBJECT_NAMESPACE, key)
+            if record is None:
+                raise FileNotFoundError(key)
+            value = record["value"]
+            content = base64.b64decode(value["data"]) if isinstance(value, dict) else value.encode("utf-8")
         else:
             client = self._client()
             try:

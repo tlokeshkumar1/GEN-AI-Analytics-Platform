@@ -128,6 +128,20 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
         self.assertEqual(pub_with_headers.status_code, 200, pub_with_headers.text)
         self.assertEqual(pub_with_headers.json()["published_count"], 1)
 
+        # GET /api/dashboard returns the published widgets, not fallback auto-recommendations
+        dash_res = self.client.get(
+            "/api/dashboard?refresh=true",
+            headers={
+                "X-Dataset-Id": dataset_id,
+                "X-Dataset-Version": str(version),
+                "X-Semantic-Revision": "1",
+            },
+        )
+        self.assertEqual(dash_res.status_code, 200, dash_res.text)
+        dash_data = dash_res.json()
+        self.assertEqual(dash_data["status"], "published")
+        self.assertGreaterEqual(len(dash_data["widgets"]), 1)
+
     def test_upload_stream_emits_stages_strictly_one_by_one(self):
         csv_bytes = b"ProjectID,ProjectName,OpenIssues\nP1,Alpha,3\nP2,Beta,5\n"
         with self.client.stream("POST", "/api/upload/stream", files={"file": ("Projects.csv", csv_bytes)}) as resp:

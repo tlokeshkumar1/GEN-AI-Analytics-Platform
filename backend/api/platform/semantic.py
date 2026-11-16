@@ -15,6 +15,10 @@ from api.utils.logger import get_logger
 
 logger = get_logger("platform.semantic")
 
+_RECOMMENDATION_CACHE: dict = {}
+_RECOMMENDATION_CACHE_LOCK = threading.Lock()
+_RECOMMENDATION_CACHE_TTL = 300.0  # 5 minutes
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -41,8 +45,8 @@ class SemanticRegistry:
         ws = entry.get("workspaceId") or "default"
         return f"{ws}:{category}:{entry['id']}:v{version}"
 
-    def list(self, entry, version, for_chat: bool = False):
-        require_dataset_access(entry, for_chat=for_chat)
+    def list(self, entry, version, for_chat: bool = False, allow_chat_member: bool = False):
+        require_dataset_access(entry, for_chat=for_chat or allow_chat_member)
         ns = self.namespace(entry, version)
         store = self.store
         cache_key = (id(store), str(getattr(store, "path", "")), getattr(store, "_write_seq", 0), ns)
@@ -58,8 +62,8 @@ class SemanticRegistry:
             self._list_cache[cache_key] = (now_ts, copy.deepcopy(rows))
         return rows
 
-    def get(self, entry, version, revision, approved=False, for_chat: bool = False):
-        require_dataset_access(entry, for_chat=for_chat)
+    def get(self, entry, version, revision, approved=False, for_chat: bool = False, allow_chat_member: bool = False):
+        require_dataset_access(entry, for_chat=for_chat or allow_chat_member)
         ns = self.namespace(entry, version)
         store = self.store
         cache_key = (id(store), str(getattr(store, "path", "")), getattr(store, "_write_seq", 0), ns, str(revision))
@@ -171,8 +175,8 @@ class SemanticRegistry:
         self.store.put(namespace, str(revision), model.model_dump(mode="json"), row["revision"])
         return model
 
-    def items(self, entry, version, revision):
-        require_dataset_access(entry)
+    def items(self, entry, version, revision, allow_chat_member: bool = False, for_chat: bool = False):
+        require_dataset_access(entry, for_chat=allow_chat_member or for_chat)
         rows = self.store.list(self.namespace(entry, version, f"analytics:{revision}"))
         return [AnalyticsItem.model_validate(row["value"]) for row in rows]
 
@@ -220,9 +224,18 @@ class SemanticRegistry:
             seen_concepts.add(concept)
         return saved
 
-    def propose_analytics(self, entry, version, revision, snapshot):
+    def propose_analytics(self, entry, version, revision, snapshot, fast_only=False):
         require_dataset_access(entry)
         model = self.get(entry, version, revision, approved=True)
+
+        # --- recommendation cache ---
+        cache_key = (entry["id"], version, revision, fast_only)
+        now_ts = time.monotonic()
+        with _RECOMMENDATION_CACHE_LOCK:
+            cached = _RECOMMENDATION_CACHE.get(cache_key)
+            if cached and fast_only and (now_ts - cached[0]) < _RECOMMENDATION_CACHE_TTL:
+                return cached[1]
+
         from api.platform.agent_chart_recommender import chart_recommender_agent
         from api.services.dataset_service import dataset_service
 
@@ -235,9 +248,17 @@ class SemanticRegistry:
             existing_items=existing,
             max_items=6,
             dataset_name=dataset_name,
+            fast_only=fast_only,
         )
         items = self.persist_recommendations(entry, version, revision, recommendations, model=model)
-        return AnalyticsPlan(dataset_id=entry["id"], data_version=version, semantic_revision=revision, items=items)
+        result = AnalyticsPlan(dataset_id=entry["id"], data_version=version, semantic_revision=revision, items=items)
+
+        with _RECOMMENDATION_CACHE_LOCK:
+            if len(_RECOMMENDATION_CACHE) >= 128:
+                _RECOMMENDATION_CACHE.clear()
+            _RECOMMENDATION_CACHE[cache_key] = (time.monotonic(), result)
+
+        return result
 
     def save_item(self, entry, version, semantic_revision, proposed):
         require_dataset_access(entry)
@@ -269,6 +290,35 @@ class SemanticRegistry:
         item.status, item.reviewer, item.reviewed_at = decision, identity["user_id"], now()
         self.store.put(namespace, key, item.model_dump(mode="json"), row["revision"])
         return item
+
+    def delete_items(self, entry, version, semantic_revision, targets) -> int:
+        """Delete one or more analytics definitions and prune any stale references from the published dashboard."""
+        require_dataset_access(entry, write=True)
+        if not targets:
+            return 0
+        with self.store.transaction():
+            analytics_ns = self.namespace(entry, version, f"analytics:{semantic_revision}")
+            deleted_count = 0
+            for item_id, revision in targets:
+                deleted_count += self.store.delete(analytics_ns, f"{item_id}:{revision}")
+            if deleted_count > 0:
+                dashboard_ns = self.namespace(entry, version, f"dashboard:{semantic_revision}")
+                existing_pub = self.store.get(dashboard_ns, "published")
+                if existing_pub and isinstance(existing_pub["value"].get("items"), list):
+                    target_set = {(str(item_id), int(rev)) for item_id, rev in targets}
+                    filtered_items = [
+                        ref for ref in existing_pub["value"]["items"]
+                        if (str(ref.get("id")), int(ref.get("revision", 1))) not in target_set
+                    ]
+                    if len(filtered_items) != len(existing_pub["value"]["items"]):
+                        updated_pub = {**existing_pub["value"], "items": filtered_items}
+                        self.store.put(
+                            dashboard_ns,
+                            "published",
+                            updated_pub,
+                            expected_revision=existing_pub["revision"],
+                        )
+            return deleted_count
 
     def reuse(self, entry, source_version, target_version, revision, source_snapshot, target_snapshot):
         with self.store.transaction():

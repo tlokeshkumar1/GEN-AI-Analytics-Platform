@@ -30,6 +30,15 @@ class ReuseDefinitions(BaseModel):
     semantic_revision: int = Field(ge=1)
 
 
+class DeleteDefinitionRef(BaseModel):
+    id: str
+    revision: int = Field(ge=1)
+
+
+class DeleteDefinitionsRequest(BaseModel):
+    items: list[DeleteDefinitionRef]
+
+
 @router.post("/api/datasets/{dataset_id}/versions/{version}/reuse")
 def reuse_definitions(dataset_id: str, version: int, body: ReuseDefinitions):
     entry, snapshot = dataset_version(dataset_id, version)
@@ -58,11 +67,8 @@ def get_dashboard_publication():
 
 @router.post("/api/insights/dashboard")
 def publish_dashboard(publication: DashboardPublication):
-    identity = current_identity.get()
-    if identity and not is_admin(identity):
-        raise HTTPException(403, "Only Admin accounts can publish widgets to the dashboard.")
     value = selected()
-    require_dataset_access(value.entry, write=True)
+    require_dataset_access(value.entry)
     items = semantic_registry.items(value.entry, value.context.version, value.context.semantic_revision)
     for reference in publication.items:
         item = next((i for i in items if i.id == reference.get("id") and i.revision == reference.get("revision")), None)
@@ -70,12 +76,13 @@ def publish_dashboard(publication: DashboardPublication):
             raise HTTPException(409, "Only approved definition revisions may be published.")
     namespace = semantic_registry.namespace(value.entry, value.context.version, f"dashboard:{value.context.semantic_revision}")
     previous = semantic_registry.store.get(namespace, "published")
+    result = semantic_registry.store.put(namespace, "published", publication.model_dump(), previous["revision"] if previous else 0)
     try:
         from api.routes.dashboard import clear_dashboard_cache
         clear_dashboard_cache()
     except Exception:
         pass
-    return semantic_registry.store.put(namespace, "published", publication.model_dump(), previous["revision"] if previous else 0)
+    return result
 
 
 @router.post("/api/upload/discover")
@@ -166,9 +173,9 @@ def recommendations():
 
 
 @router.post("/api/insights/recommendations")
-def propose_analytics():
+def propose_analytics(fast: bool = False):
     value = selected()
-    return workflow_orchestrator.propose_analytics(value.entry, value.context.version, value.context.semantic_revision, value.snapshot)
+    return workflow_orchestrator.propose_analytics(value.entry, value.context.version, value.context.semantic_revision, value.snapshot, fast_only=fast)
 
 
 @router.get("/api/datasets/{dataset_id}/versions/{version}/workflow")
@@ -188,10 +195,8 @@ def revise_item(item: AnalyticsItem):
 
 @router.post("/api/insights/definitions/{item_id}/{revision}/review")
 def review_item(item_id: str, revision: int, body: Review):
-    identity = current_identity.get()
-    if identity and not is_admin(identity):
-        raise HTTPException(403, "Only Admin accounts can approve or reject definitions.")
     value = selected()
+    require_dataset_access(value.entry)
     items = semantic_registry.items(value.entry, value.context.version, value.context.semantic_revision)
     item = next((i for i in items if i.id == item_id and i.revision == revision), None)
     if item is None:
@@ -206,3 +211,29 @@ def review_item(item_id: str, revision: int, body: Review):
     workflow_orchestrator.save(value.entry, value.context.version, "analytics_review", "awaiting_review" if remaining else "completed",
                                {"last_reviewed_item": {"id": item_id, "revision": revision, "decision": body.decision}})
     return reviewed
+
+
+@router.delete("/api/insights/definitions/{item_id}/{revision}")
+def delete_item(item_id: str, revision: int):
+    value = selected()
+    deleted = semantic_registry.delete_items(
+        value.entry, value.context.version, value.context.semantic_revision, [(item_id, revision)]
+    )
+    if deleted == 0:
+        raise HTTPException(404, "Definition not found.")
+    from api.routes.dashboard import clear_dashboard_cache
+    clear_dashboard_cache()
+    return {"deleted": deleted}
+
+
+@router.post("/api/insights/definitions/delete")
+def delete_items_bulk(body: DeleteDefinitionsRequest):
+    value = selected()
+    targets = [(item.id, item.revision) for item in body.items]
+    deleted = semantic_registry.delete_items(
+        value.entry, value.context.version, value.context.semantic_revision, targets
+    )
+    if deleted > 0:
+        from api.routes.dashboard import clear_dashboard_cache
+        clear_dashboard_cache()
+    return {"deleted": deleted}

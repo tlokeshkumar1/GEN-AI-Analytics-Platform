@@ -105,6 +105,18 @@ class MetadataStore:
         self._write_seq += 1
         return {"revision": revision + 1, "value": value}
 
+    def delete(self, namespace: str, key: str) -> int:
+        """Delete a single document by namespace and key, returning the number of rows deleted."""
+        with self.transaction() as cursor:
+            cursor.execute(
+                "DELETE FROM PLATFORM_DOCUMENTS WHERE NAMESPACE=? AND DOCUMENT_ID=?",
+                (namespace, key),
+            )
+            deleted = cursor.rowcount if cursor.rowcount > 0 else 0
+        if deleted:
+            self._write_seq += 1
+        return deleted
+
     def delete_dataset_metadata(self, workspace_id: str, dataset_id: str) -> int:
         """Purge all metadata documents (semantics, reviews, analytics items, dashboards) for a dataset."""
         patterns = [

@@ -1,5 +1,6 @@
 import contextvars
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
@@ -18,8 +19,9 @@ logger = get_logger("routes.dashboard")
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
-_DASHBOARD_CACHE = {}
+_DASHBOARD_CACHE: Dict[Any, Dict[str, Any]] = {}
 _DASHBOARD_CACHE_LOCK = threading.Lock()
+_DASHBOARD_CACHE_TTL = 120.0  # seconds
 
 
 def clear_dashboard_cache():
@@ -89,13 +91,21 @@ def publish_recommended_charts(req: PublishRecommendedRequest):
         )
         published_refs.append({"id": item.id, "revision": 1})
 
-    # Save published dashboard configuration
+    # Preserve existing published items on this dataset and append/update newly selected ones
     dashboard_ns = semantic_registry.namespace(entry, version, f"dashboard:{semantic_revision}")
+    existing_pub = semantic_registry.store.get(dashboard_ns, "published")
+    merged_refs = []
+    seen_refs = set()
+    for ref in (existing_pub["value"].get("items", []) if existing_pub else []) + published_refs:
+        ref_key = (ref.get("id"), ref.get("revision"))
+        if ref_key not in seen_refs:
+            seen_refs.add(ref_key)
+            merged_refs.append(ref)
+
     publication_payload = {
         "title": req.title or "Executive Analytics Dashboard",
-        "items": published_refs
+        "items": merged_refs,
     }
-    existing_pub = semantic_registry.store.get(dashboard_ns, "published")
     semantic_registry.store.put(
         dashboard_ns,
         "published",
@@ -124,61 +134,123 @@ def get_dashboard(refresh: bool = False):
         raise HTTPException(409, "Select a dataset version.")
 
     context = selection.context
-    namespace = semantic_registry.namespace(selection.entry, context.version, f"dashboard:{context.semantic_revision}")
-    publication = semantic_registry.store.get(namespace, "published")
-    pub_revision = publication.get("revision", 0) if publication else 0
+    catalog = dataset_service._catalog()
+    datasets_map = catalog.get("datasets", {})
+
+    # Collect published dashboards across all datasets in the workspace so uploading a new file
+    # never removes KPIs and charts published from earlier datasets.
+    dataset_publications = []
+    pub_revisions = []
+    for ds_id, ds_entry in datasets_map.items():
+        if ds_entry.get("workspaceId") and ds_entry.get("workspaceId") != context.workspace_id:
+            continue
+        ds_version = ds_entry.get("currentVersion") or 1
+        try:
+            ds_models = semantic_registry.list(ds_entry, ds_version, for_chat=True)
+            approved_models = [m for m in ds_models if m.get("status") == "approved"]
+            ds_sem_rev = max([m["revision"] for m in approved_models], default=None) or (
+                max([m["revision"] for m in ds_models], default=1) if ds_models else 1
+            )
+            ds_pub_ns = semantic_registry.namespace(ds_entry, ds_version, f"dashboard:{ds_sem_rev}")
+            ds_pub = semantic_registry.store.get(ds_pub_ns, "published")
+            if ds_pub and ds_pub.get("value", {}).get("items"):
+                pub_revisions.append((ds_id, ds_version, ds_sem_rev, ds_pub.get("revision", 0)))
+                dataset_publications.append((ds_entry, ds_version, ds_sem_rev, ds_pub["value"]))
+        except Exception as exc:
+            logger.warning(f"Skipping dashboard lookup for dataset {ds_id}: {exc}")
 
     cache_key = (
         context.workspace_id,
         context.dataset_id,
         context.version,
         context.semantic_revision,
-        pub_revision,
+        tuple(sorted(pub_revisions)),
     )
 
+    now = time.time()
     if not refresh:
         with _DASHBOARD_CACHE_LOCK:
             if cache_key in _DASHBOARD_CACHE:
-                return _DASHBOARD_CACHE[cache_key]
+                cached_entry = _DASHBOARD_CACHE[cache_key]
+                if now - cached_entry.get("timestamp", 0) < _DASHBOARD_CACHE_TTL:
+                    return cached_entry["data"]
 
-    # Ensure model exists
-    try:
-        model = semantic_registry.get(selection.entry, context.version, context.semantic_revision)
-    except Exception:
-        model = None
+    if dataset_publications:
+        from api.models.execution_context import DatasetSelection, ExecutionContext
 
-    # If already published, execute published widgets
-    if publication is not None and publication.get("value", {}).get("items"):
-        items_to_compute = publication["value"]["items"]
-        definitions = semantic_registry.items(selection.entry, context.version, context.semantic_revision)
+        dataset_publications.sort(key=lambda x: 0 if x[0].get("id") == context.dataset_id else 1)
+        tasks = []
+        seen_widget_keys = set()
+        for ds_entry, ds_version, ds_sem_rev, pub_val in dataset_publications:
+            ds_id = ds_entry["id"]
+            ds_name = ds_entry.get("displayName") or ds_entry.get("name") or ds_entry.get("folder") or ds_id
+            definitions = semantic_registry.items(ds_entry, ds_version, ds_sem_rev, allow_chat_member=True)
+            ds_snapshot = dataset_service._snapshot(ds_entry, ds_version)
+            ds_context = ExecutionContext(
+                workspace_id=context.workspace_id,
+                dataset_id=ds_id,
+                version=ds_version,
+                semantic_revision=ds_sem_rev,
+                user_id=context.user_id,
+            )
+            ds_selection = DatasetSelection(ds_context, ds_entry, ds_snapshot)
+            for ref in pub_val.get("items", []):
+                item = next((i for i in definitions if i.id == ref.get("id") and i.revision == ref.get("revision")), None)
+                if item is None:
+                    continue
+                dedupe_key = (ds_id, item.id, item.revision)
+                if dedupe_key in seen_widget_keys:
+                    continue
+                seen_widget_keys.add(dedupe_key)
+                tasks.append((ds_selection, ds_id, ds_name, item))
 
-        def _execute_widget(reference):
-            item = next((i for i in definitions if i.id == reference["id"] and i.revision == reference["revision"]), None)
-            if item is None:
+        def _execute_widget(task):
+            ds_sel, ds_id, ds_name, item = task
+            tok = current_selection.set(ds_sel)
+            try:
+                res = analytics_engine.execute(item.query_plan.model_dump(exclude_none=True, by_alias=True))
+                defn = item.model_dump(mode="json")
+                defn["dataset_id"] = ds_id
+                defn["dataset_name"] = ds_name
+                return {"definition": defn, "result": res.to_dict()}
+            except Exception as exc:
+                logger.warning(f"Error executing dashboard widget {item.id} ({item.title}): {exc}")
                 return None
-            res = analytics_engine.execute(item.query_plan.model_dump(exclude_none=True, by_alias=True))
-            return {"definition": item.model_dump(mode="json"), "result": res.to_dict()}
+            finally:
+                current_selection.reset(tok)
 
-        with ThreadPoolExecutor(max_workers=min(16, max(1, len(items_to_compute)))) as executor:
-            futures = [executor.submit(contextvars.copy_context().run, _execute_widget, ref) for ref in items_to_compute]
-            widgets = [w for w in (f.result() for f in futures) if w is not None]
+        widgets = []
+        if tasks:
+            with ThreadPoolExecutor(max_workers=min(16, len(tasks))) as executor:
+                futures = [executor.submit(contextvars.copy_context().run, _execute_widget, t) for t in tasks]
+                widgets = [w for w in (f.result() for f in futures) if w is not None]
 
+        active_pub_title = next(
+            (pub_val.get("title") for ds_entry, _, _, pub_val in dataset_publications if ds_entry["id"] == context.dataset_id),
+            None,
+        )
         response_data = {
-            "title": publication["value"].get("title", "Executive Analytics Dashboard"),
+            "title": active_pub_title or "Executive Analytics Dashboard",
             "widgets": widgets,
             "context": context.model_dump(),
             "status": "published",
         }
         with _DASHBOARD_CACHE_LOCK:
-            _DASHBOARD_CACHE[cache_key] = response_data
+            _DASHBOARD_CACHE[cache_key] = {"data": response_data, "timestamp": time.time()}
         return response_data
+
+    # Ensure model exists for auto-recommendation fallback
+    try:
+        model = semantic_registry.get(selection.entry, context.version, context.semantic_revision)
+    except Exception:
+        model = None
 
     # Fallback auto-recommendations if unpublished: generate from model so dashboard is never empty
     if model:
         try:
             snapshot = dataset_service._snapshot(selection.entry, context.version)
             df = dataset_service._frame(snapshot["rows"], snapshot["columns"])
-            recs = chart_recommender_agent.recommend(df, model)
+            recs = chart_recommender_agent.recommend(df, model, fast_only=True)
 
             default_recs = [r for r in recs if r.get("selected_by_default")]
 
@@ -210,7 +282,7 @@ def get_dashboard(refresh: bool = False):
                     "status": "auto_recommended",
                 }
                 with _DASHBOARD_CACHE_LOCK:
-                    _DASHBOARD_CACHE[cache_key] = response_data
+                    _DASHBOARD_CACHE[cache_key] = {"data": response_data, "timestamp": time.time()}
                 return response_data
         except Exception as exc:
             logger.warning(f"Auto-dashboard recommendation error: {exc}")

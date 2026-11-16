@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 _USERS_CACHE = {}
 _USERS_CACHE_LOCK = threading.Lock()
-_USERS_CACHE_TTL_SECONDS = 120.0
+_USERS_CACHE_TTL_SECONDS = 300.0
 
 
 def clear_users_cache():

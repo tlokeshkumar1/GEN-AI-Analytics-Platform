@@ -1,6 +1,7 @@
 import re
 import math
 import time
+import copy
 import struct
 import threading
 import datetime
@@ -66,6 +67,13 @@ class HANATableService:
     def __init__(self):
         self._conn_schemas: Dict[int, str] = {}
         self._schema_lock = threading.Lock()
+        self._overview_cache: Dict[str, Any] = {}
+        self._overview_cache_lock = threading.Lock()
+        self._overview_cache_ttl = 60.0  # seconds
+
+    def clear_overview_cache(self):
+        with self._overview_cache_lock:
+            self._overview_cache.clear()
 
     def _ensure_schema(self, conn, cursor) -> Optional[str]:
         schema = settings.HANA_SCHEMA
@@ -328,6 +336,7 @@ class HANATableService:
             logger.info(f"Creating HANA column table '{clean_table}' with {len(column_defs)} columns...")
             cursor.execute(sql)
             conn.commit()
+            self.clear_overview_cache()
             logger.info(f"Successfully created table '{clean_table}' in SAP HANA Cloud.")
             return True
         except Exception as e:
@@ -378,6 +387,7 @@ class HANATableService:
             logger.info(f"Dropping HANA column table '{clean_table}'...")
             cursor.execute(f'DROP TABLE "{clean_table}"')
             conn.commit()
+            self.clear_overview_cache()
             logger.info(f"Successfully dropped table '{clean_table}' from SAP HANA Cloud.")
             return {"success": True, "dropped": True, "table_name": clean_table}
         except Exception as e:
@@ -930,6 +940,7 @@ class HANATableService:
                 cursor.execute(delete_sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount >= 0 else 0
                 conn.commit()
+                self.clear_overview_cache()
             else:
                 raise ValueError(f"Unsupported delete mode '{mode}'. Choose 'row_range', 'id_range', or 'key_values'.")
 
@@ -962,8 +973,22 @@ class HANATableService:
             db_manager.return_connection(conn)
 
 
-    def get_database_overview(self, include_internal: bool = True, include_first_table: bool = False, page_size: int = 25) -> Dict[str, Any]:
+    def get_database_overview(
+        self,
+        include_internal: bool = True,
+        include_first_table: bool = False,
+        page_size: int = 25,
+        refresh: bool = False,
+    ) -> Dict[str, Any]:
         """Fetch database stats, table catalog, and optionally first business table page-1 rows in a single connection."""
+        cache_key = f"{include_internal}:{include_first_table}:{page_size}"
+        now = time.time()
+        if not refresh:
+            with self._overview_cache_lock:
+                cached = self._overview_cache.get(cache_key)
+                if cached and (now - cached.get("timestamp", 0) < self._overview_cache_ttl):
+                    return copy.deepcopy(cached["data"])
+
         conn = db_manager.get_connection()
         if not conn:
             return {
@@ -1086,7 +1111,10 @@ class HANATableService:
                     "rows": rows_data,
                 }
 
-            return {"stats": stats, "tables": tables, "initialTableData": initial_table_data}
+            result = {"stats": stats, "tables": tables, "initialTableData": initial_table_data}
+            with self._overview_cache_lock:
+                self._overview_cache[cache_key] = {"data": result, "timestamp": time.time()}
+            return result
         except Exception as e:
             logger.error(f"Error getting database overview: {e}")
             return {

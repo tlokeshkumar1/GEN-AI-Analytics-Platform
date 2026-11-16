@@ -7,22 +7,37 @@ interface UserManagementProps {
   onNavigate: (path: string) => void;
 }
 
+interface CachedUsersData {
+  users: ManagedUser[];
+  fetched_at: string | null;
+  project_role_collections: string[];
+}
+
+let cachedUsersPayload: CachedUsersData | null = null;
+
 export const UserManagement: React.FC<UserManagementProps> = ({ onNavigate }) => {
-  const [users, setUsers] = useState<ManagedUser[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState<ManagedUser[]>(cachedUsersPayload?.users || []);
+  const [loading, setLoading] = useState(!cachedUsersPayload);
   const [error, setError] = useState<string | null>(null);
-  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const [projectCollections, setProjectCollections] = useState<string[]>([]);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(cachedUsersPayload?.fetched_at || null);
+  const [projectCollections, setProjectCollections] = useState<string[]>(cachedUsersPayload?.project_role_collections || []);
   const requestRef = useRef<AbortController | null>(null);
 
-  const refreshUsers = useCallback(async () => {
+  const refreshUsers = useCallback(async (isManual = false) => {
     if (requestRef.current) return;
     const controller = new AbortController();
     requestRef.current = controller;
-    setLoading(true);
+    if (isManual || !cachedUsersPayload) {
+      setLoading(true);
+    }
     try {
       const data = await fetchManagedUsers(controller.signal);
       if (!controller.signal.aborted) {
+        cachedUsersPayload = {
+          users: data.users,
+          fetched_at: data.fetched_at,
+          project_role_collections: data.project_role_collections || [],
+        };
         setUsers(data.users);
         setUpdatedAt(data.fetched_at);
         setProjectCollections(data.project_role_collections || []);
@@ -33,6 +48,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onNavigate }) =>
         setError(getApiErrorMessage(err, 'Unable to load XSUAA users. Please try again.'));
         // Do not retain sensitive records after permission or session loss.
         if (axios.isAxiosError(err) && [401, 403].includes(err.response?.status ?? 0)) {
+          cachedUsersPayload = null;
           setUsers([]);
           setUpdatedAt(null);
         }
@@ -79,7 +95,7 @@ return (
 
       <div className="flex items-center gap-2 shrink-0">
         <button
-          onClick={() => void refreshUsers()}
+          onClick={() => void refreshUsers(true)}
           disabled={loading}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-slate-700 font-semibold text-xs border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
         >

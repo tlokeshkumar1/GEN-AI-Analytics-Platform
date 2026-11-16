@@ -69,6 +69,7 @@ REQUIREMENTS:
 1. 100% Data-Grounded: Use ONLY exact column names and allowed aggregations from COLUMN PROFILES. Inspect the FIRST 5 SAMPLE ROWS to understand what actually matters in this domain (avoid constant columns with nunique <= 1, mostly-null columns, or summing raw IDs/codes).
 2. Strictly Different From Existing: Every recommendation you output MUST explore a DIFFERENT metric, aggregation (e.g. AVG, MIN, MAX, COUNT_DISTINCT, SUM), dimension, temporal axis, or multi-measure correlation than ALL items listed in ALREADY EXISTING KPIs & CHARTS. Never propose the same (measure, aggregation, dimension) under a different chart kind or title.
 3. Diverse & Meaningful Mix:
+   CRITICAL: You MUST produce a DIVERSE mix of chart kinds. Do NOT repeat the same chart kind more than twice. Include at least 4 DIFFERENT chart kinds from: kpi, bar, line, area, donut, pie, horizontal_bar, scatter, gauge, funnel, radar.
    - "kpi": scalar executive indicator (set "dimension": null, "time_grouping": null). Prefer business-relevant totals, averages/rates, or unique entity counts not yet covered.
    - "line" or "area": temporal progression over a time/date field (use "time_grouping": {{"field": "<date_col>", "period": "month"|"quarter"|"year"}} ONLY when parseable_date=true and nunique > 12; otherwise use "dimension": "<time_col>").
    - "bar": categorical comparison across a readable dimension (3 to 15 categories).
@@ -207,6 +208,63 @@ class ChartRecommenderAgent:
     meaningful, non-repetitive KPIs & charts, with dynamic data-driven fallback.
     """
 
+    @staticmethod
+    def _interleave_by_kind(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Interleave candidates across diverse chart kinds so that recommendations
+        are never dominated by 1 or 2 kinds (e.g. only bar and donut).
+        """
+        from collections import defaultdict
+        by_kind = defaultdict(list)
+        for c in candidates:
+            by_kind[c.get("kind", "bar")].append(c)
+
+        interleaved: List[Dict[str, Any]] = []
+        # KPIs: take one at start, keep one for index 2
+        kpis = by_kind.pop("kpi", [])
+        second_kpi = None
+        if kpis:
+            interleaved.append(kpis.pop(0))
+            if kpis:
+                second_kpi = kpis.pop(0)
+
+        chart_order = [
+            "bar",
+            "donut",
+            "horizontal_bar",
+            "line",
+            "radar",
+            "pie",
+            "funnel",
+            "area",
+            "gauge",
+            "scatter",
+        ]
+        # Round 1: 1 of each distinct chart kind
+        for k in chart_order:
+            if by_kind.get(k):
+                interleaved.append(by_kind[k].pop(0))
+                if len(interleaved) == 3 and second_kpi:
+                    interleaved.append(second_kpi)
+                    second_kpi = None
+
+        if second_kpi:
+            interleaved.append(second_kpi)
+
+        # Round 2: remaining items
+        added = True
+        while added:
+            added = False
+            for k in list(by_kind.keys()):
+                if by_kind[k]:
+                    interleaved.append(by_kind[k].pop(0))
+                    added = True
+            if kpis:
+                interleaved.append(kpis.pop(0))
+                added = True
+
+        return interleaved
+
     def recommend(
         self,
         df: pd.DataFrame,
@@ -214,10 +272,12 @@ class ChartRecommenderAgent:
         existing_items: Optional[Iterable[Any]] = None,
         max_items: int = 6,
         dataset_name: Optional[str] = None,
+        fast_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Generate up to `max_items` meaningful, non-repetitive chart and KPI definitions,
         excluding anything semantically equivalent to `existing_items`.
+        When fast_only=True, skips LLM generation and directly uses dynamic statistical candidates (<5ms).
         """
         if df is None or df.empty or not model or not model.fields:
             return []
@@ -236,28 +296,74 @@ class ChartRecommenderAgent:
         profiles = self._profile_columns(df, model)
         recommendations: List[Dict[str, Any]] = []
 
-        # 1. Primary path: 5-row LLM reasoning (zero hardcoding)
+        def _add_with_diversity(candidates_list: List[Dict[str, Any]], rejected_dest: Optional[List[str]] = None):
+            nonlocal recommendations
+            interleaved = self._interleave_by_kind(candidates_list)
+            kind_counts: Dict[str, int] = {}
+            for item in recommendations:
+                k = item.get("kind", "bar")
+                kind_counts[k] = kind_counts.get(k, 0) + 1
+
+            deferred: List[Dict[str, Any]] = []
+            # Pass 1: Add at most 1 item of each chart kind (at most 2 for KPI)
+            for cand in interleaved:
+                if len(recommendations) >= max_items:
+                    break
+                k = cand.get("kind", "bar")
+                limit = 2 if k == "kpi" else 1
+                if kind_counts.get(k, 0) < limit:
+                    validated, reason = self._validate_and_preview(
+                        cand, df, model, profiles, seen_signatures, seen_concepts, seen_titles
+                    )
+                    if validated is not None:
+                        recommendations.append(validated)
+                        kind_counts[k] = kind_counts.get(k, 0) + 1
+                    elif reason == "duplicate" and rejected_dest is not None:
+                        rejected_dest.append(str(cand.get("title") or cand.get("query_plan")))
+                else:
+                    deferred.append(cand)
+
+            # Pass 2: If we still need more to reach max_items, draw from deferred (allow up to 2 per kind)
+            if len(recommendations) < max_items:
+                for cand in deferred:
+                    if len(recommendations) >= max_items:
+                        break
+                    k = cand.get("kind", "bar")
+                    if kind_counts.get(k, 0) < 2:
+                        validated, _ = self._validate_and_preview(
+                            cand, df, model, profiles, seen_signatures, seen_concepts, seen_titles
+                        )
+                        if validated is not None:
+                            recommendations.append(validated)
+                            kind_counts[k] = kind_counts.get(k, 0) + 1
+
+            # Pass 3: Fill any remaining slots unconditionally
+            if len(recommendations) < max_items:
+                for cand in deferred:
+                    if len(recommendations) >= max_items:
+                        break
+                    validated, _ = self._validate_and_preview(
+                        cand, df, model, profiles, seen_signatures, seen_concepts, seen_titles
+                    )
+                    if validated is not None:
+                        recommendations.append(validated)
+
+        # 1. Primary path: 5-row LLM reasoning (zero hardcoding) unless fast_only is requested
         llm_available = False
-        llm_candidates, llm_available = self._generate_llm_candidates(
-            df=df,
-            model=model,
-            profiles=profiles,
-            existing_items=existing_list,
-            max_items=max_items,
-            dataset_name=dataset_name,
-        )
+        llm_candidates = []
+        if not fast_only:
+            llm_candidates, llm_available = self._generate_llm_candidates(
+                df=df,
+                model=model,
+                profiles=profiles,
+                existing_items=existing_list,
+                max_items=max_items,
+                dataset_name=dataset_name,
+            )
 
         rejected_as_duplicate: List[str] = []
-        for cand in llm_candidates:
-            if len(recommendations) >= max_items:
-                break
-            validated, reason = self._validate_and_preview(
-                cand, df, model, profiles, seen_signatures, seen_concepts, seen_titles
-            )
-            if validated is not None:
-                recommendations.append(validated)
-            elif reason == "duplicate":
-                rejected_as_duplicate.append(str(cand.get("title") or cand.get("query_plan")))
+        if llm_candidates:
+            _add_with_diversity(llm_candidates, rejected_as_duplicate)
 
         # If LLM ran but collided with existing definitions, ask once more explicitly avoiding collisions
         if llm_available and not recommendations and rejected_as_duplicate:
@@ -270,27 +376,14 @@ class ChartRecommenderAgent:
                 dataset_name=dataset_name,
                 extra_avoid_notes=rejected_as_duplicate,
             )
-            for cand in retry_candidates:
-                if len(recommendations) >= max_items:
-                    break
-                validated, _ = self._validate_and_preview(
-                    cand, df, model, profiles, seen_signatures, seen_concepts, seen_titles
-                )
-                if validated is not None:
-                    recommendations.append(validated)
+            if retry_candidates:
+                _add_with_diversity(retry_candidates)
 
-        # 2. Only when LLM is offline/unavailable (no valid LLM candidates produced at all),
+        # 2. When LLM is offline/unavailable or produced no net-new valid items,
         #    derive non-duplicate recommendations dynamically from observed distributions.
-        if not llm_available and not recommendations:
+        if len(recommendations) < max_items:
             stat_candidates = self._generate_dynamic_statistical_candidates(df, model, profiles)
-            for cand in stat_candidates:
-                if len(recommendations) >= max_items:
-                    break
-                validated, _ = self._validate_and_preview(
-                    cand, df, model, profiles, seen_signatures, seen_concepts, seen_titles
-                )
-                if validated is not None:
-                    recommendations.append(validated)
+            _add_with_diversity(stat_candidates)
 
         logger.info(
             f"[ChartRecommenderAgent] Generated {len(recommendations)} meaningful, non-duplicate recommendations."
@@ -592,6 +685,17 @@ class ChartRecommenderAgent:
                         "query_plan": {"intent": "analytical", "metric": m.name, "aggregation": "AVG", "filters": []},
                     }
                 )
+            if prof.get("is_rate") or m.unit == "%" or agg == "AVG":
+                candidates.append(
+                    {
+                        "id": f"rec_gauge_{m.name.lower()}",
+                        "title": f"{m.semantic_name} Target Gauge",
+                        "kind": "gauge",
+                        "explanation": f"Target gauge indicator of {m.semantic_name} across {model.domain}.",
+                        "selected_by_default": True,
+                        "query_plan": {"intent": "analytical", "metric": m.name, "aggregation": "AVG", "filters": []},
+                    }
+                )
 
         if identifiers:
             ranked_ids = sorted(
@@ -668,25 +772,173 @@ class ChartRecommenderAgent:
             )
             for d in sorted_dims:
                 card = profiles[d.name]["nunique"]
-                chart_kind = "donut" if 2 <= card <= 5 else "horizontal_bar" if card > 12 else "bar"
+                d_lower = d.name.lower()
+
+                # 1. Bar Chart (standard comparison)
                 candidates.append(
                     {
-                        "id": f"rec_{chart_kind}_{d.name.lower()}_{m_name.lower().replace('*', 'count')}",
+                        "id": f"rec_bar_{d.name.lower()}_{m_name.lower().replace('*', 'count')}",
                         "title": f"{m_label} by {d.semantic_name}",
-                        "kind": chart_kind,
-                        "explanation": f"Compares {m_label} across {d.semantic_name}.",
-                        "selected_by_default": len(candidates) < 4,
+                        "kind": "bar",
+                        "explanation": f"Bar comparison of {m_label} across {d.semantic_name}.",
+                        "selected_by_default": True,
                         "query_plan": {
-                            "intent": "ranking" if chart_kind == "horizontal_bar" else "analytical",
+                            "intent": "analytical",
                             "metric": m_name,
                             "aggregation": agg,
                             "dimension": d.name,
                             "sort": {"column": m_name, "direction": "DESC"},
-                            "limit": 6 if chart_kind == "donut" else 10,
+                            "limit": 10,
                             "filters": [],
                         },
                     }
                 )
+
+                # 2. Horizontal Bar Chart (ranking comparison)
+                candidates.append(
+                    {
+                        "id": f"rec_hbar_{d.name.lower()}_{m_name.lower().replace('*', 'count')}",
+                        "title": f"Top {d.semantic_name}s by {m_label}",
+                        "kind": "horizontal_bar",
+                        "explanation": f"Ranked horizontal breakdown of {m_label} across {d.semantic_name}.",
+                        "selected_by_default": True,
+                        "query_plan": {
+                            "intent": "ranking",
+                            "metric": m_name,
+                            "aggregation": agg,
+                            "dimension": d.name,
+                            "sort": {"column": m_name, "direction": "DESC"},
+                            "limit": 10,
+                            "filters": [],
+                        },
+                    }
+                )
+
+                # 3. Donut Chart (composition for <= 10 categories)
+                if card <= 10:
+                    candidates.append(
+                        {
+                            "id": f"rec_donut_{d.name.lower()}_{m_name.lower().replace('*', 'count')}",
+                            "title": f"Distribution of {m_label} by {d.semantic_name}",
+                            "kind": "donut",
+                            "explanation": f"Proportional composition of {m_label} across {d.semantic_name}.",
+                            "selected_by_default": True,
+                            "query_plan": {
+                                "intent": "analytical",
+                                "metric": m_name,
+                                "aggregation": agg,
+                                "dimension": d.name,
+                                "sort": {"column": m_name, "direction": "DESC"},
+                                "limit": 6,
+                                "filters": [],
+                            },
+                        }
+                    )
+
+                # 4. Pie Chart (composition for 2 to 6 categories)
+                if 2 <= card <= 6:
+                    candidates.append(
+                        {
+                            "id": f"rec_pie_{d.name.lower()}_{m_name.lower().replace('*', 'count')}",
+                            "title": f"Share of {m_label} by {d.semantic_name}",
+                            "kind": "pie",
+                            "explanation": f"Pie share of {m_label} across {d.semantic_name}.",
+                            "selected_by_default": True,
+                            "query_plan": {
+                                "intent": "analytical",
+                                "metric": m_name,
+                                "aggregation": agg,
+                                "dimension": d.name,
+                                "sort": {"column": m_name, "direction": "DESC"},
+                                "limit": 6,
+                                "filters": [],
+                            },
+                        }
+                    )
+
+                # 5. Radar Chart (multi-axis category shape for 3 to 9 categories)
+                if 3 <= card <= 9:
+                    candidates.append(
+                        {
+                            "id": f"rec_radar_{d.name.lower()}_{m_name.lower().replace('*', 'count')}",
+                            "title": f"{m_label} Radar across {d.semantic_name}",
+                            "kind": "radar",
+                            "explanation": f"Multi-axis radar distribution of {m_label} across {d.semantic_name}.",
+                            "selected_by_default": True,
+                            "query_plan": {
+                                "intent": "analytical",
+                                "metric": m_name,
+                                "aggregation": agg,
+                                "dimension": d.name,
+                                "sort": {"column": m_name, "direction": "DESC"},
+                                "limit": 8,
+                                "filters": [],
+                            },
+                        }
+                    )
+
+                # 6. Funnel Chart (progression across stages/phases/status or card 3-8)
+                is_funnel_dim = any(tok in d_lower for tok in ["phase", "stage", "status", "level", "step", "rag", "priority", "state"])
+                if is_funnel_dim or (3 <= card <= 8):
+                    candidates.append(
+                        {
+                            "id": f"rec_funnel_{d.name.lower()}_{m_name.lower().replace('*', 'count')}",
+                            "title": f"{m_label} Funnel by {d.semantic_name}",
+                            "kind": "funnel",
+                            "explanation": f"Progression funnel of {m_label} across {d.semantic_name}.",
+                            "selected_by_default": True,
+                            "query_plan": {
+                                "intent": "analytical",
+                                "metric": m_name,
+                                "aggregation": agg,
+                                "dimension": d.name,
+                                "sort": {"column": m_name, "direction": "DESC"},
+                                "limit": 7,
+                                "filters": [],
+                            },
+                        }
+                    )
+
+                # 7. Line & Area Trend (when time fields are absent, use numeric/ordered dimensions)
+                if not time_fields:
+                    is_ordered = any(tok in d_lower for tok in ["level", "progress", "phase", "stage", "year", "month", "date", "num", "seq", "period", "rank", "grade", "score", "quarter"])
+                    if is_ordered or card >= 4:
+                        candidates.append(
+                            {
+                                "id": f"rec_line_{d.name.lower()}_{m_name.lower().replace('*', 'count')}",
+                                "title": f"{m_label} Trend across {d.semantic_name}",
+                                "kind": "line",
+                                "explanation": f"Trend progression of {m_label} across {d.semantic_name}.",
+                                "selected_by_default": True,
+                                "query_plan": {
+                                    "intent": "analytical",
+                                    "metric": m_name,
+                                    "aggregation": agg,
+                                    "dimension": d.name,
+                                    "sort": {"column": d.name, "direction": "ASC"},
+                                    "limit": 15,
+                                    "filters": [],
+                                },
+                            }
+                        )
+                        candidates.append(
+                            {
+                                "id": f"rec_area_{d.name.lower()}_{m_name.lower().replace('*', 'count')}",
+                                "title": f"Cumulative {m_label} across {d.semantic_name}",
+                                "kind": "area",
+                                "explanation": f"Area distribution of {m_label} across {d.semantic_name}.",
+                                "selected_by_default": False,
+                                "query_plan": {
+                                    "intent": "analytical",
+                                    "metric": m_name,
+                                    "aggregation": agg,
+                                    "dimension": d.name,
+                                    "sort": {"column": d.name, "direction": "ASC"},
+                                    "limit": 15,
+                                    "filters": [],
+                                },
+                            }
+                        )
 
         # Two-measure scatter plot
         if len(measures) >= 2 and dimensions:
@@ -714,7 +966,7 @@ class ChartRecommenderAgent:
                 }
             )
 
-        return candidates
+        return self._interleave_by_kind(candidates)
 
     @staticmethod
     def _kpi_title(field: SemanticField, agg: str) -> str:

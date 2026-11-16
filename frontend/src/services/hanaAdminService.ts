@@ -56,7 +56,11 @@ export interface QueryResultResponse {
 /**
  * Fetch database overview including connection stats and all live tables.
  */
-export async function getHanaOverview(includeFirstTable: boolean = false, pageSize: number = 25): Promise<{
+export async function getHanaOverview(
+  includeFirstTable: boolean = false,
+  pageSize: number = 25,
+  refresh: boolean = false,
+): Promise<{
   success: boolean;
   status: string;
   stats: HanaDatabaseStats;
@@ -64,8 +68,16 @@ export async function getHanaOverview(includeFirstTable: boolean = false, pageSi
   tables: HanaTable[];
   initialTableData?: TableDataResponse | null;
 }> {
+  const params: Record<string, any> = {};
+  if (includeFirstTable) {
+    params.include_first_table = true;
+    params.pageSize = pageSize;
+  }
+  if (refresh) {
+    params.refresh = true;
+  }
   const res = await api.get('/hanaadmin', {
-    params: includeFirstTable ? { include_first_table: true, pageSize } : undefined,
+    params: Object.keys(params).length > 0 ? params : undefined,
   });
   return res.data;
 }

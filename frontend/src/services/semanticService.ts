@@ -67,10 +67,17 @@ export interface ExecutionResult {
 
 export const executePlan = async (plan: Record<string, unknown>) => (await api.post<ExecutionResult>('/insights/execute', plan)).data;
 export const getRecommendations = async () => (await api.get<AnalyticsDefinition[]>('/insights/recommendations')).data;
-export const proposeRecommendations = async () => (await api.post<{ items: AnalyticsDefinition[] }>('/insights/recommendations')).data.items;
+export const proposeRecommendations = async (fast = false) => {
+  const url = fast ? '/insights/recommendations?fast=true' : '/insights/recommendations';
+  return (await api.post<{ items: AnalyticsDefinition[] }>(url)).data.items;
+};
 export const saveDefinition = async (item: AnalyticsDefinition) => (await api.post<AnalyticsDefinition>('/insights/definitions', item)).data;
 export const reviewDefinition = async (item: AnalyticsDefinition, decision: 'approved' | 'rejected') =>
   (await api.post<AnalyticsDefinition>(`/insights/definitions/${item.id}/${item.revision}/review`, { decision })).data;
+export const deleteDefinition = async (item: Pick<AnalyticsDefinition, 'id' | 'revision'>) =>
+  (await api.delete<{ deleted: number }>(`/insights/definitions/${item.id}/${item.revision}`)).data;
+export const deleteDefinitions = async (items: DashboardPublicationItem[]) =>
+  (await api.post<{ deleted: number }>('/insights/definitions/delete', { items })).data;
 
 export interface DashboardPublicationItem {
   id: string;

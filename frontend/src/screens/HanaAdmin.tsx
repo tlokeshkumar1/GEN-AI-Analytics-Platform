@@ -26,20 +26,27 @@ interface HanaAdminProps {
   onNavigate: (path: string) => void;
 }
 
+let cachedHanaAdminOverview: {
+  stats: HanaDatabaseStats;
+  tables: HanaTable[];
+  firstTableName?: string;
+  initialTableData?: TableDataResponse | null;
+} | null = null;
+
 export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
   // Navigation & View tabs
   const [activeTab, setActiveTab] = useState<'tables' | 'query' | 'schema'>('tables');
 
   // Database stats & table catalog
-  const [stats, setStats] = useState<HanaDatabaseStats | null>(null);
-  const [tables, setTables] = useState<HanaTable[]>([]);
+  const [stats, setStats] = useState<HanaDatabaseStats | null>(cachedHanaAdminOverview?.stats ?? null);
+  const [tables, setTables] = useState<HanaTable[]>(cachedHanaAdminOverview?.tables ?? []);
   const [includeInternal, setIncludeInternal] = useState<boolean>(true);
-  const [loadingTables, setLoadingTables] = useState<boolean>(true);
+  const [loadingTables, setLoadingTables] = useState<boolean>(!cachedHanaAdminOverview);
   const [tableSearch, setTableSearch] = useState<string>('');
-  const [selectedTableName, setSelectedTableName] = useState<string>('');
+  const [selectedTableName, setSelectedTableName] = useState<string>(cachedHanaAdminOverview?.firstTableName ?? '');
 
   // Table Data Viewer state
-  const [tableData, setTableData] = useState<TableDataResponse | null>(null);
+  const [tableData, setTableData] = useState<TableDataResponse | null>(cachedHanaAdminOverview?.initialTableData ?? null);
   const [loadingData, setLoadingData] = useState<boolean>(false);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
@@ -100,17 +107,19 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
   const skipNextTableFetchRef = React.useRef<string | null>(null);
 
   // Load database overview & tables (with first table page-1 rows in the same round-trip on initial load)
-  const loadDatabaseOverview = async (showLoading = true) => {
-    if (showLoading) setLoadingTables(true);
+  const loadDatabaseOverview = async (showLoading = true, forceRefresh = false) => {
+    if (showLoading && (!cachedHanaAdminOverview || forceRefresh)) setLoadingTables(true);
     setError('');
     try {
       const fetchInitialRows = !selectedTableName && activeTab === 'tables';
-      const data = await getHanaOverview(fetchInitialRows, pageSize);
+      const data = await getHanaOverview(fetchInitialRows, pageSize, forceRefresh);
       setStats(data.stats);
       setTables(data.tables || []);
+      let activeFirstTbl = selectedTableName;
       if (!selectedTableName && data.tables?.length > 0) {
         const businessTable = data.tables.find(t => !t.isInternal);
         const firstTbl = businessTable ? businessTable.name : data.tables[0].name;
+        activeFirstTbl = firstTbl;
         if (data.initialTableData && data.initialTableData.tableName.toUpperCase() === firstTbl.toUpperCase()) {
           skipNextTableFetchRef.current = firstTbl;
           setTableData(data.initialTableData);
@@ -118,6 +127,12 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
         setSelectedTableName(firstTbl);
         setSqlQuery(`SELECT * FROM "${firstTbl}" LIMIT 20`);
       }
+      cachedHanaAdminOverview = {
+        stats: data.stats,
+        tables: data.tables || [],
+        firstTableName: activeFirstTbl,
+        initialTableData: data.initialTableData,
+      };
     } catch (err: any) {
       setError(getApiErrorMessage(err, 'Failed to connect to SAP HANA Cloud.'));
     } finally {
@@ -126,7 +141,7 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
   };
 
   useEffect(() => {
-    loadDatabaseOverview();
+    loadDatabaseOverview(false, false);
   }, []);
 
   // Fetch table data when selected table, page, pageSize, sort, or search changes
@@ -418,7 +433,7 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={() => loadDatabaseOverview(true)}
+            onClick={() => loadDatabaseOverview(true, true)}
             disabled={loadingTables}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
             title="Scan SYS.TABLES for new tables"

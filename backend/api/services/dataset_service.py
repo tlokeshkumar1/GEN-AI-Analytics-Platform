@@ -37,7 +37,18 @@ class DatasetService:
         self._active_futures = []
         self._futures_lock = threading.Lock()
         self.repository = None if repository is False else repository
-        if repository is not False and self.repository is None and (os.getenv("PLATFORM_DATASET_BACKEND") == "durable" or os.getenv("VCAP_APPLICATION")):
+        use_durable = (
+            bool(os.getenv("VCAP_APPLICATION"))
+            or (
+                self.output_dir == OUTPUT_DIR
+                and (
+                    os.getenv("PLATFORM_DATASET_BACKEND") == "durable"
+                    or os.getenv("PLATFORM_METADATA_BACKEND", "hana") == "hana"
+                )
+                and os.getenv("PLATFORM_DATASET_BACKEND") != "local"
+            )
+        )
+        if repository is not False and self.repository is None and use_durable:
             from api.platform.storage import DatasetRepository
             self.repository = DatasetRepository()
 
@@ -374,7 +385,7 @@ class DatasetService:
         context = copy_context()
         context.run(current_ai_settings.set, ai_settings())
         context.run(current_selection.set, None)
-        if self.repository is not None:
+        if self.repository is not None and os.getenv("PLATFORM_EXTERNAL_WORKER") == "true":
             from api.platform.jobs import JobService
             return context.run(JobService(store=self.repository.store, datasets=self).enqueue,
                 "index", {"dataset_id": dataset_id, "version": version},
@@ -1280,8 +1291,30 @@ class DatasetService:
         filename = f"{entry['folder']}{'' if number == 1 else f'_V{number}'}{suffix}"
         chunks = self._chunks(df, entry["name"], rows)
         previous = self._snapshot(entry) if entry["versions"] else None
-        vectors, status = self._index(chunks, previous) if index else ([], "Pending")
-        hana_status = self._sync_hana(entry, number, chunks, vectors) if index else "Pending"
+        if original is not None:
+            raw = original
+        elif suffix == ".csv":
+            raw = df.to_csv(index=False).encode("utf-8")
+        else:
+            buffer = io.BytesIO()
+            self._excel_export(df).to_excel(buffer, index=False, engine="openpyxl")
+            raw = buffer.getvalue()
+
+        import contextvars
+
+        def _index_and_sync():
+            vecs, st = self._index(chunks, previous) if index else ([], "Pending")
+            h_status = self._sync_hana(entry, number, chunks, vecs) if index else "Pending"
+            return vecs, st, h_status
+
+        ctx_index = contextvars.copy_context()
+        ctx_raw = contextvars.copy_context()
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="durable-save") as pool:
+            index_future = pool.submit(ctx_index.run, _index_and_sync)
+            raw_future = pool.submit(ctx_raw.run, self.repository.objects.put, raw)
+            vectors, status, hana_status = index_future.result()
+            raw_key = raw_future.result()
+
         prov = provenance or {}
         active_tbl = prov.get("tableName") or entry.get("tableName") or entry.get("table_name")
         sheet_nm = prov.get("sheet_name") or entry.get("sheetName") or entry.get("sheet_name")
@@ -1291,15 +1324,6 @@ class DatasetService:
                         embeddingConfiguration=self._embedding_configuration(), dataProfile=df.attrs.get("data_profile"),
                         transformationPlan=df.attrs.get("transformation_plan"),
                         active_table=active_tbl, tableName=active_tbl, sheet_name=sheet_nm, sourceFilename=src_file)
-        if original is not None:
-            raw = original
-        elif suffix == ".csv":
-            raw = df.to_csv(index=False).encode("utf-8")
-        else:
-            buffer = io.BytesIO()
-            self._excel_export(df).to_excel(buffer, index=False, engine="openpyxl")
-            raw = buffer.getvalue()
-        raw_key = self.repository.objects.put(raw)
         reference = self.repository.save_snapshot(snapshot)
         now = datetime.now(timezone.utc).isoformat()
         entry["versions"].append(dict(version=number, filename=filename, createdAt=now, operation=operation,

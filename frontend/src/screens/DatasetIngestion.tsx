@@ -419,18 +419,18 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
                   <div
                     key={item.step}
                     className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${isCurrent
-                        ? 'bg-blue-50/70 border-blue-500 shadow-sm ring-2 ring-blue-500/20'
-                        : isCompleted
-                          ? 'bg-slate-50/60 border-slate-200 text-slate-700'
-                          : 'bg-white border-slate-200/50 text-slate-400 opacity-60'
+                      ? 'bg-blue-50/70 border-blue-500 shadow-sm ring-2 ring-blue-500/20'
+                      : isCompleted
+                        ? 'bg-slate-50/60 border-slate-200 text-slate-700'
+                        : 'bg-white border-slate-200/50 text-slate-400 opacity-60'
                       }`}
                   >
                     <div
                       className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${isCurrent
-                          ? 'bg-blue-600 text-white'
-                          : isCompleted
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-slate-100 text-slate-400'
+                        ? 'bg-blue-600 text-white'
+                        : isCompleted
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-slate-100 text-slate-400'
                         }`}
                     >
                       <span className="material-symbols-outlined text-lg">
@@ -561,9 +561,8 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
               setDragOver(false);
               if (e.dataTransfer.files[0]) void upload(e.dataTransfer.files[0]);
             }}
-            className={`rounded-xl border border-dashed px-4 py-3 bg-white transition-all shadow-2xs flex flex-wrap items-center justify-between gap-3 ${
-              dragOver ? 'border-blue-500 bg-blue-50/40 ring-2 ring-blue-500/20' : 'border-slate-300 hover:border-slate-400'
-            }`}
+            className={`rounded-xl border border-dashed px-4 py-3 bg-white transition-all shadow-2xs flex flex-wrap items-center justify-between gap-3 ${dragOver ? 'border-blue-500 bg-blue-50/40 ring-2 ring-blue-500/20' : 'border-slate-300 hover:border-slate-400'
+              }`}
           >
             <input
               ref={fileInputRef}
@@ -666,8 +665,8 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
                   type="button"
                   onClick={() => setSourceTab('all')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${sourceTab === 'all'
-                      ? 'bg-white text-blue-700 shadow-2xs font-bold'
-                      : 'text-slate-600 hover:text-slate-900'
+                    ? 'bg-white text-blue-700 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
                     }`}
                 >
                   <span className="material-symbols-outlined text-[16px]">apps</span>
@@ -681,8 +680,8 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
                   type="button"
                   onClick={() => setSourceTab('uploads')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${sourceTab === 'uploads'
-                      ? 'bg-white text-blue-700 shadow-2xs font-bold'
-                      : 'text-slate-600 hover:text-slate-900'
+                    ? 'bg-white text-blue-700 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
                     }`}
                 >
                   <span className="material-symbols-outlined text-[16px]">upload_file</span>
@@ -696,8 +695,8 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
                   type="button"
                   onClick={() => setSourceTab('connected')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${sourceTab === 'connected'
-                      ? 'bg-white text-blue-700 shadow-2xs font-bold'
-                      : 'text-slate-600 hover:text-slate-900'
+                    ? 'bg-white text-blue-700 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
                     }`}
                 >
                   <span className="material-symbols-outlined text-[16px]">hub</span>
@@ -775,10 +774,10 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
                         <div className="flex items-start justify-between gap-3 mb-3">
                           <div
                             className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${isExternal
-                                ? 'bg-purple-50 border-purple-200 text-purple-600'
-                                : isExcel
-                                  ? 'bg-emerald-50 border-emerald-200 text-emerald-600'
-                                  : 'bg-blue-50 border-blue-200 text-blue-600'
+                              ? 'bg-purple-50 border-purple-200 text-purple-600'
+                              : isExcel
+                                ? 'bg-emerald-50 border-emerald-200 text-emerald-600'
+                                : 'bg-blue-50 border-blue-200 text-blue-600'
                               }`}
                           >
                             <span className="material-symbols-outlined text-2xl">
@@ -789,8 +788,8 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
                           <div className="flex flex-wrap items-center gap-1.5 justify-end">
                             <span
                               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${isExternal
-                                  ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                  : 'bg-blue-50 text-blue-700 border-blue-200'
+                                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                : 'bg-blue-50 text-blue-700 border-blue-200'
                                 }`}
                             >
                               <span className="material-symbols-outlined text-[12px]">
@@ -987,7 +986,8 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
         stageStatuses={ingestionStepper.stageStatuses}
         error={ingestionStepper.error}
         onClose={() => setIngestionStepper(prev => ({ ...prev, isOpen: false }))}
-        onNavigateToDashboard={() => onNavigate('dashboard')}
+        onNavigateToDashboard={() => onNavigate('executive-dashboard')}
+        onNavigateToBuildKpi={() => onNavigate('build-your-kpi-graph-studio')}
       />
 
       {/* File Import Review Dialog */}

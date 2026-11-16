@@ -40,8 +40,8 @@ class SemanticModellingAgent:
 
 
 class AnalyticsPlanningAgent:
-    def propose(self, entry, version, revision, snapshot) -> AnalyticsPlan:
-        return semantic_registry.propose_analytics(entry, version, revision, snapshot)
+    def propose(self, entry, version, revision, snapshot, fast_only=False) -> AnalyticsPlan:
+        return semantic_registry.propose_analytics(entry, version, revision, snapshot, fast_only=fast_only)
 
 
 class WorkflowOrchestrator:
@@ -85,12 +85,12 @@ class WorkflowOrchestrator:
             self.save(entry, version, "failed", "failed", {}, "Semantic proposal failed. Review the source profile and semantic constraints.")
             raise
 
-    def propose_analytics(self, entry, version, revision, snapshot):
-        require_dataset_access(entry, write=True)
+    def propose_analytics(self, entry, version, revision, snapshot, fast_only=False):
+        require_dataset_access(entry)
         semantic_registry.get(entry, version, revision, approved=True)
         self.save(entry, version, "analytics_planning", "running", {"semantic_revision": revision})
         try:
-            plan = AnalyticsPlanningAgent().propose(entry, version, revision, snapshot)
+            plan = AnalyticsPlanningAgent().propose(entry, version, revision, snapshot, fast_only=fast_only)
             self.save(entry, version, "analytics_review", "awaiting_review", {"analytics_items": [{"id": item.id, "revision": item.revision} for item in plan.items]})
             return plan
         except Exception:

@@ -8,6 +8,8 @@ from api.platform.agent_preprocessing import preprocessing_agent
 from api.platform.agent_domain_classifier import domain_classifier_agent
 from api.platform.agent_chart_recommender import chart_recommender_agent
 from api.platform.semantic import semantic_registry
+from api.platform.workflow import workflow_orchestrator
+from api.models.execution_context import current_identity
 from api.utils.logger import get_logger
 
 logger = get_logger("services.upload_service")
@@ -91,7 +93,7 @@ class UploadService:
         result = dataset_service.upload(
             clean_content,
             filename,
-            async_index=async_index,
+            async_index=False if async_index is None else async_index,
             transformation_plan=None,
             table_name=target_table_name,
             display_name=display_name,
@@ -100,6 +102,18 @@ class UploadService:
         dataset_entry = result["dataset"]
         dataset_id = dataset_entry["id"]
         version = result["version"]
+
+        # Grant workspace-wide read access so User (Member) role can view datasets in
+        # Executive Dashboard, Build Your KPI, and Data Explorer.
+        try:
+            with dataset_service._writer():
+                cat = dataset_service._catalog()
+                rentry = dataset_service._entry(cat, dataset_id)
+                if not rentry.get("readers"):
+                    rentry["readers"] = ["*"]
+                    dataset_service._write_json(dataset_service.catalog_path, cat)
+        except Exception as grant_exc:
+            logger.debug(f"[UploadService] Note: Could not set default workspace readers: {grant_exc}")
 
         logger.info("[UploadService] Triggering Agent 2: Domain Classifier...")
         semantic_model = domain_classifier_agent.analyze(
@@ -119,8 +133,17 @@ class UploadService:
             raw_entry = dataset_service._entry(catalog, dataset_id)
             snapshot = dataset_service._snapshot(raw_entry, version)
             persisted_model = semantic_registry.propose(raw_entry, version, snapshot, overrides=semantic_model.model_dump())
+            if version == 1 and persisted_model.status != "approved" and current_identity.get() is not None:
+                persisted_model = semantic_registry.review(raw_entry, version, persisted_model.revision, "approved")
+                workflow_orchestrator.save(
+                    raw_entry,
+                    version,
+                    "semantic_review",
+                    "completed",
+                    {"semantic_revision": persisted_model.revision, "auto_approved": True},
+                )
             semantic_model = persisted_model
-            logger.info(f"[UploadService] Proposed semantic model saved to registry for {dataset_id} v{version}")
+            logger.info(f"[UploadService] Semantic model saved (status={semantic_model.status}) for {dataset_id} v{version}")
         except Exception as exc:
             logger.warning(f"[UploadService] Note: Could not auto-propose model to registry: {exc}")
 

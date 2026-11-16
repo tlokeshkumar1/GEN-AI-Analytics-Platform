@@ -65,9 +65,7 @@ describe('Platform correctness and navigation', () => {
 
     render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'User', roles: ['User'] }} />);
     expect(await screen.findByText('Monthly Net Revenue')).toBeTruthy();
-    expect(screen.getByText('Publishing (Admin Only)')).toBeTruthy();
-    expect(screen.queryByText('Include on Dashboard')).toBeNull();
-    expect(screen.getByText('Publishing Restricted to Administrators')).toBeTruthy();
+    expect(screen.getByText('Include on Dashboard')).toBeTruthy();
   });
 
   it('allows widget publishing in Graph Studio for Admin or Admin+User', async () => {

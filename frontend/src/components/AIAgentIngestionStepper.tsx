@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
   Brain,
@@ -83,6 +83,7 @@ interface AIAgentIngestionStepperProps {
   error?: string | null;
   onClose: () => void;
   onNavigateToDashboard: () => void;
+  onNavigateToBuildKpi?: () => void;
 }
 
 export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = ({
@@ -95,6 +96,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   error,
   onClose,
   onNavigateToDashboard,
+  onNavigateToBuildKpi,
 }) => {
   const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({
     1: true,
@@ -107,6 +109,13 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   const [selectedChartIds, setSelectedChartIds] = useState<Record<string, boolean>>({});
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
+  const recommendationsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (result?.recommendations && result.recommendations.length > 0) {
+      recommendationsRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [result]);
 
   // Initialize selected charts and ensure active dataset context is set immediately on first upload
   useEffect(() => {
@@ -214,7 +223,23 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
     }
   };
 
+  const handleGoToBuildKpi = () => {
+    if (result?.dataset?.id) {
+      const version = result.version || result.dataset.currentVersion || 1;
+      selectContext({
+        datasetId: result.dataset.id,
+        version,
+        semanticRevision: 1,
+      });
+    }
+    onClose();
+    onNavigateToBuildKpi?.();
+  };
+
   const effective = result ?? partialResult ?? null;
+  const recommendationsList = effective?.recommendations || [];
+  const kpiCount = recommendationsList.filter(r => r.kind === 'kpi').length;
+  const chartCount = recommendationsList.length - kpiCount;
   const audit = effective?.preprocessing_audit;
   const domain = effective?.domain;
   const grain = effective?.semantic_model?.grain;
@@ -517,7 +542,9 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
               <div className="flex items-center gap-2">
                 {stage4Status === 'completed' && effective?.recommendations ? (
                   <span className="text-[11px] font-bold text-amber-300">
-                    {effective.recommendations.length} Charts Curated
+                    {kpiCount > 0 && chartCount > 0
+                      ? `${kpiCount} KPI${kpiCount === 1 ? '' : 's'} & ${chartCount} Chart${chartCount === 1 ? '' : 's'} Curated`
+                      : `${effective.recommendations.length} KPIs & Charts Curated`}
                   </span>
                 ) : stage4Status === 'running' ? (
                   <span className="text-[11px] font-semibold text-blue-400 animate-pulse flex items-center gap-1">
@@ -542,18 +569,18 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
 
           {/* 🎯 STAGE 5: Interactive Executive Dashboard Approval (Checkboxes) */}
           {result?.recommendations && result.recommendations.length > 0 && (
-            <div className="pt-2 border-t border-slate-800 space-y-3">
+            <div ref={recommendationsRef} className="pt-2 border-t border-slate-800 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <Sliders className="w-4 h-4 text-blue-400" />
-                    <span>Include on Executive Dashboard:</span>
+                    <span>Select KPIs & Charts to Include on Dashboard:</span>
                     <span className="text-xs text-blue-400 font-mono">
                       ({selectedCount} of {result.recommendations.length} selected)
                     </span>
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    Check the boxes for the charts you want published directly to the Executive Dashboard.
+                    Check the boxes for the KPIs and charts you want to include on the Executive Dashboard, or open Build Your KPI to customize.
                   </p>
                 </div>
 
@@ -655,6 +682,16 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
           </button>
 
           <div className="flex items-center gap-3">
+            {result && onNavigateToBuildKpi && (
+              <button
+                type="button"
+                onClick={handleGoToBuildKpi}
+                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-lg border border-indigo-500/60 bg-indigo-950/50 hover:bg-indigo-900/70 text-indigo-200 transition-all cursor-pointer"
+              >
+                <Sliders className="w-4 h-4" />
+                <span>Build Your KPI</span>
+              </button>
+            )}
             {result?.recommendations && (
               <button
                 type="button"
@@ -666,7 +703,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
                 <span>
                   {isPublishing
                     ? 'Publishing…'
-                    : `Publish ${selectedCount} Accepted Charts to Dashboard`}
+                    : `Publish on Dashboard (${selectedCount})`}
                 </span>
               </button>
             )}
