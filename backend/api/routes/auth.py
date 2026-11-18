@@ -6,6 +6,7 @@ import requests
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from api.xsuaa import authenticated_profile, validate_token, user_profile, xsuaa_credentials
+from api.services.project_login_service import record_project_login, record_project_logout
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -100,13 +101,30 @@ def _login(
                     refresh_token = payload.get("refresh_token")
                     expires_in = payload.get("expires_in")
                 elif oauth_res.status_code in (400, 401, 403):
-                    sap_error = "SAP rejected this login. Use the application router for SSO or MFA."
+                    try:
+                        err_json = oauth_res.json()
+                        desc = err_json.get("error_description") or err_json.get("error") or ""
+                        if isinstance(desc, str) and desc.startswith("{"):
+                            import json
+                            try:
+                                nested = json.loads(desc)
+                                desc = nested.get("error_description") or nested.get("error") or desc
+                            except Exception:
+                                pass
+                        sap_error = desc or "Invalid corporate SAP credentials. Access denied."
+                    except Exception:
+                        sap_error = "Invalid corporate SAP credentials. Access denied."
             except (requests.RequestException, ValueError) as err:
-                sap_error = f"SAP authentication is unavailable: {err}"
+                sap_error = f"SAP authentication service is unavailable: {err}"
 
-        # If SAP direct password grant failed, provide local dev session in development environment
+        # If SAP direct password grant failed, do not silently masquerade invalid credentials
         if not token:
-            if os.getenv("APP_ENV", "development") == "development" or not os.getenv("VCAP_APPLICATION"):
+            if sap_error and "unavailable" not in sap_error.lower():
+                raise HTTPException(401, f"SAP authentication failed: {sap_error}")
+
+            allow_dev_bypass = os.getenv("ALLOW_DEV_AUTH_BYPASS", "false").lower() == "true"
+            is_dev = os.getenv("APP_ENV", "development") == "development" and not os.getenv("VCAP_APPLICATION")
+            if is_dev and (allow_dev_bypass or not credentials.get("clientid")):
                 from urllib.parse import quote
                 stripped_user = username.strip()
                 clean_user = quote(stripped_user, safe="@.")
@@ -126,7 +144,9 @@ def _login(
             expires_in = None
 
     _set_refresh_cookie(response, request, refresh_token, remember_me=remember_me)
-    result = {"status": "success", "token": token, "user": user_profile(context, claims)}
+    profile = user_profile(context, claims)
+    record_project_login(user_id=profile.get("user_id"), email=profile.get("email"))
+    result = {"status": "success", "token": token, "user": profile}
     if expires_in is not None:
         result["expires_in"] = expires_in
     return result
@@ -203,7 +223,9 @@ def refresh_session(
             expires_in = None
 
     _set_refresh_cookie(response, request, next_refresh, remember_me=True)
-    result = {"status": "success", "token": new_token, "user": user_profile(context, claims)}
+    profile = user_profile(context, claims)
+    record_project_login(user_id=profile.get("user_id"), email=profile.get("email"))
+    result = {"status": "success", "token": new_token, "user": profile}
     if expires_in is not None:
         result["expires_in"] = expires_in
     return result
@@ -211,11 +233,35 @@ def refresh_session(
 
 @router.get("/me")
 def get_me(authorization: Optional[str] = Header(None)):
-    return authenticated_profile(authorization)
+    profile = authenticated_profile(authorization)
+    record_project_login(user_id=profile.get("user_id"), email=profile.get("email"))
+    return profile
+
+
+class LogoutRequest(BaseModel):
+    user_id: Optional[str] = None
+    email: Optional[str] = None
 
 
 @router.post("/logout")
-def logout(request: Request, response: Response):
-    # Clear HttpOnly refresh cookie; browser clears local token and AppRouter sessions end at /logout.
+def logout(
+    request: Request,
+    response: Response,
+    req: Optional[LogoutRequest] = None,
+    authorization: Optional[str] = Header(None),
+):
+    user_id = req.user_id if req else None
+    email = req.email if req else None
+    if authorization and not (user_id and email):
+        try:
+            profile = authenticated_profile(authorization)
+            user_id = user_id or profile.get("user_id")
+            email = email or profile.get("email")
+        except Exception:
+            pass
+
+    if user_id or email:
+        record_project_logout(user_id=user_id, email=email)
+
     _clear_refresh_cookie(response, request)
     return {"status": "success", "message": "Sign out through /logout to end the SAP router session."}

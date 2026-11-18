@@ -704,9 +704,13 @@ class DatasetService:
         if source_id and not target_dataset_id:
             stem = stem + "_" + source_id[:8]
 
-        # Derive sheet name if not passed explicitly
-        if not sheet_name and transformation_plan and hasattr(transformation_plan, 'sheet') and transformation_plan.sheet:
-            sheet_name = transformation_plan.sheet
+        # Derive sheet name if not passed explicitly (checking parsing.sheet contract)
+        if not sheet_name and transformation_plan:
+            parsing_opt = getattr(transformation_plan, 'parsing', None)
+            if parsing_opt and getattr(parsing_opt, 'sheet', None):
+                sheet_name = parsing_opt.sheet
+            elif getattr(transformation_plan, 'sheet', None):
+                sheet_name = transformation_plan.sheet
 
         # Derive clean table and display identity
         clean_display_name = display_name or table_name or (f"{stem} - {sheet_name}" if sheet_name else stem + suffix)
@@ -1007,8 +1011,10 @@ class DatasetService:
                 if prev_models:
                     latest_model = sorted(prev_models, key=lambda m: m.get("revision", 1) if isinstance(m, dict) else getattr(m, "revision", 1))[-1]
                     overrides_dict = latest_model if isinstance(latest_model, dict) else latest_model.model_dump()
-                    semantic_registry.propose(entry, version, snap, overrides=overrides_dict)
-                    logger.info(f"Carried forward semantic model to version {version}")
+                    carried = semantic_registry.propose(entry, version, snap, overrides=overrides_dict)
+                    if carried.status != "approved":
+                        semantic_registry.review(entry, version, carried.revision, "approved")
+                    logger.info(f"Carried forward and directly approved semantic model for version {version}")
             except Exception as exc:
                 logger.warning(f"Could not carry forward semantic model: {exc}")
 
@@ -1096,109 +1102,128 @@ class DatasetService:
             return {"success": True, "message": message, "dataset": self._item(entry, catalog["activeDatasetId"])}
 
     def delete(self, dataset_id):
-        with self._writer():
-            catalog = self._catalog()
-            entry = self._entry(catalog, dataset_id)
-            require_dataset_access(entry, write=True)
+        catalog = self._catalog()
+        entry = self._entry(catalog, dataset_id)
+        require_dataset_access(entry, write=True)
 
-            folder_name = entry.get("folder")
-            dataset_name = entry.get("name", dataset_id)
-            workspace_id = entry.get("workspaceId") or "default"
-            physical_table_name = entry.get("physical_table_name")
+        folder_name = entry.get("folder")
+        dataset_name = entry.get("name", dataset_id)
+        workspace_id = entry.get("workspaceId") or "default"
 
-            # 1. Cascade Purge: SAP HANA Cloud Physical Column Table
-            dropped_table = None
-            candidate_tables = []
-            if physical_table_name:
-                candidate_tables.append(physical_table_name)
+        # 1. Cascade Purge: SAP HANA Cloud Physical Column Table
+        dropped_tables = []
+        candidate_tables = set()
+        for key in ["tableName", "table_name", "physical_table_name", "displayName", "display_name", "name"]:
+            val = entry.get(key)
+            if val and isinstance(val, str):
+                candidate_tables.add(val)
+        for v in entry.get("versions", []):
+            for key in ["tableName", "table_name"]:
+                val = v.get(key)
+                if val and isinstance(val, str):
+                    candidate_tables.add(val)
+            v_num = v.get("version", 1)
             if folder_name:
-                candidate_tables.extend([
-                    f"DS_{folder_name[:18].upper()}_V{entry.get('currentVersion', 1)}",
-                    f"DS_{folder_name[:18].upper()}",
-                    folder_name.upper()
-                ])
-            try:
-                from api.database.hana_table_service import hana_table_service
-                for tbl in candidate_tables:
-                    # Do not drop protected system tables
-                    if tbl.upper() in {"DATASETS_METADATA", "PLATFORM_METADATA", "PLATFORM_DOCUMENTS", "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS"}:
-                        continue
-                    if hana_table_service.table_exists(tbl):
-                        res = hana_table_service.drop_table(tbl)
-                        if res.get("dropped"):
-                            dropped_table = tbl
-                            logger.info(f"Dropped physical HANA table '{tbl}' for dataset {dataset_id}")
-                            break
-            except Exception as e:
-                logger.warning(f"Error dropping physical table for dataset {dataset_id}: {e}")
+                candidate_tables.add(f"DS_{folder_name[:18].upper()}_V{v_num}")
+        if folder_name:
+            candidate_tables.add(f"DS_{folder_name[:18].upper()}_V{entry.get('currentVersion', 1)}")
+            candidate_tables.add(f"DS_{folder_name[:18].upper()}")
+            candidate_tables.add(folder_name.upper())
 
-            # 2. Cascade Purge: PLATFORM_METADATA / PLATFORM_DOCUMENTS (semantics, reviews, analytics items)
-            purged_metadata_count = 0
-            try:
+        try:
+            from api.database.hana_table_service import hana_table_service
+            for tbl in candidate_tables:
+                # Do not drop protected system tables
+                if tbl.upper() in {"DATASETS_METADATA", "PLATFORM_METADATA", "PLATFORM_DOCUMENTS", "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS"}:
+                    continue
+                if hana_table_service.table_exists(tbl):
+                    res = hana_table_service.drop_table(tbl)
+                    if res.get("dropped"):
+                        dropped_tables.append(tbl)
+                        logger.info(f"Dropped physical HANA table '{tbl}' for dataset {dataset_id}")
+        except Exception as e:
+            logger.warning(f"Error dropping physical table for dataset {dataset_id}: {e}")
+
+        # 2. Cascade Purge: PLATFORM_METADATA / PLATFORM_DOCUMENTS (semantics, reviews, analytics items, dashboard widgets)
+        purged_metadata_count = 0
+        try:
+            from api.platform.semantic import semantic_registry
+            if hasattr(semantic_registry, "store") and hasattr(semantic_registry.store, "delete_dataset_metadata"):
+                purged_metadata_count = semantic_registry.store.delete_dataset_metadata(workspace_id, dataset_id)
+            else:
                 from api.platform.store import metadata_store
                 purged_metadata_count = metadata_store().delete_dataset_metadata(workspace_id, dataset_id)
-                logger.info(f"Purged {purged_metadata_count} PLATFORM_METADATA records for dataset {dataset_id}")
-            except Exception as e:
-                logger.warning(f"Error purging PLATFORM_METADATA for dataset {dataset_id}: {e}")
+            logger.info(f"Purged {purged_metadata_count} PLATFORM_METADATA records for dataset {dataset_id}")
+        except Exception as e:
+            logger.warning(f"Error purging PLATFORM_METADATA for dataset {dataset_id}: {e}")
 
-            # 3. Cascade Purge: DATASETS_METADATA table in SAP HANA Cloud
-            try:
-                from api.platform.datasets_metadata_repository import datasets_metadata_repo
-                datasets_metadata_repo.delete_dataset(dataset_id)
-            except Exception as e:
-                logger.warning(f"Error deleting from DATASETS_METADATA for dataset {dataset_id}: {e}")
+        # 3. Cascade Purge: DATASETS_METADATA table in SAP HANA Cloud
+        try:
+            from api.platform.datasets_metadata_repository import datasets_metadata_repo
+            datasets_metadata_repo.delete_dataset(dataset_id)
+        except Exception as e:
+            logger.warning(f"Error deleting from DATASETS_METADATA for dataset {dataset_id}: {e}")
 
-            # 4. Cascade Purge: VECTOR_TABLE in SAP HANA Cloud
-            try:
-                from api.database.vector_client import vector_client
-                vector_client.delete_dataset(dataset_id)
-            except Exception as e:
-                logger.warning(f"Error deleting from VECTOR_TABLE for dataset {dataset_id}: {e}")
+        # 4. Cascade Purge: VECTOR_TABLE in SAP HANA Cloud
+        try:
+            from api.database.vector_client import vector_client
+            vector_client.delete_dataset(dataset_id)
+        except Exception as e:
+            logger.warning(f"Error deleting from VECTOR_TABLE for dataset {dataset_id}: {e}")
 
-            # 5. Cascade Purge: Local Storage & Caches
-            # Purge local filesystem folder (raw CSV/XLSX and .version_*.json files)
-            if folder_name:
-                folder_path = self.output_dir / folder_name
-                if folder_path.exists() and folder_path.is_dir():
-                    try:
-                        shutil.rmtree(folder_path, ignore_errors=True)
-                        logger.info(f"Removed local storage directory: {folder_path}")
-                    except Exception as e:
-                        logger.warning(f"Could not delete folder {folder_path}: {e}")
+        # 5. Cascade Purge: Local Storage & Caches
+        # Purge local filesystem folder (raw CSV/XLSX and .version_*.json files)
+        if folder_name:
+            folder_path = self.output_dir / folder_name
+            if folder_path.exists() and folder_path.is_dir():
+                try:
+                    shutil.rmtree(folder_path, ignore_errors=True)
+                    logger.info(f"Removed local storage directory: {folder_path}")
+                except Exception as e:
+                    logger.warning(f"Could not delete folder {folder_path}: {e}")
 
-            # Evict from snapshot in-memory cache
-            with self._cache_lock:
-                keys_to_evict = [k for k in self._snapshot_cache if k[0] == dataset_id]
-                for k in keys_to_evict:
-                    self._snapshot_cache.pop(k, None)
+        # Evict from snapshot in-memory cache
+        with self._cache_lock:
+            keys_to_evict = [k for k in self._snapshot_cache if k[0] == dataset_id]
+            for k in keys_to_evict:
+                self._snapshot_cache.pop(k, None)
 
-            # Clear dashboard cache
-            try:
-                from api.routes.dashboard import clear_dashboard_cache
-                clear_dashboard_cache()
-            except Exception:
-                pass
+        # Clear semantic registry and dashboard caches
+        try:
+            from api.platform.semantic import semantic_registry
+            semantic_registry._clear_cache()
+        except Exception:
+            pass
+        try:
+            from api.routes.dashboard import clear_dashboard_cache
+            clear_dashboard_cache()
+        except Exception:
+            pass
 
-            # Update catalog JSON
-            del catalog["datasets"][dataset_id]
-            if catalog["activeDatasetId"] == dataset_id:
-                catalog["activeDatasetId"] = next(iter(catalog["datasets"]), None)
-            self._write_json(self.catalog_path, catalog)
+        # Update catalog JSON within writer lock
+        with self._writer():
+            cat = self._catalog()
+            if dataset_id in cat.get("datasets", {}):
+                del cat["datasets"][dataset_id]
+            if cat.get("activeDatasetId") == dataset_id:
+                cat["activeDatasetId"] = next(iter(cat.get("datasets", {})), None)
+            self._write_json(self.catalog_path, cat)
             self._invalidate()
 
-            return {
-                "success": True,
-                "message": f"Dataset '{dataset_name}' and all associated records in HANA physical tables, PLATFORM_METADATA, DATASETS_METADATA, and VECTOR_TABLE deleted.",
-                "deleted": {
-                    "dataset_id": dataset_id,
-                    "name": dataset_name,
-                    "physical_table": dropped_table,
-                    "platform_metadata_purged": purged_metadata_count,
-                    "datasets_metadata_deleted": True,
-                    "vector_rows_deleted": True,
-                    "local_files_removed": True,
-                }
+        return {
+            "success": True,
+            "message": f"Dataset '{dataset_name}' and all associated records in HANA physical tables, PLATFORM_METADATA, DATASETS_METADATA, and VECTOR_TABLE deleted.",
+            "deleted": {
+                "dataset_id": dataset_id,
+                "name": dataset_name,
+                "physical_table": dropped_tables[0] if dropped_tables else None,
+                "physical_tables": dropped_tables,
+                "platform_metadata_purged": purged_metadata_count,
+                "datasets_metadata_deleted": True,
+                "vector_table_purged": True,
+                "local_files_removed": True,
             }
+        }
 
     def active(self):
         selection = current_selection.get()

@@ -83,7 +83,7 @@ def validate_token(token: str, credentials: dict | None = None) -> tuple:
         raise HTTPException(503, "A complete project XSUAA application binding is required.")
 
     # Local development token bypass (Strictly prohibited in production / Cloud Foundry)
-    is_dev = os.getenv("APP_ENV", "").lower() == "development" and not os.getenv("VCAP_APPLICATION")
+    is_dev = os.getenv("APP_ENV", "development").lower() == "development" and not os.getenv("VCAP_APPLICATION")
     if is_dev and token.startswith("dev-token-"):
         logger.warning("Local development mock token used. This is strictly prohibited in production.")
         from urllib.parse import unquote
@@ -95,8 +95,14 @@ def validate_token(token: str, credentials: dict | None = None) -> tuple:
         class LocalDevSecurityContext:
             def check_local_scope(self, scope: str) -> bool:
                 return True
+            def check_scope(self, scope: str) -> bool:
+                return True
             def get_logon_name(self) -> str:
                 return user_email
+            def get_identity_zone(self) -> str:
+                return credentials.get("identityzoneid") or "x3xp40nc-cd8dlcr"
+            def get_client_id(self) -> str:
+                return credentials.get("clientid") or "local-dev-client"
 
         claims = {
             "user_id": user_id,
@@ -105,7 +111,12 @@ def validate_token(token: str, credentials: dict | None = None) -> tuple:
             "name": user_name,
             "given_name": user_name.split()[0] if " " in user_name else user_name,
             "family_name": user_name.split()[-1] if " " in user_name else "",
-            "scope": [f"{credentials['xsappname']}.Admin", f"{credentials['xsappname']}.Member"],
+            "scope": [
+                f"{credentials['xsappname']}.Admin",
+                f"{credentials['xsappname']}.Member",
+                "xs_user.read",
+                "xs_authorization.read",
+            ],
             "sub": user_id,
             "zid": credentials.get("identityzoneid") or "x3xp40nc-cd8dlcr",
             "aud": [credentials["clientid"], credentials["xsappname"]],

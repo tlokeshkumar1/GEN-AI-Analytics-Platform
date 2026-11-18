@@ -53,10 +53,13 @@ class MetadataStore:
         except Exception as exc:
             failed = True
             if conn:
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             if isinstance(exc, (HTTPException, ValueError)):
                 raise
-            raise HTTPException(503, "Metadata storage failed. Check configuration and apply the documented migration.") from None
+            raise HTTPException(503, f"Metadata storage failed: {exc}") from None
         finally:
             if token is not None:
                 self._cursor.reset(token)
@@ -121,8 +124,10 @@ class MetadataStore:
         """Purge all metadata documents (semantics, reviews, analytics items, dashboards) for a dataset."""
         patterns = [
             f"{workspace_id}:%:{dataset_id}:%",
+            f"{workspace_id}:%:{dataset_id}",
             f"%:{dataset_id}:%",
             f"%:{dataset_id}",
+            f"%:{dataset_id}:v%",
         ]
         with self.transaction() as cursor:
             total_deleted = 0

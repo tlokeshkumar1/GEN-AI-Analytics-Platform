@@ -87,6 +87,7 @@ class AICoreService:
         prompt: str,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        timeout: int = 30,
     ) -> Optional[str]:
         """
         Generate completion using SAP AI Core Generative AI Hub deployment.
@@ -128,7 +129,7 @@ class AICoreService:
         try:
             logger.info(f"[AI Core] Sending graph code generation request to SAP AI Core: {url}")
             t_start = time.perf_counter()
-            res = self.session.post(url, json=payload, headers=headers, timeout=30)
+            res = self.session.post(url, json=payload, headers=headers, timeout=timeout)
             elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
             if res.status_code == 200:
                 data = res.json()
@@ -250,9 +251,10 @@ class AICoreService:
         prompt: str,
         max_tokens: int = 1800,
         temperature: float = 0.1,
+        timeout: int = 12,
     ) -> Optional[str]:
         """
-        Generate structured JSON completion for autonomous agents.
+        Generate structured JSON completion for autonomous agents with bounded timeout.
         Uses NVIDIA NIM first when configured, falling back to SAP AI Core if available.
         """
         if settings.NVIDIA_API_KEY:
@@ -262,7 +264,7 @@ class AICoreService:
                         prompt,
                         max_tokens=max_tokens,
                         temperature=temperature,
-                        timeout=30,
+                        timeout=timeout,
                     )
                 except TypeError:
                     # Compatibility if a unit test patches generate_nvidia_completion with 1-arg signature
@@ -277,6 +279,7 @@ class AICoreService:
                 prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                timeout=timeout,
             )
             if result and result.strip():
                 return result

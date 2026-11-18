@@ -36,6 +36,8 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
       cachedDashboardPayload = data;
       setDashboard(data);
     } catch (err) {
+      cachedDashboardPayload = null;
+      setDashboard(null);
       setError(getApiErrorMessage(err, 'Dashboard could not be loaded.'));
     } finally {
       setLoading(false);
@@ -50,12 +52,14 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
       void load(true);
     };
     window.addEventListener('dashboard_updated', handleDashboardUpdated);
+    window.addEventListener('dataset-context-changed', handleDashboardUpdated);
     return () => {
       window.removeEventListener('dashboard_updated', handleDashboardUpdated);
+      window.removeEventListener('dataset-context-changed', handleDashboardUpdated);
     };
   }, []);
 
-  const widgets = dashboard?.widgets ?? [];
+  const widgets = !error ? (dashboard?.widgets ?? []) : [];
   const kpiWidgets = widgets.filter(w => w.definition.kind === 'kpi');
   const chartWidgets = widgets.filter(w => w.definition.kind !== 'kpi');
   const widgetCount = widgets.length;

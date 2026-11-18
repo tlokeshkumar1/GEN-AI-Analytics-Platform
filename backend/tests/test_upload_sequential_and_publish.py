@@ -174,4 +174,52 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
         self.assertEqual(final_data["status"], "success")
         self.assertEqual(final_data["rows_processed"], 2)
         self.assertTrue(len(final_data["recommendations"]) > 0)
+        self.assertEqual(final_data["semantic_model"]["status"], "approved")
+
+    def test_lifecycle_rules_direct_approval_guaranteed_recommendations_and_deletion(self):
+        # Rule 1 & 2: Version 1 upload has direct approved semantic model and recommendations
+        csv_bytes = b"City,Department,Headcount\nTokyo,Engineering,45\nBerlin,Design,12\n"
+        upload_res = self.client.post("/api/upload", files={"file": ("Office.csv", csv_bytes)})
+        self.assertEqual(upload_res.status_code, 200, upload_res.text)
+        payload = upload_res.json()
+        dataset_id = payload["dataset"]["id"]
+        self.assertEqual(payload["version"], 1)
+        self.assertEqual(payload["semantic_model"]["status"], "approved")
+        self.assertGreater(len(payload["recommendations"]), 0)
+
+        # Rule 1: Appending new rows creates version 2 and directly approves semantic model
+        from api.services.dataset_service import dataset_service
+        mutate_res = dataset_service.mutate(
+            dataset_id,
+            "append",
+            [{"City": "Paris", "Department": "Sales", "Headcount": 20}],
+        )
+        self.assertEqual(mutate_res["version"], 2)
+        catalog = dataset_service._catalog()
+        rentry = dataset_service._entry(catalog, dataset_id)
+        v2_model = self.semantic_reg.get(rentry, 2, 1, approved=True)
+        self.assertEqual(v2_model.status, "approved")
+
+        # Publish recommendation to dashboard
+        pub_res = self.client.post(
+            "/api/dashboard/publish-recommended",
+            headers={
+                "X-Dataset-Id": dataset_id,
+                "X-Dataset-Version": "1",
+                "X-Semantic-Revision": "1",
+            },
+            json={"title": "Office Analytics", "items": payload["recommendations"][:2]},
+        )
+        self.assertEqual(pub_res.status_code, 200, pub_res.text)
+
+        # Rule 3: Deleting the dataset purges KPIs, charts, and dashboard widgets
+        del_res = dataset_service.delete(dataset_id)
+        self.assertTrue(del_res["success"])
+
+        # Check metadata store has 0 documents left for this dataset
+        remaining_docs = [
+            d for d in self.semantic_reg.store.list(f"default:dashboard:1:{dataset_id}:v1")
+        ]
+        self.assertEqual(len(remaining_docs), 0)
+
 

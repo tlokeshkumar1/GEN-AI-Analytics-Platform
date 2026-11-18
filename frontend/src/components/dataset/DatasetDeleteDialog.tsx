@@ -14,6 +14,8 @@ import {
   deleteDatasetRows,
   deleteDataset,
 } from '../../services/datasetService';
+import { invalidateDashboardCache } from '../../screens/ExecutiveDashboard';
+import { selectedContext, selectContext } from '../../services/executionContext';
 
 interface DatasetDeleteDialogProps {
   dataset: DatasetItem;
@@ -95,6 +97,11 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
           return;
         }
         const res = await deleteDataset(dataset.id);
+        if (selectedContext()?.datasetId === dataset.id) {
+          selectContext(null);
+        }
+        invalidateDashboardCache();
+        window.dispatchEvent(new CustomEvent('dashboard_updated'));
         onToast(res.message);
         onDatasetDeleted();
         onClose();
@@ -146,22 +153,20 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
             <button
               type="button"
               onClick={() => setDeleteMode('rows')}
-              className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
-                deleteMode === 'rows'
-                  ? 'bg-white text-slate-900 shadow-2xs font-semibold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
+              className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${deleteMode === 'rows'
+                ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                : 'text-slate-600 hover:text-slate-900'
+                }`}
             >
               Delete Selected Rows
             </button>
             <button
               type="button"
               onClick={() => setDeleteMode('full')}
-              className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
-                deleteMode === 'full'
-                  ? 'bg-rose-600 text-white shadow-2xs font-semibold'
-                  : 'text-rose-700 hover:text-rose-900'
-              }`}
+              className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${deleteMode === 'full'
+                ? 'bg-rose-600 text-white shadow-2xs font-semibold'
+                : 'text-rose-700 hover:text-rose-900'
+                }`}
             >
               Delete Entire Dataset
             </button>
@@ -192,9 +197,8 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
                     return (
                       <label
                         key={(r.__rowId ?? r.id)}
-                        className={`p-2.5 flex items-center gap-3 cursor-pointer hover:bg-white transition-colors ${
-                          isChecked ? 'bg-rose-50/50' : ''
-                        }`}
+                        className={`p-2.5 flex items-center gap-3 cursor-pointer hover:bg-white transition-colors ${isChecked ? 'bg-rose-50/50' : ''
+                          }`}
                       >
                         <input
                           type="checkbox"
@@ -285,8 +289,8 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
               {isDeleting
                 ? 'Purging from HANA & storage...'
                 : deleteMode === 'rows'
-                ? `Delete ${selectedRowIds.size} Row(s)`
-                : 'Confirm & Delete Entire Dataset'}
+                  ? `Delete ${selectedRowIds.size} Row(s)`
+                  : 'Confirm & Delete Entire Dataset'}
             </span>
           </button>
         </div>

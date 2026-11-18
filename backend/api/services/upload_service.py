@@ -87,8 +87,13 @@ class UploadService:
         # Step 1: Upload clean dataset version & create vector embeddings
         # Note: clean_content is already normalized by IngestionService.prepare() + Agent 1 into a clean
         # single-sheet table with row-1 headers, so raw sheet/header/transform options must not be re-applied.
-        sheet_name = transformation_plan.sheet if (transformation_plan and hasattr(transformation_plan, 'sheet')) else None
-        display_name = target_table_name or (f"{filename.rsplit('.', 1)[0]} - {sheet_name}" if sheet_name else filename.rsplit('.', 1)[0])
+        sheet_name = (
+            transformation_plan.parsing.sheet
+            if (transformation_plan and getattr(transformation_plan, 'parsing', None) and getattr(transformation_plan.parsing, 'sheet', None))
+            else getattr(transformation_plan, 'sheet', None)
+        )
+        base_title = filename.rsplit('.', 1)[0]
+        display_name = f"{base_title} - {sheet_name}" if sheet_name else (target_table_name or base_title)
 
         result = dataset_service.upload(
             clean_content,
@@ -133,7 +138,7 @@ class UploadService:
             raw_entry = dataset_service._entry(catalog, dataset_id)
             snapshot = dataset_service._snapshot(raw_entry, version)
             persisted_model = semantic_registry.propose(raw_entry, version, snapshot, overrides=semantic_model.model_dump())
-            if version == 1 and persisted_model.status != "approved" and current_identity.get() is not None:
+            if persisted_model.status != "approved":
                 persisted_model = semantic_registry.review(raw_entry, version, persisted_model.revision, "approved")
                 workflow_orchestrator.save(
                     raw_entry,
@@ -143,9 +148,19 @@ class UploadService:
                     {"semantic_revision": persisted_model.revision, "auto_approved": True},
                 )
             semantic_model = persisted_model
-            logger.info(f"[UploadService] Semantic model saved (status={semantic_model.status}) for {dataset_id} v{version}")
+            logger.info(f"[UploadService] Semantic model saved & directly approved (status={semantic_model.status}) for {dataset_id} v{version}")
+            try:
+                with dataset_service._writer():
+                    cat = dataset_service._catalog()
+                    rentry = dataset_service._entry(cat, dataset_id)
+                    for v in rentry.get("versions", []):
+                        if v.get("version") == version:
+                            v["semanticRevision"] = persisted_model.revision
+                    dataset_service._write_json(dataset_service.catalog_path, cat)
+            except Exception as ex_cat:
+                logger.debug(f"[UploadService] Could not persist semanticRevision to catalog: {ex_cat}")
         except Exception as exc:
-            logger.warning(f"[UploadService] Note: Could not auto-propose model to registry: {exc}")
+            logger.warning(f"[UploadService] Note: Could not direct-approve model to registry: {exc}")
 
         _emit(
             2,
@@ -240,6 +255,17 @@ class UploadService:
         ]
         if cloud_table_info and cloud_table_info.get("success"):
             msg_parts.append(f"Synced to HANA table '{cloud_table_info['table_name']}'.")
+
+        try:
+            with dataset_service._writer():
+                cat = dataset_service._catalog()
+                rentry = dataset_service._entry(cat, dataset_id)
+                rentry["preprocessingAudit"] = audit
+                rentry["domain"] = domain
+                rentry["cloudTable"] = cloud_table_info
+                dataset_service._write_json(dataset_service.catalog_path, cat)
+        except Exception as audit_save_exc:
+            logger.warning(f"Could not persist preprocessing audit to catalog: {audit_save_exc}")
 
         return {
             "filename": dataset_entry.get("currentFilename", filename),

@@ -51,8 +51,52 @@ class DashboardPublication(BaseModel):
     items: list[dict] = Field(max_length=50)
 
 
+def _resolve_semantic_rev(entry: dict, version_obj: dict | None = None) -> int:
+    """Safely resolve the active semantic revision for a dataset version.
+    Handles None or missing values in catalog and falls back to latest approved revision or 1."""
+    if version_obj is not None:
+        rev = version_obj.get("semanticRevision")
+        if rev is not None:
+            try:
+                return int(rev)
+            except (ValueError, TypeError):
+                pass
+    cur_v = entry.get("currentVersion", 1)
+    try:
+        models = semantic_registry.list(entry, cur_v)
+        approved = [m["revision"] for m in models if m.get("status") == "approved"]
+        if approved:
+            return max(approved)
+        if models:
+            return max(m["revision"] for m in models)
+    except Exception:
+        pass
+    return 1
+
+
 @router.get("/api/insights/dashboard")
-def get_dashboard_publication():
+def get_dashboard_publication(all: bool = False):
+    if all:
+        catalog = dataset_service._catalog()
+        all_published_items = []
+        for entry in catalog.get("datasets", {}).values():
+            try:
+                require_dataset_access(entry)
+            except HTTPException:
+                continue
+            cur_v = entry.get("currentVersion", 1)
+            v_obj = next((v for v in entry.get("versions", []) if v.get("version") == cur_v), {})
+            s_rev = _resolve_semantic_rev(entry, v_obj)
+            ns = semantic_registry.namespace(entry, cur_v, f"dashboard:{s_rev}")
+            pub = semantic_registry.store.get(ns, "published")
+            if pub and "items" in pub.get("value", {}):
+                all_published_items.extend(pub["value"]["items"])
+        return {
+            "title": "Executive Analytics Dashboard",
+            "items": all_published_items,
+            "status": "published" if all_published_items else "unpublished"
+        }
+
     value = selected()
     namespace = semantic_registry.namespace(value.entry, value.context.version, f"dashboard:{value.context.semantic_revision}")
     publication = semantic_registry.store.get(namespace, "published")
@@ -67,22 +111,62 @@ def get_dashboard_publication():
 
 @router.post("/api/insights/dashboard")
 def publish_dashboard(publication: DashboardPublication):
-    value = selected()
-    require_dataset_access(value.entry)
-    items = semantic_registry.items(value.entry, value.context.version, value.context.semantic_revision)
+    catalog = dataset_service._catalog()
+    item_map = {}
+    for entry in catalog.get("datasets", {}).values():
+        try:
+            require_dataset_access(entry)
+        except HTTPException:
+            continue
+        cur_v = entry.get("currentVersion", 1)
+        v_obj = next((v for v in entry.get("versions", []) if v.get("version") == cur_v), {})
+        s_rev = _resolve_semantic_rev(entry, v_obj)
+        try:
+            for it in semantic_registry.items(entry, cur_v, s_rev):
+                item_map[(it.id, it.revision)] = (entry, cur_v, s_rev, it)
+        except Exception:
+            continue
+
+    grouped = {}
     for reference in publication.items:
-        item = next((i for i in items if i.id == reference.get("id") and i.revision == reference.get("revision")), None)
-        if item is None or item.status != "approved":
-            raise HTTPException(409, "Only approved definition revisions may be published.")
-    namespace = semantic_registry.namespace(value.entry, value.context.version, f"dashboard:{value.context.semantic_revision}")
-    previous = semantic_registry.store.get(namespace, "published")
-    result = semantic_registry.store.put(namespace, "published", publication.model_dump(), previous["revision"] if previous else 0)
+        key = (reference.get("id"), reference.get("revision"))
+        if key not in item_map:
+            # Fallback to selected() if item was newly added
+            val = current_selection.get()
+            if val is not None:
+                grouped.setdefault(val.entry["id"], {
+                    "entry": val.entry,
+                    "version": val.context.version,
+                    "semantic_revision": val.context.semantic_revision,
+                    "items": []
+                })["items"].append(reference)
+                continue
+            raise HTTPException(404, f"Definition {key[0]} not found.")
+        entry, v, s_rev, item = item_map[key]
+        if item.status != "approved":
+            raise HTTPException(409, f"Only approved definition revisions may be published: '{item.title}' is currently {item.status}.")
+        ds_id = entry["id"]
+        if ds_id not in grouped:
+            grouped[ds_id] = {"entry": entry, "version": v, "semantic_revision": s_rev, "items": []}
+        grouped[ds_id]["items"].append(reference)
+
+    last_res = None
+    for ds_info in grouped.values():
+        ns = semantic_registry.namespace(ds_info["entry"], ds_info["version"], f"dashboard:{ds_info['semantic_revision']}")
+        prev = semantic_registry.store.get(ns, "published")
+        last_res = semantic_registry.store.put(
+            ns,
+            "published",
+            {"title": publication.title, "items": ds_info["items"]},
+            prev["revision"] if prev else 0
+        )
+
     try:
         from api.routes.dashboard import clear_dashboard_cache
         clear_dashboard_cache()
     except Exception:
         pass
-    return result
+    return last_res or {"status": "success"}
 
 
 @router.post("/api/upload/discover")
@@ -132,6 +216,17 @@ def review(dataset_id: str, version: int, revision: int, body: Review):
     result = semantic_registry.review(entry, version, revision, body.decision)
     workflow_orchestrator.save(entry, version, "semantic_review", "completed" if body.decision == "approved" else "awaiting_review",
                                {"semantic_revision": revision, "semantic_decision": body.decision})
+    if body.decision == "approved":
+        try:
+            with dataset_service._writer():
+                cat = dataset_service._catalog()
+                rentry = dataset_service._entry(cat, dataset_id)
+                for v in rentry.get("versions", []):
+                    if v.get("version") == version:
+                        v["semanticRevision"] = revision
+                dataset_service._write_json(dataset_service.catalog_path, cat)
+        except Exception:
+            pass
     return result
 
 
@@ -167,9 +262,76 @@ def execute(plan: QueryPlan):
 
 
 @router.get("/api/insights/recommendations")
-def recommendations():
+def recommendations(all: bool = False, dataset_id: str | None = None):
+    if all:
+        catalog = dataset_service._catalog()
+        all_items = []
+        for entry in catalog.get("datasets", {}).values():
+            try:
+                require_dataset_access(entry)
+            except HTTPException:
+                continue
+            cur_version = entry.get("currentVersion", 1)
+            version_obj = next((v for v in entry.get("versions", []) if v.get("version") == cur_version), entry.get("versions", [{}])[-1] if entry.get("versions") else {})
+            semantic_rev = _resolve_semantic_rev(entry, version_obj)
+            source_file = entry.get("sourceFilename") or entry.get("source_filename") or entry.get("sourceFile") or version_obj.get("sourceFilename") or entry.get("name")
+            display_name = entry.get("displayName") or entry.get("display_name") or entry.get("name")
+            table_name = entry.get("tableName") or entry.get("table_name")
+
+            try:
+                items = semantic_registry.items(entry, cur_version, semantic_rev)
+                for it in items:
+                    it_dict = it.model_dump() if hasattr(it, "model_dump") else (it.dict() if hasattr(it, "dict") else dict(it))
+                    it_dict["dataset_id"] = entry["id"]
+                    it_dict["dataset_name"] = display_name
+                    it_dict["source_file"] = source_file
+                    it_dict["table_name"] = table_name
+                    it_dict["version"] = cur_version
+                    it_dict["semantic_revision"] = semantic_rev
+                    all_items.append(it_dict)
+            except Exception:
+                continue
+        return all_items
+
+    if dataset_id:
+        catalog = dataset_service._catalog()
+        entry = dataset_service._entry(catalog, dataset_id)
+        require_dataset_access(entry)
+        cur_version = entry.get("currentVersion", 1)
+        version_obj = next((v for v in entry.get("versions", []) if v.get("version") == cur_version), entry.get("versions", [{}])[-1] if entry.get("versions") else {})
+        semantic_rev = _resolve_semantic_rev(entry, version_obj)
+        source_file = entry.get("sourceFilename") or entry.get("source_filename") or entry.get("sourceFile") or version_obj.get("sourceFilename") or entry.get("name")
+        display_name = entry.get("displayName") or entry.get("display_name") or entry.get("name")
+        table_name = entry.get("tableName") or entry.get("table_name")
+        items = semantic_registry.items(entry, cur_version, semantic_rev)
+        result_items = []
+        for it in items:
+            it_dict = it.model_dump() if hasattr(it, "model_dump") else (it.dict() if hasattr(it, "dict") else dict(it))
+            it_dict["dataset_id"] = entry["id"]
+            it_dict["dataset_name"] = display_name
+            it_dict["source_file"] = source_file
+            it_dict["table_name"] = table_name
+            it_dict["version"] = cur_version
+            it_dict["semantic_revision"] = semantic_rev
+            result_items.append(it_dict)
+        return result_items
+
     value = selected()
-    return semantic_registry.items(value.entry, value.context.version, value.context.semantic_revision)
+    items = semantic_registry.items(value.entry, value.context.version, value.context.semantic_revision)
+    source_file = value.entry.get("sourceFilename") or value.entry.get("source_filename") or value.entry.get("sourceFile") or value.entry.get("name")
+    display_name = value.entry.get("displayName") or value.entry.get("display_name") or value.entry.get("name")
+    table_name = value.entry.get("tableName") or value.entry.get("table_name")
+    result_items = []
+    for it in items:
+        it_dict = it.model_dump() if hasattr(it, "model_dump") else (it.dict() if hasattr(it, "dict") else dict(it))
+        it_dict["dataset_id"] = value.entry.get("id", value.context.dataset_id)
+        it_dict["dataset_name"] = display_name
+        it_dict["source_file"] = source_file
+        it_dict["table_name"] = table_name
+        it_dict["version"] = value.context.version
+        it_dict["semantic_revision"] = value.context.semantic_revision
+        result_items.append(it_dict)
+    return result_items
 
 
 @router.post("/api/insights/recommendations")
@@ -197,19 +359,47 @@ def revise_item(item: AnalyticsItem):
 def review_item(item_id: str, revision: int, body: Review):
     value = selected()
     require_dataset_access(value.entry)
-    items = semantic_registry.items(value.entry, value.context.version, value.context.semantic_revision)
+    target_entry = value.entry
+    target_version = value.context.version
+    target_sem_rev = value.context.semantic_revision
+
+    items = semantic_registry.items(target_entry, target_version, target_sem_rev)
     item = next((i for i in items if i.id == item_id and i.revision == revision), None)
+    if item is None:
+        # Search other datasets in catalog if item belongs to a different uploaded file
+        catalog = dataset_service._catalog()
+        for e in catalog.get("datasets", {}).values():
+            if e.get("id") == value.entry.get("id"):
+                continue
+            cur_v = e.get("currentVersion", 1)
+            v_obj = next((v for v in e.get("versions", []) if v.get("version") == cur_v), {})
+            s_rev = _resolve_semantic_rev(e, v_obj)
+            try:
+                candidate_items = semantic_registry.items(e, cur_v, s_rev)
+                found = next((i for i in candidate_items if i.id == item_id and i.revision == revision), None)
+                if found is not None:
+                    require_dataset_access(e)
+                    item = found
+                    target_entry = e
+                    target_version = cur_v
+                    target_sem_rev = s_rev
+                    break
+            except Exception:
+                continue
+
     if item is None:
         raise HTTPException(404, "Definition not found.")
     if body.decision == "approved":
         result = analytics_engine.execute(item.query_plan.model_dump(exclude_none=True, by_alias=True))
         if not result.success:
             raise HTTPException(422, result.error)
-    reviewed = semantic_registry.review_item(value.entry, value.context.version, value.context.semantic_revision,
+    reviewed = semantic_registry.review_item(target_entry, target_version, target_sem_rev,
                                              item_id, revision, body.decision)
-    remaining = any(item.status == "proposed" for item in semantic_registry.items(value.entry, value.context.version, value.context.semantic_revision))
-    workflow_orchestrator.save(value.entry, value.context.version, "analytics_review", "awaiting_review" if remaining else "completed",
+    remaining = any(item.status == "proposed" for item in semantic_registry.items(target_entry, target_version, target_sem_rev))
+    workflow_orchestrator.save(target_entry, target_version, "analytics_review", "awaiting_review" if remaining else "completed",
                                {"last_reviewed_item": {"id": item_id, "revision": revision, "decision": body.decision}})
+    from api.routes.dashboard import clear_dashboard_cache
+    clear_dashboard_cache()
     return reviewed
 
 
@@ -219,6 +409,22 @@ def delete_item(item_id: str, revision: int):
     deleted = semantic_registry.delete_items(
         value.entry, value.context.version, value.context.semantic_revision, [(item_id, revision)]
     )
+    if deleted == 0:
+        catalog = dataset_service._catalog()
+        for e in catalog.get("datasets", {}).values():
+            if e.get("id") == value.entry.get("id"):
+                continue
+            cur_v = e.get("currentVersion", 1)
+            v_obj = next((v for v in e.get("versions", []) if v.get("version") == cur_v), {})
+            s_rev = _resolve_semantic_rev(e, v_obj)
+            try:
+                del_count = semantic_registry.delete_items(e, cur_v, s_rev, [(item_id, revision)])
+                if del_count > 0:
+                    deleted = del_count
+                    break
+            except Exception:
+                continue
+
     if deleted == 0:
         raise HTTPException(404, "Definition not found.")
     from api.routes.dashboard import clear_dashboard_cache
@@ -233,6 +439,19 @@ def delete_items_bulk(body: DeleteDefinitionsRequest):
     deleted = semantic_registry.delete_items(
         value.entry, value.context.version, value.context.semantic_revision, targets
     )
+    if deleted < len(targets):
+        catalog = dataset_service._catalog()
+        for e in catalog.get("datasets", {}).values():
+            if e.get("id") == value.entry.get("id"):
+                continue
+            cur_v = e.get("currentVersion", 1)
+            v_obj = next((v for v in e.get("versions", []) if v.get("version") == cur_v), {})
+            s_rev = _resolve_semantic_rev(e, v_obj)
+            try:
+                extra_del = semantic_registry.delete_items(e, cur_v, s_rev, targets)
+                deleted += extra_del
+            except Exception:
+                continue
     if deleted > 0:
         from api.routes.dashboard import clear_dashboard_cache
         clear_dashboard_cache()

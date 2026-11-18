@@ -66,15 +66,18 @@ ALREADY EXISTING KPIs & CHARTS (STRICTLY DO NOT REPEAT OR DUPLICATE ANY OF THESE
 {existing_summary}
 
 REQUIREMENTS:
-1. 100% Data-Grounded: Use ONLY exact column names and allowed aggregations from COLUMN PROFILES. Inspect the FIRST 5 SAMPLE ROWS to understand what actually matters in this domain (avoid constant columns with nunique <= 1, mostly-null columns, or summing raw IDs/codes).
+1. 100% Data-Grounded: Use ONLY exact column names and allowed aggregations from COLUMN PROFILES. Inspect the FIRST 5 SAMPLE ROWS to understand what actually matters in this domain (avoid constant columns with nunique <= 1, mostly-null columns, or summing raw IDs/codes). For binary/sparse flag columns (values in 0/1 or yes/no with min=0, max=1), NEVER propose raw SUM or AVG as scalar KPIs (e.g. avoid 'Average Open Issues: 0.04' or 'Total Open Issues: 1') — instead highlight overall project/entity volumes, completion rates, or high-level status distributions.
 2. Strictly Different From Existing: Every recommendation you output MUST explore a DIFFERENT metric, aggregation (e.g. AVG, MIN, MAX, COUNT_DISTINCT, SUM), dimension, temporal axis, or multi-measure correlation than ALL items listed in ALREADY EXISTING KPIs & CHARTS. Never propose the same (measure, aggregation, dimension) under a different chart kind or title.
 3. Diverse & Meaningful Mix:
-   CRITICAL: You MUST produce a DIVERSE mix of chart kinds. Do NOT repeat the same chart kind more than twice. Include at least 4 DIFFERENT chart kinds from: kpi, bar, line, area, donut, pie, horizontal_bar, scatter, gauge, funnel, radar.
+   CRITICAL: You MUST produce a DIVERSE mix of chart kinds across the platform visualizers. Do NOT repeat the same chart kind more than twice. Include at least 4 DIFFERENT chart kinds from all supported types: kpi, bar, horizontal_bar, line, area, donut, pie, radar, funnel, gauge, scatter.
    - "kpi": scalar executive indicator (set "dimension": null, "time_grouping": null). Prefer business-relevant totals, averages/rates, or unique entity counts not yet covered.
+   - "gauge": target attainment or completion rate for percentages/fractions (set "aggregation": "AVG", "dimension": null).
    - "line" or "area": temporal progression over a time/date field (use "time_grouping": {{"field": "<date_col>", "period": "month"|"quarter"|"year"}} ONLY when parseable_date=true and nunique > 12; otherwise use "dimension": "<time_col>").
    - "bar": categorical comparison across a readable dimension (3 to 15 categories).
-   - "donut" or "pie": proportional composition across a low-cardinality dimension (2 to 6 categories).
    - "horizontal_bar": Top-N ranking across a medium/high-cardinality dimension (include "limit": 10 and "sort" DESC).
+   - "donut" or "pie": proportional composition across a low-cardinality dimension (2 to 6 categories).
+   - "radar": multi-axis performance or distribution profile across a dimension (3 to 9 categories).
+   - "funnel": sequential progression through lifecycle stages, status, phases, or priority levels.
    - "scatter": correlation between 2 distinct numeric measures grouped by a dimension (use "measures": [{{"field": "<m1>", "aggregation": "<agg1>"}}, {{"field": "<m2>", "aggregation": "<agg2>"}}], "dimension": "<dim>", and omit "metric"/"aggregation").
 4. Output ONLY a valid JSON object (no <think> blocks, no prose outside JSON):
 {{
@@ -381,7 +384,7 @@ class ChartRecommenderAgent:
 
         # 2. When LLM is offline/unavailable or produced no net-new valid items,
         #    derive non-duplicate recommendations dynamically from observed distributions.
-        if len(recommendations) < max_items:
+        if (not llm_available or not recommendations) and len(recommendations) < max_items:
             stat_candidates = self._generate_dynamic_statistical_candidates(df, model, profiles)
             _add_with_diversity(stat_candidates)
 
@@ -453,6 +456,11 @@ class ChartRecommenderAgent:
                         or bool(token_set & {"percent", "percentage", "pct", "ratio", "rate", "margin", "discount", "score", "rating", "avg", "mean"})
                         or field.default_aggregation == "AVG"
                     )
+                    is_binary_flag = bool(
+                        (nunique <= 2 and min_val >= 0 and max_val <= 1)
+                        or (nunique <= 3 and min_val == 0.0 and max_val == 1.0)
+                    )
+                    is_sparse_flag = bool(nunique <= 3 and max_val <= 2 and mean_val < 0.2)
                     preferred_agg = field.default_aggregation
                     if not preferred_agg:
                         if is_rate and "AVG" in field.aggregations:
@@ -472,6 +480,8 @@ class ChartRecommenderAgent:
                             "cv": round(cv, 3),
                             "looks_like_code": looks_like_code,
                             "is_rate": is_rate,
+                            "is_binary_flag": is_binary_flag,
+                            "is_sparse_flag": is_sparse_flag,
                             "preferred_agg": preferred_agg,
                             "useful": profile["useful"] and not looks_like_code,
                         }
@@ -635,11 +645,14 @@ class ChartRecommenderAgent:
             for f in model.fields
             if f.role == "measure" and profiles.get(f.name, {}).get("useful", False)
         ]
+        # Prioritize rich continuous business measures over sparse binary flags
         measures.sort(
             key=lambda f: (
+                0 if profiles[f.name].get("is_binary_flag") or profiles[f.name].get("is_sparse_flag") else 1,
                 1 if f.default_aggregation else 0,
+                min(profiles[f.name].get("nunique", 0), 50),
                 1 - profiles[f.name].get("null_ratio", 1.0),
-                min(profiles[f.name].get("cv", 0.0), 5.0),
+                min(profiles[f.name].get("cv", 0.0), 3.0),
             ),
             reverse=True,
         )
@@ -663,6 +676,8 @@ class ChartRecommenderAgent:
         # Measure KPIs (primary preferred aggregation, then AVG for additive measures)
         for m in measures[:3]:
             prof = profiles[m.name]
+            if prof.get("is_binary_flag") or prof.get("is_sparse_flag"):
+                continue  # Skip trivial binary 0/1 flags for scalar KPI cards
             agg = prof.get("preferred_agg") or "SUM"
             candidates.append(
                 {
@@ -681,7 +696,7 @@ class ChartRecommenderAgent:
                         "title": self._kpi_title(m, "AVG"),
                         "kind": "kpi",
                         "explanation": f"Measures average {m.semantic_name} per {model.grain}.",
-                        "selected_by_default": False,
+                        "selected_by_default": True,
                         "query_plan": {"intent": "analytical", "metric": m.name, "aggregation": "AVG", "filters": []},
                     }
                 )
@@ -696,6 +711,24 @@ class ChartRecommenderAgent:
                         "query_plan": {"intent": "analytical", "metric": m.name, "aggregation": "AVG", "filters": []},
                     }
                 )
+
+        # Always provide a baseline Total Volume KPI candidate
+        vol_metric = identifiers[0].name if identifiers else (measures[0].name if measures else (model.fields[0].name if model.fields else "*"))
+        candidates.append(
+            {
+                "id": "rec_kpi_total_volume",
+                "title": f"Total {model.domain or 'Records'}",
+                "kind": "kpi",
+                "explanation": f"Total record volume in {model.domain}.",
+                "selected_by_default": True,
+                "query_plan": {
+                    "intent": "analytical",
+                    "metric": vol_metric,
+                    "aggregation": "COUNT",
+                    "filters": [],
+                },
+            }
+        )
 
         if identifiers:
             ranked_ids = sorted(
@@ -927,7 +960,7 @@ class ChartRecommenderAgent:
                                 "title": f"Cumulative {m_label} across {d.semantic_name}",
                                 "kind": "area",
                                 "explanation": f"Area distribution of {m_label} across {d.semantic_name}.",
-                                "selected_by_default": False,
+                                "selected_by_default": True,
                                 "query_plan": {
                                     "intent": "analytical",
                                     "metric": m_name,
@@ -952,7 +985,7 @@ class ChartRecommenderAgent:
                     "title": f"{m1.semantic_name} vs {m2.semantic_name} by {dim.semantic_name}",
                     "kind": "scatter",
                     "explanation": f"Relationship between {m1.semantic_name} and {m2.semantic_name} across {dim.semantic_name}.",
-                    "selected_by_default": False,
+                    "selected_by_default": True,
                     "query_plan": {
                         "intent": "analytical",
                         "measures": [
@@ -1040,7 +1073,7 @@ class ChartRecommenderAgent:
                 "query_plan": normalized_plan,
                 "dependencies": extract_query_dependencies(model, plan),
                 "explanation": str(candidate.get("explanation") or f"Analytical view of {title}."),
-                "selected_by_default": bool(candidate.get("selected_by_default", False)),
+                "selected_by_default": bool(candidate.get("selected_by_default", True)),
                 "status": "proposed",
             }
 

@@ -8,9 +8,11 @@ import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { CommandPalette } from './components/CommandPalette';
+import { AgentActivityModal } from './components/AgentActivityModal';
 import type { UserContext } from './screens/EnterpriseSignIn';
 import { clearLocalIdentity, getTokenExpiry, refreshAuthSession, sapRouterRoute, SIGNED_OUT_KEY } from './services/authNavigation';
 import { selectedContext, ensureDefaultContext } from './services/executionContext';
+import api from './services/api';
 
 const loadExecutiveDashboard = () => import('./screens/ExecutiveDashboard').then(m => ({ default: m.ExecutiveDashboard }));
 const loadGraphStudio = () => import('./screens/GraphStudio').then(m => ({ default: m.GraphStudio }));
@@ -282,7 +284,23 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    void fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => { });
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+    const userEmail = currentUser?.email;
+    const userId = currentUser?.user_id;
+
+    // End active project session on backend
+    void api.post('/auth/logout', { user_id: userId, email: userEmail }).catch(() => {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ user_id: userId, email: userEmail }),
+        credentials: 'same-origin',
+      }).catch(() => { });
+    });
+
     clearLocalIdentity(true);
     setIsAuthenticated(false);
     setCurrentUser(null);
@@ -523,6 +541,12 @@ export default function App() {
         onClose={() => setCommandPaletteOpen(false)}
         onNavigate={handleNavigate}
         onSelectQuery={handleSelectQueryFromPalette}
+      />
+
+      {/* Global Autonomous 3-Agent Activity Cockpit */}
+      <AgentActivityModal
+        onNavigateToDashboard={() => handleNavigate('executive-dashboard')}
+        onNavigateToBuildKpi={() => handleNavigate('build-your-kpi-graph-studio')}
       />
     </div>
   );

@@ -50,6 +50,11 @@ export interface AnalyticsDefinition {
   status: 'proposed' | 'approved' | 'rejected';
   reviewer?: string;
   reviewed_at?: string;
+  dataset_id?: string;
+  dataset_name?: string;
+  source_file?: string;
+  table_name?: string;
+  version?: number;
 }
 
 export interface ExecutionResult {
@@ -65,17 +70,40 @@ export interface ExecutionResult {
   execution_backend: string;
 }
 
-export const executePlan = async (plan: Record<string, unknown>) => (await api.post<ExecutionResult>('/insights/execute', plan)).data;
-export const getRecommendations = async () => (await api.get<AnalyticsDefinition[]>('/insights/recommendations')).data;
+export const executePlan = async (plan: Record<string, unknown>, contextHeadersOverride?: Record<string, string>) =>
+  (await api.post<ExecutionResult>('/insights/execute', plan, { headers: contextHeadersOverride })).data;
+
+export const getRecommendations = async (all = false, datasetId?: string) => {
+  const params = new URLSearchParams();
+  if (all) params.set('all', 'true');
+  if (datasetId) params.set('dataset_id', datasetId);
+  const query = params.toString();
+  return (await api.get<AnalyticsDefinition[]>(query ? `/insights/recommendations?${query}` : '/insights/recommendations')).data;
+};
+
 export const proposeRecommendations = async (fast = false) => {
   const url = fast ? '/insights/recommendations?fast=true' : '/insights/recommendations';
   return (await api.post<{ items: AnalyticsDefinition[] }>(url)).data.items;
 };
+
 export const saveDefinition = async (item: AnalyticsDefinition) => (await api.post<AnalyticsDefinition>('/insights/definitions', item)).data;
-export const reviewDefinition = async (item: AnalyticsDefinition, decision: 'approved' | 'rejected') =>
-  (await api.post<AnalyticsDefinition>(`/insights/definitions/${item.id}/${item.revision}/review`, { decision })).data;
-export const deleteDefinition = async (item: Pick<AnalyticsDefinition, 'id' | 'revision'>) =>
-  (await api.delete<{ deleted: number }>(`/insights/definitions/${item.id}/${item.revision}`)).data;
+
+export const reviewDefinition = async (item: AnalyticsDefinition, decision: 'approved' | 'rejected') => {
+  const headers: Record<string, string> = {};
+  if (item.dataset_id) headers['X-Dataset-Id'] = item.dataset_id;
+  if (item.version) headers['X-Dataset-Version'] = String(item.version);
+  if (item.semantic_revision) headers['X-Semantic-Revision'] = String(item.semantic_revision);
+  return (await api.post<AnalyticsDefinition>(`/insights/definitions/${item.id}/${item.revision}/review`, { decision }, { headers })).data;
+};
+
+export const deleteDefinition = async (item: Pick<AnalyticsDefinition, 'id' | 'revision'> & { dataset_id?: string; version?: number; semantic_revision?: number }) => {
+  const headers: Record<string, string> = {};
+  if (item.dataset_id) headers['X-Dataset-Id'] = item.dataset_id;
+  if (item.version) headers['X-Dataset-Version'] = String(item.version);
+  if (item.semantic_revision) headers['X-Semantic-Revision'] = String(item.semantic_revision);
+  return (await api.delete<{ deleted: number }>(`/insights/definitions/${item.id}/${item.revision}`, { headers })).data;
+};
+
 export const deleteDefinitions = async (items: DashboardPublicationItem[]) =>
   (await api.post<{ deleted: number }>('/insights/definitions/delete', { items })).data;
 
@@ -90,8 +118,9 @@ export interface DashboardPublicationResponse {
   status: string;
 }
 
-export const getDashboardPublication = async (): Promise<DashboardPublicationResponse> => {
-  return (await api.get<DashboardPublicationResponse>('/insights/dashboard')).data;
+export const getDashboardPublication = async (all = false): Promise<DashboardPublicationResponse> => {
+  const url = all ? '/insights/dashboard?all=true' : '/insights/dashboard';
+  return (await api.get<DashboardPublicationResponse>(url)).data;
 };
 
 export interface PythonGraphAgentResponse {

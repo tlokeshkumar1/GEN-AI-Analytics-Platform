@@ -20,7 +20,7 @@ from api.utils.logger import get_logger
 logger = get_logger("agent.domain_classifier")
 
 OPEN_DOMAIN_SYSTEM_PROMPT = """You are an expert enterprise ontologist and open-domain data scientist.
-Analyze the dataset title, column profiles, and the FIRST 5 ROWS of an unknown dataset.
+Analyze the sanitized dataset title, column profiles, and the FIRST 5 ROWS of an unknown dataset.
 Do not assume any pre-determined domain or business category. Infer the true domain directly from the data.
 
 DATASET NAME / SOURCE: {dataset_name}
@@ -31,9 +31,14 @@ COLUMNS:
 FIRST 5 SAMPLE ROWS:
 {sample_rows_json}
 
+CRITICAL DOMAIN NAMING INSTRUCTIONS:
+- Infer a clean, professional, 2-4 word executive business domain title (e.g. 'SAP Project Portfolio', 'Milestone Delivery Tracking', 'IT Service Operations', 'Financial Performance').
+- NEVER echo file-system noise, 'Copy of', 'Backup of', version numbers, trailing numbers, '_final', '_tracker', or sheet names.
+- Grain: describe what a single row represents in 2-5 words (e.g. 'Single project milestone', 'Individual employee expense').
+
 Return ONLY a valid JSON object (no markdown commentary, no thinking tags) with this exact structure:
 {{
-  "domain": "Specific domain or subject area inferred from the dataset name, column headers, and sample rows (never return 'Enterprise' or 'Unknown')",
+  "domain": "2-4 word executive domain title",
   "grain": "What a single row or record in this dataset represents",
   "column_annotations": {{
     "<exact_column_name>": {{
@@ -48,6 +53,49 @@ Return ONLY a valid JSON object (no markdown commentary, no thinking tags) with 
   }}
 }}
 """
+
+
+def _sanitize_source_title(name: Optional[str]) -> str:
+    """Strip filename noise, copy/backup prefixes, trailing digits, and version tokens."""
+    if not name:
+        return ""
+    text = str(name).rsplit(".", 1)[0]
+    # Replace underscores, dashes, dots with spaces
+    text = re.sub(r"[_\-\.]+", " ", text).strip()
+    # Strip leading noise: Copy (of), Backup (of), Export (of), Draft, etc.
+    text = re.sub(r"^(?:copy(?:\s*\(\d+\))?\s*(?:of)?|backup\s*(?:of)?|export\s*(?:of)?|draft\s*(?:of)?)\s*", "", text, flags=re.IGNORECASE).strip()
+    # Strip file artifact words like final, tracker, sheet, raw, version numbers, digits
+    text = re.sub(r"\b(?:final|draft|v\d+|rev\d+|\d+|tracker|export|data|raw|sample|clean|cleaned|processed|sheet\s*\d*)\b", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _sanitize_domain_name(domain: Optional[str]) -> str:
+    """Format an inferred domain into a crisp executive title without noise or file artifacts."""
+    if not domain:
+        return ""
+    text = str(domain).strip()
+    text = re.sub(r"^(?:copy(?:\s*\(\d+\))?\s*(?:of)?|backup\s*(?:of)?|export\s*(?:of)?|draft\s*(?:of)?)\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\b(?:final|draft|v\d+|rev\d+|\d+|tracker|export|data|raw|sample|clean|cleaned|processed|sheet\s*\d*)\b", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"[_\-\.]+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    words = text.split()
+    if not words:
+        return ""
+    # Deduplicate consecutive identical words
+    dedup_words = []
+    for w in words:
+        if not dedup_words or dedup_words[-1].lower() != w.lower():
+            dedup_words.append(w)
+    formatted = " ".join(
+        "SAP" if w.upper() == "SAP" else
+        "IT" if w.upper() == "IT" else
+        "EPM" if w.upper() == "EPM" else
+        "KPI" if w.upper() == "KPI" else
+        w.capitalize()
+        for w in dedup_words
+    )
+    return formatted
 
 
 def _split_identifier_tokens(name: str) -> List[str]:
@@ -181,7 +229,7 @@ class DomainClassifierAgent:
             col_profiles.append(f"- {col} (type: {dtype}, distinct: {nunique}, samples: {samples[:3]})")
         columns_summary = "\n".join(col_profiles)
 
-        # 3. Call Open-Domain Zero-Shot LLM Reasoning
+        # 3. Call Open-Domain Zero-Shot LLM Reasoning with sanitized title
         llm_result = self._query_open_domain_llm(columns_summary, sample_rows, dataset_name=dataset_name)
 
         domain = ""
@@ -189,7 +237,8 @@ class DomainClassifierAgent:
         annotations: Dict[str, Any] = {}
 
         if isinstance(llm_result, dict):
-            domain = str(llm_result.get("domain") or "").strip()
+            raw_domain = str(llm_result.get("domain") or "").strip()
+            domain = _sanitize_domain_name(raw_domain)
             grain = str(llm_result.get("grain") or "Single record").strip()
             raw_ann = llm_result.get("column_annotations")
             if isinstance(raw_ann, dict):
@@ -234,16 +283,18 @@ class DomainClassifierAgent:
         sample_rows: List[Dict[str, Any]],
         dataset_name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Query LLM for zero-shot open-domain reasoning using the first 5 rows."""
+        """Query LLM for zero-shot open-domain reasoning using the first 5 rows with 12s timeout guard."""
         try:
             sample_json = json.dumps(sample_rows[:5], indent=2, default=str)
+            clean_title = _sanitize_source_title(dataset_name)
+            source_label = f"{clean_title} ({dataset_name})" if dataset_name and clean_title != dataset_name else (clean_title or dataset_name or "Uploaded Dataset")
             prompt = OPEN_DOMAIN_SYSTEM_PROMPT.format(
-                dataset_name=dataset_name or "Uploaded Dataset",
+                dataset_name=source_label,
                 columns_summary=columns_summary,
                 sample_rows_json=sample_json,
             )
 
-            response = ai_core_service.generate_structured_completion(prompt, max_tokens=1800, temperature=0.1)
+            response = ai_core_service.generate_structured_completion(prompt, max_tokens=1800, temperature=0.1, timeout=12)
             if not response or not response.strip():
                 return None
 
@@ -384,23 +435,27 @@ class DomainClassifierAgent:
         )
 
     def _fallback_domain_name(self, columns: List[str], dataset_name: Optional[str] = None) -> str:
-        """Derive clean domain name from dataset name or column names if LLM is unavailable."""
+        """Derive clean, concise executive domain name from dataset name or column names if LLM is unavailable."""
         if dataset_name:
-            cleaned = str(dataset_name).rsplit(".", 1)[0]
-            cleaned = re.sub(r"[_\-]+", " ", cleaned).strip()
-            if cleaned and cleaned.lower() not in ("dataset", "data", "file", "upload", "uploaded dataset", "sheet1"):
-                return cleaned.title()
+            cleaned = _sanitize_source_title(dataset_name)
+            if cleaned:
+                formatted = _sanitize_domain_name(cleaned)
+                if formatted and formatted.lower() not in ("dataset", "data", "file", "upload", "uploaded dataset", "sheet"):
+                    words = formatted.split()
+                    if len(words) <= 2 and not any(k in formatted.lower() for k in ("management", "portfolio", "operations", "tracking", "analytics")):
+                        return f"{formatted} Operations"
+                    return formatted
         tokens = []
         for col in columns[:3]:
             words = _split_identifier_tokens(col)
             for w in words:
-                if w not in ("id", "key", "code", "date", "name", "num") and w not in tokens:
+                if w not in ("id", "key", "code", "date", "name", "num", "idx", "seq") and w not in tokens:
                     tokens.append(w)
                 if len(tokens) >= 2:
                     break
             if len(tokens) >= 2:
                 break
-        return f"{' '.join(t.title() for t in tokens)} Analytics" if tokens else "Open-Domain Analytics"
+        return f"{' '.join(t.title() for t in tokens)} Analytics" if tokens else "Enterprise Operations"
 
 
 domain_classifier_agent = DomainClassifierAgent()

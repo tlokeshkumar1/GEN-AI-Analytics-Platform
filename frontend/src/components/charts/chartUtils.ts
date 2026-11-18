@@ -104,7 +104,8 @@ export function formatTableCell(value: unknown, column: string): { display: stri
     return { display: str, tooltip: str };
   }
 
-  const isCurrency = /usd|revenue|margin|price|cost|sales|amount|val/i.test(column);
+  const isCurrency = /(^|_)(usd|revenue|margin|price|cost|sales|amount|spend|fee|arr|mrr)($|_)/i.test(column) ||
+    /(usd|revenue|margin|price|cost|sales|spend|fee)/i.test(column);
   const exactFormatted = isCurrency
     ? `$${num.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
     : num.toLocaleString();

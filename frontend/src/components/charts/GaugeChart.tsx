@@ -1,5 +1,5 @@
 import React from 'react';
-import { formatTableCell, formatNumber, humanizeColumnName } from './chartUtils';
+import { formatNumber, humanizeColumnName } from './chartUtils';
 
 interface GaugeChartProps {
   title: string;
@@ -25,11 +25,11 @@ export const GaugeChart: React.FC<GaugeChartProps> = ({
   const angle = Math.PI - pct * Math.PI;
   const endX = 180 + 100 * Math.cos(angle);
   const endY = 145 - 100 * Math.sin(angle);
-  const largeArc = pct > 0.5 ? 1 : 0;
+  // Semicircle gauge spans 0 to 180 degrees (Math.PI); any arc is <= 180 degrees, so large-arc-flag is always 0.
   const progressD = pct > 0
     ? (pct >= 0.999
         ? "M 80 145 A 100 100 0 0 1 280 145"
-        : `M 80 145 A 100 100 0 ${largeArc} 1 ${endX} ${endY}`)
+        : `M 80 145 A 100 100 0 0 1 ${endX.toFixed(2)} ${endY.toFixed(2)}`)
     : "";
 
   return (
@@ -65,14 +65,14 @@ export const GaugeChart: React.FC<GaugeChartProps> = ({
         )}
         {/* Value and dimension label */}
         <text x="180" y="128" textAnchor="middle" fontSize="28" fontWeight="800" fill="#0F172A">
-          {formatTableCell(currentVal, valueKey).display}
+          {formatNumber(currentVal, isCurrencyMetric)}
         </text>
         <text x="180" y="148" textAnchor="middle" fontSize="11" fontWeight="600" fill="#64748B">
           {rows[0] ? String(rows[0][labelKey] || humanizeColumnName(valueKey)) : humanizeColumnName(valueKey)}
         </text>
         {/* Min and Max markers */}
         <text x="80" y="168" textAnchor="middle" fontSize="9" fontWeight="600" fill="#94A3B8">
-          0
+          {formatNumber(0, isCurrencyMetric)}
         </text>
         <text x="280" y="168" textAnchor="middle" fontSize="9" fontWeight="600" fill="#94A3B8">
           {formatNumber(maxVal, isCurrencyMetric)}

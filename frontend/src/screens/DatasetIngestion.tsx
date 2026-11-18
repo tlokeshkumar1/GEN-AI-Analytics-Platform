@@ -3,7 +3,8 @@ import { selectContext, selectedContext } from '../services/executionContext';
 import { SemanticReview } from '../components/dataset/SemanticReview';
 import { DatasetGovernance } from '../components/dataset/DatasetGovernance';
 import { FileImportReview } from '../components/dataset/FileImportReview';
-import { AIAgentIngestionStepper, IngestionStageStatus } from '../components/AIAgentIngestionStepper';
+import { IngestionStageStatus } from '../components/AIAgentIngestionStepper';
+import { agentActivityStore } from '../services/agentActivityStore';
 import { getApiErrorMessage } from '../services/api';
 import { DatasetSelector } from '../components/dataset/DatasetSelector';
 import { DatasetActionPanel } from '../components/dataset/DatasetActionPanel';
@@ -35,23 +36,7 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
   const [isBusy, setIsBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [message, setMessage] = useState('Upload a dataset to get started, or select an existing dataset.');
-  const [ingestionStepper, setIngestionStepper] = useState<{
-    isOpen: boolean;
-    isProcessing: boolean;
-    filename: string;
-    result: UploadResponse | null;
-    partialResult: Partial<UploadResponse> | null;
-    stageStatuses: Record<number, IngestionStageStatus>;
-    error?: string | null;
-  }>({
-    isOpen: false,
-    isProcessing: false,
-    filename: '',
-    result: null,
-    partialResult: null,
-    stageStatuses: {},
-    error: null,
-  });
+  const currentActivityIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [restoreVersion, setRestoreVersion] = useState('');
@@ -976,65 +961,25 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
         </>
       )}
 
-      {/* AI Autonomous 3-Agent Ingestion Cockpit & Chart Recommender */}
-      <AIAgentIngestionStepper
-        isOpen={ingestionStepper.isOpen}
-        isProcessing={ingestionStepper.isProcessing}
-        filename={ingestionStepper.filename}
-        result={ingestionStepper.result}
-        partialResult={ingestionStepper.partialResult}
-        stageStatuses={ingestionStepper.stageStatuses}
-        error={ingestionStepper.error}
-        onClose={() => setIngestionStepper(prev => ({ ...prev, isOpen: false }))}
-        onNavigateToDashboard={() => onNavigate('executive-dashboard')}
-        onNavigateToBuildKpi={() => onNavigate('build-your-kpi-graph-studio')}
-      />
-
       {/* File Import Review Dialog */}
       {pendingFile && (
         <FileImportReview
           file={pendingFile}
           onCancel={() => setPendingFile(null)}
           onCommitStart={(filename) => {
-            setIngestionStepper({
-              isOpen: true,
-              isProcessing: true,
-              filename,
-              result: null,
-              partialResult: null,
-              stageStatuses: { 1: 'running', 2: 'queued', 3: 'queued', 4: 'queued' },
-              error: null,
-            });
+            const act = agentActivityStore.startIngestion(filename);
+            currentActivityIdRef.current = act.id;
+            agentActivityStore.openModal(act.id);
           }}
           onCommitProgress={(event: UploadStageEvent) => {
-            setIngestionStepper(prev => {
-              const nextStatuses: Record<number, IngestionStageStatus> = { ...prev.stageStatuses };
-              if (event.status === 'running') {
-                for (let s = 1; s < event.stage; s += 1) {
-                  if (nextStatuses[s] !== 'completed') nextStatuses[s] = 'completed';
-                }
-                nextStatuses[event.stage] = 'running';
-                for (let s = event.stage + 1; s <= 4; s += 1) {
-                  nextStatuses[s] = 'queued';
-                }
-              } else {
-                nextStatuses[event.stage] = event.status;
-              }
-              return {
-                ...prev,
-                stageStatuses: nextStatuses,
-                partialResult: event.data
-                  ? { ...(prev.partialResult || {}), ...event.data }
-                  : prev.partialResult,
-              };
-            });
+            if (currentActivityIdRef.current) {
+              agentActivityStore.updateProgress(currentActivityIdRef.current, event);
+            }
           }}
           onCommitError={(err) => {
-            setIngestionStepper(prev => ({
-              ...prev,
-              isProcessing: false,
-              error: err,
-            }));
+            if (currentActivityIdRef.current) {
+              agentActivityStore.failIngestion(currentActivityIdRef.current, err);
+            }
           }}
           onSaved={(result: UploadResponse) => {
             setPendingFile(null);
@@ -1046,15 +991,9 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
               void refresh();
             }
             setRefreshTrigger(n => n + 1);
-            setIngestionStepper({
-              isOpen: true,
-              isProcessing: false,
-              filename: result.filename,
-              result: result,
-              partialResult: result,
-              stageStatuses: { 1: 'completed', 2: 'completed', 3: 'completed', 4: 'completed' },
-              error: null,
-            });
+            if (currentActivityIdRef.current) {
+              agentActivityStore.completeIngestion(currentActivityIdRef.current, result);
+            }
           }}
         />
       )}

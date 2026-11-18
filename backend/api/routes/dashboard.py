@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
 
 from api.models.execution_context import current_selection
-from api.platform.semantic import semantic_registry
+from api.platform.semantic import semantic_registry, now
 from api.platform.contracts import AnalyticsItem
 from api.platform.agent_chart_recommender import chart_recommender_agent
 from api.services.analytics_engine import analytics_engine
@@ -80,7 +80,9 @@ def publish_recommended_charts(req: PublishRecommendedRequest):
             query_plan=query_plan,
             dependencies=deps,
             explanation=explanation,
-            status="approved"
+            status="approved",
+            reviewer="system",
+            reviewed_at=now(),
         )
         existing_item = semantic_registry.store.get(analytics_ns, f"{item.id}:1")
         semantic_registry.store.put(
@@ -114,6 +116,7 @@ def publish_recommended_charts(req: PublishRecommendedRequest):
     )
 
     clear_dashboard_cache()
+    semantic_registry._invalidate_cache()
     logger.info(f"Published {len(published_refs)} widgets to dashboard namespace: {dashboard_ns}")
 
     return {
@@ -129,13 +132,54 @@ def get_dashboard(refresh: bool = False):
     if refresh:
         clear_dashboard_cache()
 
-    selection = current_selection.get()
-    if selection is None:
-        raise HTTPException(409, "Select a dataset version.")
-
-    context = selection.context
     catalog = dataset_service._catalog()
     datasets_map = catalog.get("datasets", {})
+
+    # If no datasets exist in the catalog (e.g. all were deleted), return clean empty state
+    if not datasets_map:
+        clear_dashboard_cache()
+        return {
+            "title": "Executive Analytics Dashboard",
+            "widgets": [],
+            "status": "empty",
+            "message": "No datasets available. Upload a dataset to view analytics."
+        }
+
+    selection = current_selection.get()
+    if selection is None:
+        # Auto-bind to the active or first available dataset
+        active_ds = next((d for d in datasets_map.values() if d.get("isActive")), None) or next(iter(datasets_map.values()), None)
+        if active_ds:
+            from api.models.execution_context import DatasetSelection, ExecutionContext
+            ds_version = active_ds.get("currentVersion") or 1
+            try:
+                ds_snapshot = dataset_service._snapshot(active_ds, ds_version)
+                ds_models = semantic_registry.list(active_ds, ds_version, for_chat=True)
+                approved_models = [m for m in ds_models if m.get("status") == "approved"]
+                ds_sem_rev = max([m["revision"] for m in approved_models], default=None) or (
+                    max([m["revision"] for m in ds_models], default=1) if ds_models else 1
+                )
+                ctx = ExecutionContext(
+                    workspace_id=active_ds.get("workspaceId") or "default",
+                    dataset_id=active_ds["id"],
+                    version=ds_version,
+                    semantic_revision=ds_sem_rev,
+                    user_id="system"
+                )
+                selection = DatasetSelection(ctx, active_ds, ds_snapshot)
+            except Exception as auto_bind_exc:
+                logger.warning(f"Could not auto-bind default dataset selection: {auto_bind_exc}")
+
+    if selection is None:
+        clear_dashboard_cache()
+        return {
+            "title": "Executive Analytics Dashboard",
+            "widgets": [],
+            "status": "empty",
+            "message": "No active dataset selected."
+        }
+
+    context = selection.context
 
     # Collect published dashboards across all datasets in the workspace so uploading a new file
     # never removes KPIs and charts published from earlier datasets.

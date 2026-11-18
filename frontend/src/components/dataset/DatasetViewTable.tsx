@@ -15,6 +15,7 @@ import { DatasetItem, DatasetRow } from '../../types/dataset';
 import { getDatasetData } from '../../services/datasetService';
 import { getApiErrorMessage } from '../../services/api';
 import { DatasetStatusBadge } from './DatasetStatusBadge';
+import { agentActivityStore } from '../../services/agentActivityStore';
 
 interface DatasetViewTableProps {
   dataset: DatasetItem;
@@ -217,6 +218,24 @@ export const DatasetViewTable: React.FC<DatasetViewTableProps> = ({
                 <span>Update Semantic Model</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const act = await agentActivityStore.loadDatasetActivity(dataset.id, dataset.currentVersion);
+                  agentActivityStore.openModal(act.id);
+                } catch {
+                  const actId = agentActivityStore.ensureDatasetActivity(dataset);
+                  agentActivityStore.openModal(actId);
+                }
+              }}
+              className="rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-700 transition-all cursor-pointer shadow-2xs flex items-center gap-1.5"
+              title="View autonomous 3-agent ingestion activity & pipeline cockpit"
+            >
+              <span className="material-symbols-outlined text-[15px] text-indigo-600">smart_toy</span>
+              <span>View Agent Activity</span>
+            </button>
           </div>
         </div>
 

@@ -84,7 +84,22 @@ export async function deleteDatasetRows(datasetId: string, rowIds: string[]) {
 
 export async function deleteDataset(datasetId: string) {
   invalidateDatasetsCache();
-  return (await api.delete(`/datasets/${datasetId}`)).data;
+  const res = (await api.delete(`/datasets/${datasetId}`)).data;
+  try {
+    const { selectedContext, selectContext } = await import('./executionContext');
+    if (selectedContext()?.datasetId === datasetId) {
+      selectContext(null);
+    }
+  } catch {}
+  try {
+    const { invalidateDashboardCache } = await import('../screens/ExecutiveDashboard');
+    invalidateDashboardCache();
+  } catch {}
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('dashboard_updated'));
+    window.dispatchEvent(new Event('dataset-context-changed'));
+  }
+  return res;
 }
 
 export async function rollbackDataset(datasetId: string, version: number) {
@@ -158,4 +173,10 @@ export async function previewAppendFile(datasetId: string, file: File) {
   return (await api.post(`/datasets/${datasetId}/append/preview`, form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })).data;
+}
+
+export async function getDatasetAgentActivity(datasetId: string, version?: number) {
+  const params: Record<string, any> = {};
+  if (version) params.version = version;
+  return (await api.get(`/datasets/${datasetId}/agent-activity`, { params })).data;
 }

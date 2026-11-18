@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import api, { getApiErrorMessage } from '../services/api';
 import { selectedContext, ensureDefaultContext, selectContext } from '../services/executionContext';
 import { hasAdminRole } from '../services/authService';
@@ -117,6 +117,7 @@ export function GraphStudio({
   const [selected, setSelected] = useState<string[]>(cachedStudioState?.selectedKeys ?? []);
   const [publishedKeys, setPublishedKeys] = useState<string[]>(cachedStudioState?.publishedKeys ?? []);
   const [filterDashboard, setFilterDashboard] = useState<'all' | 'published' | 'not_published'>('all');
+  const [fileScopeFilter, setFileScopeFilter] = useState<string>('all');
   const [deleteSelected, setDeleteSelected] = useState<string[]>([]);
   const [deletingItems, setDeletingItems] = useState<Record<string, boolean>>({});
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
@@ -257,8 +258,8 @@ export function GraphStudio({
       const [dsList, models, recommendations, pubRes] = await Promise.all([
         getDatasets().catch(() => []),
         getSemanticModels(context.datasetId, context.version),
-        getRecommendations(),
-        getDashboardPublication().catch(() => ({ title: '', items: [], status: 'unpublished' })),
+        getRecommendations(true),
+        getDashboardPublication(true).catch(() => ({ title: '', items: [], status: 'unpublished' })),
       ]);
       allDatasets = dsList;
       preloadedModels = models;
@@ -280,7 +281,15 @@ export function GraphStudio({
       const activeDs = allDatasets.find(d => d.isActive) || allDatasets[0];
       dsId = activeDs.id;
     }
-    if (!dsId) throw new Error('No dataset available. Please upload a dataset first.');
+    if (!dsId) {
+      cachedStudioState = null;
+      setModel(null);
+      setItems([]);
+      setPublishedKeys([]);
+      setSelected([]);
+      setError('No dataset available. Please upload a dataset first.');
+      return;
+    }
 
     const targetDs = allDatasets.find(d => d.id === dsId) || allDatasets[0];
     const version = targetDs?.currentVersion || context?.version || 1;
@@ -309,8 +318,8 @@ export function GraphStudio({
     const [recommendations, pubRes] = preloadedRecs !== null
       ? [preloadedRecs, preloadedPub]
       : await Promise.all([
-        getRecommendations(),
-        getDashboardPublication().catch(() => ({ title: '', items: [], status: 'unpublished' })),
+        getRecommendations(true),
+        getDashboardPublication(true).catch(() => ({ title: '', items: [], status: 'unpublished' })),
       ]);
     const itemsList = Array.isArray(pubRes) ? pubRes : ((pubRes as any)?.items || []);
     const pubKeys = itemsList.map((p: any) => `${p.id}:${p.revision}`);
@@ -345,6 +354,15 @@ export function GraphStudio({
 
   useEffect(() => {
     void run(load);
+
+    const handleContextChanged = () => {
+      cachedStudioState = null;
+      void run(load);
+    };
+    window.addEventListener('dataset-context-changed', handleContextChanged);
+    return () => {
+      window.removeEventListener('dataset-context-changed', handleContextChanged);
+    };
   }, []);
 
   const togglePreview = async (item: AnalyticsDefinition) => {
@@ -359,7 +377,11 @@ export function GraphStudio({
     }
     setLoadingPreviews(previous => ({ ...previous, [key]: true }));
     try {
-      const result = await executePlan(item.query_plan);
+      const contextHeaders: Record<string, string> = {};
+      if (item.dataset_id) contextHeaders['X-Dataset-Id'] = item.dataset_id;
+      if (item.version) contextHeaders['X-Dataset-Version'] = String(item.version);
+      if (item.semantic_revision) contextHeaders['X-Semantic-Revision'] = String(item.semantic_revision);
+      const result = await executePlan(item.query_plan, Object.keys(contextHeaders).length ? contextHeaders : undefined);
       setPreviews(previous => ({ ...previous, [key]: result }));
     } catch (err) {
       setError(getApiErrorMessage(err, 'Failed to preview query execution.'));
@@ -494,7 +516,7 @@ export function GraphStudio({
         status: 'proposed',
       };
     await saveDefinition(item);
-    setItems(await getRecommendations());
+    setItems(await getRecommendations(true));
     setEdit(null);
     setTitle('');
     setMessage('Saved definition proposal. Click "Preview Live" below to verify calculations, then "Approve".');
@@ -630,31 +652,33 @@ export function GraphStudio({
           </div>
         </div>
 
-        <button
-          disabled={busy || !model}
-          onClick={() =>
-            void run(async () => {
-              const newlyProposed = await proposeRecommendations(true);
-              const allItems = await getRecommendations();
-              setItems(allItems);
-              if (Array.isArray(newlyProposed) && newlyProposed.length > 0) {
-                setMessage(
-                  `Added ${newlyProposed.length} new AI-recommended KPI/chart definition${newlyProposed.length === 1 ? '' : 's'}. Existing definitions were preserved.`
-                );
-              } else {
-                setMessage(
-                  'All distinct AI-recommended KPIs and charts for this dataset are already present. Existing definitions were preserved.'
-                );
-              }
-            }, 'propose')
-          }
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold text-xs shadow-2xs hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-        >
+        <div className="flex items-center gap-2">
+          <button
+            disabled={busy || !model}
+            onClick={() =>
+              void run(async () => {
+                const newlyProposed = await proposeRecommendations(true);
+                const allItems = await getRecommendations(true);
+                setItems(allItems);
+                if (Array.isArray(newlyProposed) && newlyProposed.length > 0) {
+                  setMessage(
+                    `Added ${newlyProposed.length} new AI-recommended KPI/chart definition${newlyProposed.length === 1 ? '' : 's'}. Existing definitions were preserved.`
+                  );
+                } else {
+                  setMessage(
+                    'All distinct AI-recommended KPIs and charts for this dataset are already present. Existing definitions were preserved.'
+                  );
+                }
+              }, 'propose')
+            }
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold text-xs shadow-2xs hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
           <span className={`material-symbols-outlined text-[16px] ${busyAction === 'propose' ? 'animate-spin' : ''}`}>
             {busyAction === 'propose' ? 'progress_activity' : 'auto_awesome'}
           </span>
           <span>{busyAction === 'propose' ? 'Proposing...' : 'Propose AI Recommendations'}</span>
         </button>
+        </div>
       </div>
 
       {/* Global Alerts */}
@@ -1449,10 +1473,30 @@ export function GraphStudio({
 
       {/* CONFIGURED DEFINITIONS & WIDGETS STREAM: Visible only in Visual KPI Builder tab */}
       {activeMode === 'visual' && (() => {
-        const publishedCount = items.filter(i => publishedKeys.includes(`${i.id}:${i.revision}`)).length;
-        const notPublishedCount = items.filter(i => !publishedKeys.includes(`${i.id}:${i.revision}`)).length;
-        const approvedCount = items.filter(i => i.status === 'approved').length;
-        const displayedItems = items.filter(item => {
+        // Collect all distinct files/datasets represented across items
+        const fileMap = new Map<string, { id: string; name: string; count: number }>();
+        items.forEach(it => {
+          const id = it.dataset_id || selectedDatasetId || 'default';
+          const name = it.source_file || it.dataset_name || datasets.find(d => d.id === id)?.name || 'Dataset';
+          const existing = fileMap.get(id);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            fileMap.set(id, { id, name, count: 1 });
+          }
+        });
+        const availableFiles = Array.from(fileMap.values());
+
+        const inScopeItems = items.filter(item => {
+          if (fileScopeFilter === 'all') return true;
+          const itemDsId = item.dataset_id || selectedDatasetId;
+          return itemDsId === fileScopeFilter;
+        });
+
+        const publishedCount = inScopeItems.filter(i => publishedKeys.includes(`${i.id}:${i.revision}`)).length;
+        const notPublishedCount = inScopeItems.filter(i => !publishedKeys.includes(`${i.id}:${i.revision}`)).length;
+        const approvedCount = inScopeItems.filter(i => i.status === 'approved').length;
+        const displayedItems = inScopeItems.filter(item => {
           const key = `${item.id}:${item.revision}`;
           if (filterDashboard === 'published') return publishedKeys.includes(key);
           if (filterDashboard === 'not_published') return !publishedKeys.includes(key);
@@ -1466,11 +1510,50 @@ export function GraphStudio({
           <>
             {/* CONFIGURED DEFINITIONS STREAM */}
             <section className="space-y-3 pt-2">
+              {/* Multi-File Scope Selector Bar */}
+              {availableFiles.length > 1 && (
+                <div className="w-full flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200 overflow-x-auto">
+                  <button
+                    type="button"
+                    onClick={() => setFileScopeFilter('all')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shrink-0 ${
+                      fileScopeFilter === 'all'
+                        ? 'bg-white text-blue-700 shadow-2xs border border-blue-200/60'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[15px]">folder_copy</span>
+                    <span>All Uploaded Files</span>
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono bg-blue-50 text-blue-700">
+                      {items.length}
+                    </span>
+                  </button>
+                  {availableFiles.map(file => (
+                    <button
+                      key={file.id}
+                      type="button"
+                      onClick={() => setFileScopeFilter(file.id)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shrink-0 ${
+                        fileScopeFilter === file.id
+                          ? 'bg-white text-blue-700 shadow-2xs border border-blue-200/60'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-[15px]">description</span>
+                      <span className="max-w-[200px] truncate">{file.name}</span>
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono bg-slate-200 text-slate-700">
+                        {file.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200/80">
                 <div>
                   <div className="flex items-center gap-2.5">
                     <h2 className="text-sm font-bold text-slate-900">
-                      Configured Definitions ({items.length})
+                      Configured Definitions ({inScopeItems.length})
                     </h2>
                     {publishedCount > 0 && (
                       <span className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs">
@@ -1488,7 +1571,7 @@ export function GraphStudio({
 
                 <div className="flex items-center gap-2 flex-wrap">
                   {/* Quick Filter Tabs */}
-                  {items.length > 0 && (
+                  {inScopeItems.length > 0 && (
                     <div className="inline-flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200 text-xs font-semibold">
                       <button
                         type="button"
@@ -1501,7 +1584,7 @@ export function GraphStudio({
                             : 'text-slate-600 hover:text-slate-900'
                           }`}
                       >
-                        All ({items.length})
+                        All ({inScopeItems.length})
                       </button>
                       <button
                         type="button"
@@ -1682,6 +1765,15 @@ export function GraphStudio({
                               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-wide shrink-0">
                                 {item.kind}
                               </span>
+                              {(item.source_file || item.dataset_name) && (
+                                <span
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 truncate max-w-[170px]"
+                                  title={`Source File: ${item.source_file || item.dataset_name}`}
+                                >
+                                  <span className="material-symbols-outlined text-[12px] text-indigo-600">description</span>
+                                  <span className="truncate">{item.source_file || item.dataset_name}</span>
+                                </span>
+                              )}
                             </div>
                           </div>
 

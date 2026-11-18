@@ -63,12 +63,10 @@ class PreprocessingAgent:
         df, col_null_fixes = self._remediate_nulls(df)
         nulls_cleaned_count += sum(col_null_fixes.values())
 
-        # Step 6: Coerce Potential Date Columns
+        # Step 6: Coerce Potential Date Columns (preserve genuine nulls without ffill/bfill fabrication)
         df = self._normalize_dates(df)
 
-        # Step 7: Deduplicate Potential Primary Key collision rows if any remain
-        df, pk_dups = self._deduplicate_candidate_keys(df)
-        total_duplicates_removed = exact_duplicates_removed + pk_dups
+        total_duplicates_removed = exact_duplicates_removed
 
         rows_after = len(df)
 
@@ -81,7 +79,7 @@ class PreprocessingAgent:
             "null_values_cleaned": nulls_cleaned_count,
             "null_fixes_by_column": col_null_fixes,
             "status": "success",
-            "message": f"Sanitized {rows_after} rows. Removed {total_duplicates_removed} duplicates and remediated {nulls_cleaned_count} null/missing cells."
+            "message": f"Sanitized {rows_after} rows. Removed {total_duplicates_removed} duplicate rows and sanitized {nulls_cleaned_count} cells."
         }
 
         logger.info(f"[PreprocessingAgent] Finished: {audit['message']}")
@@ -153,43 +151,36 @@ class PreprocessingAgent:
         return df, cleaned_cells
 
     def _remediate_nulls(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int]]:
-        """Remediate nulls dynamically based on column data type."""
+        """Remediate string/categorical nulls and empty whitespace while preserving true numeric distributions."""
         null_counts = {}
 
         for col in df.columns:
             null_count = int(df[col].isna().sum())
-            if null_count == 0:
-                continue
 
-            null_ratio = null_count / len(df) if len(df) > 0 else 0
-
-            # If column is numeric
+            # If column is numeric: preserve genuine NULLs/NaNs so SQL AVG/SUM/MIN/MAX calculations
+            # remain mathematically exact and are not distorted by blind zero/median imputation.
             if pd.api.types.is_numeric_dtype(df[col]):
-                if null_ratio <= 0.20:
-                    # Low missingness: fill with median (or 0 if all nan)
-                    median_val = df[col].median()
-                    fill_val = median_val if pd.notna(median_val) else 0
-                    df[col] = df[col].fillna(fill_val)
-                else:
-                    # High missingness: fill with 0 to preserve numeric operations
-                    df[col] = df[col].fillna(0)
-                null_counts[col] = null_count
+                if null_count > 0:
+                    null_counts[col] = null_count
 
-            # If column is categorical / string
+            # If column is categorical / string: normalize empty whitespace and nulls to "Unassigned"
             elif pd.api.types.is_string_dtype(df[col]) or df[col].dtype == object:
-                # Replace nulls and empty whitespace strings with "Unknown"
-                df[col] = df[col].apply(lambda v: "Unknown" if pd.isna(v) or str(v).strip() == "" else v)
-                null_counts[col] = null_count
+                empty_mask = df[col].isna() | df[col].astype(str).str.strip().isin(["", "nan", "NaN", "None", "null"])
+                cleaned_in_col = int(empty_mask.sum())
+                if cleaned_in_col > 0:
+                    df.loc[empty_mask, col] = "Unassigned"
+                    null_counts[col] = cleaned_in_col
 
             # If boolean
             elif pd.api.types.is_bool_dtype(df[col]):
-                df[col] = df[col].fillna(False)
-                null_counts[col] = null_count
+                if null_count > 0:
+                    df[col] = df[col].fillna(False)
+                    null_counts[col] = null_count
 
         return df, null_counts
 
     def _normalize_dates(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Attempt to convert string columns that look like dates to datetime ISO strings."""
+        """Attempt to convert string columns that look like dates to datetime ISO strings without inventing fake dates."""
         for col in df.columns:
             if df[col].dtype == object or pd.api.types.is_string_dtype(df[col]):
                 col_lower = col.lower()
@@ -204,29 +195,13 @@ class PreprocessingAgent:
                         if parsed.notna().mean() >= 0.8:
                             # Safely convert entire column to string ISO format
                             full_parsed = pd.to_datetime(df[col], errors='coerce')
-                            # If conversion was mostly successful, replace with ISO date strings
+                            # If conversion was mostly successful, replace non-null with ISO date strings
                             if full_parsed.notna().mean() >= 0.7:
+                                # Preserve genuine missing values without fabricating fake dates via ffill/bfill
                                 df[col] = full_parsed.dt.strftime('%Y-%m-%d')
-                                # Fill unparseable dates with mode or forward fill
-                                df[col] = df[col].ffill().bfill()
                     except Exception:
                         pass
         return df
-
-    def _deduplicate_candidate_keys(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-        """Detect primary key candidates and remove duplicate collision rows."""
-        dups_removed = 0
-        for col in df.columns:
-            col_lower = col.lower()
-            if col_lower.endswith(("id", "code", "key", "number")) and col_lower not in ("month_num", "monthnum"):
-                # Check uniqueness ratio
-                non_nulls = df[col].dropna()
-                if len(non_nulls) > 0 and (non_nulls.nunique() / len(non_nulls)) >= 0.95:
-                    before_len = len(df)
-                    df = df.drop_duplicates(subset=[col], keep="first")
-                    dups_removed += before_len - len(df)
-                    break
-        return df, dups_removed
 
 
 preprocessing_agent = PreprocessingAgent()
