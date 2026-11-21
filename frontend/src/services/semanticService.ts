@@ -179,4 +179,190 @@ export const getJoinGraph = async (): Promise<{ edges: JoinResolution[] }> => {
   return (await api.get<{ edges: JoinResolution[] }>('/analytics/join-graph')).data;
 };
 
+// ── Gen AI Dashboard Types & API Methods ────────────────────────────────────
+
+export interface GenAIWorkflowStep {
+  step: string;
+  name: string;
+  detail: string;
+  timestamp: number;
+  status: 'pending' | 'running' | 'completed' | 'error';
+}
+
+export interface GenAISqlInfo {
+  sql_query: string;
+  join_required: boolean;
+  join_type?: string;
+  join_rationale?: string;
+  join_info?: Record<string, any>;
+  records_matched: number;
+  records_total: number;
+}
+
+export interface GenAIKpiCard {
+  id: string;
+  title: string;
+  value: number | string;
+  metric: string;
+  aggregation: string;
+  format: 'currency' | 'number' | 'percent' | 'integer';
+  subtitle?: string;
+}
+
+export interface GenAIChartPoint {
+  label: string;
+  value: number;
+  [key: string]: any;
+}
+
+export interface GenAIChart {
+  id: string;
+  title: string;
+  kind: string;
+  metric: string;
+  dimension: string;
+  aggregation: string;
+  data: GenAIChartPoint[];
+  total_categories?: number;
+  error?: string;
+}
+
+export interface GenAIPythonVisual {
+  image_base64: string;
+  chart_type: string;
+  prompt: string;
+  verified?: boolean;
+  insights?: string;
+}
+
+export interface GenAIRecommendation {
+  id: string;
+  title: string;
+  kind: string;
+  metric: string;
+  dimension?: string;
+  aggregation: string;
+  rationale: string;
+  status?: string;
+}
+
+export interface GenAIDashboardResponse {
+  status: 'success' | 'error';
+  dashboard_id: string;
+  prompt: string;
+  intent_summary: string;
+  execution_time_ms: number;
+  workflow_steps: GenAIWorkflowStep[];
+  sql_info: GenAISqlInfo;
+  kpi_cards: GenAIKpiCard[];
+  charts: GenAIChart[];
+  python_visual?: GenAIPythonVisual | null;
+  executive_insights: string[];
+  recommendations: GenAIRecommendation[];
+  message?: string;
+}
+
+export const generateGenAiDashboard = async (params: {
+  prompt: string;
+  dataset_id?: string;
+  conversation_history?: { role: string; content: string }[];
+}): Promise<GenAIDashboardResponse> => {
+  const headers: Record<string, string> = {};
+  if (params.dataset_id && params.dataset_id !== 'all') {
+    headers['X-Dataset-Id'] = params.dataset_id;
+  }
+  return (
+    await api.post<GenAIDashboardResponse>(
+      '/graph/genai-dashboard/generate',
+      params,
+      { headers }
+    )
+  ).data;
+};
+
+export const generateGenAiDashboardStream = async (
+  params: {
+    prompt: string;
+    dataset_id?: string;
+    conversation_history?: { role: string; content: string }[];
+  },
+  onStep?: (step: { step: number; name: string; detail: string; timestamp: number }) => void
+): Promise<GenAIDashboardResponse> => {
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (params.dataset_id && params.dataset_id !== 'all') {
+      headers['X-Dataset-Id'] = params.dataset_id;
+    }
+
+    const response = await fetch('/api/graph/genai-dashboard/generate-stream', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(params),
+    });
+
+    if (!response.ok || !response.body) {
+      return await generateGenAiDashboard(params);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult: GenAIDashboardResponse | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('data: ')) {
+          try {
+            const jsonStr = trimmed.slice(6);
+            const data = JSON.parse(jsonStr);
+            if (data.type === 'step' && onStep) {
+              onStep(data);
+            } else if (data.type === 'result') {
+              finalResult = data.data;
+            } else if (data.type === 'error') {
+              throw new Error(data.message || 'Stream processing error');
+            }
+          } catch (e) {
+            // Partial chunk or parse error
+          }
+        }
+      }
+    }
+
+    if (finalResult) return finalResult;
+  } catch (err) {
+    // Fallback to standard HTTP post if stream is interrupted or fails
+  }
+
+  return await generateGenAiDashboard(params);
+};
+
+export const executeGenAiWidget = async (params: {
+  widget: Record<string, any>;
+  dataset_id?: string;
+}): Promise<{ kind: string; widget: any }> => {
+  const headers: Record<string, string> = {};
+  if (params.dataset_id && params.dataset_id !== 'all') {
+    headers['X-Dataset-Id'] = params.dataset_id;
+  }
+  return (
+    await api.post<{ kind: string; widget: any }>(
+      '/graph/genai-dashboard/execute-widget',
+      params,
+      { headers }
+    )
+  ).data;
+};
+
+
 

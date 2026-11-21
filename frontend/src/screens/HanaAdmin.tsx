@@ -353,49 +353,49 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
   return (
     <div className="space-y-2.5 w-full max-w-[1700px] mx-auto pb-16 animate-in fade-in duration-100">
       {/* 1. Ultra-Compact Unified Header (Merges Title, Stats, Tabs & Actions into One Clean Bar) */}
-      <div className="bg-white border border-slate-200/90 rounded-xl px-3.5 py-2 flex flex-wrap items-center justify-between gap-2.5 shadow-2xs">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] px-3.5 py-2 flex flex-wrap items-center justify-between gap-2.5 shadow-[var(--shadow-2xs)]">
         {/* Left: Branding & Status */}
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-blue-600 text-[20px]">database</span>
-            <span className="text-sm font-bold text-slate-900 tracking-tight whitespace-nowrap">
+            <span className="material-symbols-outlined text-[var(--color-primary)] text-[20px]">database</span>
+            <span className="text-sm font-semibold text-[var(--color-text-primary)] tracking-tight whitespace-nowrap">
               HANA Cloud Explorer
             </span>
-            <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+            <span className="px-1.5 py-0.2 rounded-[var(--radius-inner)] text-[10px] font-mono font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               /hanaadmin
             </span>
           </div>
 
-          <div className="h-3 w-px bg-slate-200 hidden sm:block" />
+          <div className="h-3 w-px bg-[var(--color-border)] hidden sm:block" />
 
           {/* Quick status pill */}
-          <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-slate-500">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="font-semibold text-emerald-700">Online</span>
+          <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse" />
+            <span className="font-medium text-[var(--color-success)]">Online</span>
             {stats && (
               <>
-                <span className="text-slate-300">•</span>
-                <span className="font-mono text-slate-700 truncate max-w-[140px]" title={stats.schema}>
+                <span className="text-[var(--color-border)]">•</span>
+                <span className="font-mono text-[var(--color-text-secondary)] truncate max-w-[140px]" title={stats.schema}>
                   {stats.schema}
                 </span>
-                <span className="text-slate-300">•</span>
-                <span className="text-slate-700 font-semibold">{tables.length} Tables</span>
-                <span className="text-slate-300">•</span>
-                <span className="text-slate-700">{stats.totalRecords ? stats.totalRecords.toLocaleString() : '0'} rows</span>
+                <span className="text-[var(--color-border)]">•</span>
+                <span className="text-[var(--color-text-secondary)] font-medium">{tables.length} Tables</span>
+                <span className="text-[var(--color-border)]">•</span>
+                <span className="text-[var(--color-text-muted)]">{stats.totalRecords ? stats.totalRecords.toLocaleString() : '0'} rows</span>
               </>
             )}
           </div>
         </div>
 
         {/* Center: Tabs Switcher */}
-        <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-semibold">
+        <div className="flex items-center bg-[var(--color-surface-hover)] p-0.5 rounded-[var(--radius-element)] border border-[var(--color-border)] text-xs font-medium">
           <button
             type="button"
             onClick={() => setActiveTab('tables')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-inner)] transition-all cursor-pointer ${
               activeTab === 'tables'
-                ? 'bg-white text-blue-600 shadow-2xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-2xs)] font-semibold border border-[var(--color-border)]'
+                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
             }`}
           >
             <span className="material-symbols-outlined text-[15px]">table_chart</span>
@@ -405,10 +405,10 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
           <button
             type="button"
             onClick={() => setActiveTab('query')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-inner)] transition-all cursor-pointer ${
               activeTab === 'query'
-                ? 'bg-white text-blue-600 shadow-2xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-2xs)] font-semibold border border-[var(--color-border)]'
+                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
             }`}
           >
             <span className="material-symbols-outlined text-[15px]">terminal</span>
@@ -418,10 +418,10 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
           <button
             type="button"
             onClick={() => setActiveTab('schema')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-inner)] transition-all cursor-pointer ${
               activeTab === 'schema'
-                ? 'bg-white text-blue-600 shadow-2xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-2xs)] font-semibold border border-[var(--color-border)]'
+                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
             }`}
           >
             <span className="material-symbols-outlined text-[15px]">schema</span>
@@ -435,10 +435,10 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
             type="button"
             onClick={() => loadDatabaseOverview(true, true)}
             disabled={loadingTables}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-[var(--radius-element)] text-xs font-medium bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer disabled:opacity-50"
             title="Scan SYS.TABLES for new tables"
           >
-            <span className={`material-symbols-outlined text-[14px] text-blue-600 ${loadingTables ? 'animate-spin' : ''}`}>
+            <span className={`material-symbols-outlined text-[14px] text-[var(--color-text-secondary)] ${loadingTables ? 'animate-spin' : ''}`}>
               refresh
             </span>
             <span className="hidden sm:inline">Rescan</span>
@@ -447,7 +447,7 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
           <button
             type="button"
             onClick={() => onNavigate('upload-dataset')}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-element)] text-xs font-medium bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white shadow-[var(--shadow-2xs)] transition-colors cursor-pointer"
           >
             <span className="material-symbols-outlined text-[14px]">upload_file</span>
             <span>Upload</span>
@@ -457,24 +457,24 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
 
       {/* Global Alerts / Success Messages */}
       {actionSuccessMsg && (
-        <div role="status" className="flex items-center justify-between gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 text-xs text-emerald-800 animate-in fade-in">
+        <div role="status" className="flex items-center justify-between gap-2 bg-[var(--color-success-subtle)] border border-[var(--color-success-border)] rounded-[var(--radius-element)] px-3 py-1.5 text-xs text-[var(--color-success)] animate-in fade-in">
           <div className="flex items-center gap-1.5 font-medium">
-            <span className="material-symbols-outlined text-emerald-600 text-base">check_circle</span>
+            <span className="material-symbols-outlined text-[var(--color-success)] text-base">check_circle</span>
             <span>{actionSuccessMsg}</span>
           </div>
-          <button type="button" onClick={() => setActionSuccessMsg('')} className="text-emerald-700 hover:text-emerald-900 text-xs font-bold">
+          <button type="button" onClick={() => setActionSuccessMsg('')} className="text-[var(--color-success)] hover:opacity-80 text-xs font-bold cursor-pointer">
             ×
           </button>
         </div>
       )}
 
       {error && (
-        <div role="alert" className="flex items-center justify-between gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5 text-xs text-red-800">
+        <div role="alert" className="flex items-center justify-between gap-2 bg-[var(--color-danger-subtle)] border border-[var(--color-danger-border)] rounded-[var(--radius-element)] px-3 py-1.5 text-xs text-[var(--color-danger)]">
           <div className="flex items-center gap-1.5 font-medium">
-            <span className="material-symbols-outlined text-red-600 text-base">error</span>
+            <span className="material-symbols-outlined text-[var(--color-danger)] text-base">error</span>
             <span>{error}</span>
           </div>
-          <button type="button" onClick={() => setError('')} className="text-red-700 hover:text-red-900 text-xs font-bold">
+          <button type="button" onClick={() => setError('')} className="text-[var(--color-danger)] hover:opacity-80 text-xs font-bold cursor-pointer">
             Dismiss
           </button>
         </div>

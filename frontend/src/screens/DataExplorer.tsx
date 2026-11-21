@@ -4,6 +4,7 @@ import { AnalyticsDefinition, ExecutionResult, SemanticModel, executePlan, getSe
 import { queryAnalytics } from '../services/analyticsService';
 import { getApiErrorMessage } from '../services/api';
 import { AnalyticsWidget } from '../components/AnalyticsWidget';
+import { DataExplorerSkeleton, DataExplorerResultsSkeleton } from '../components/dashboard/DataExplorerSkeleton';
 
 // Chip-based multi-select component
 function ChipSelector({ options, selected, onChange, label }: {
@@ -30,22 +31,22 @@ function ChipSelector({ options, selected, onChange, label }: {
 
   return (
     <div ref={ref} className="relative">
-      <label className="block text-xs font-semibold text-slate-700 mb-1">{label}</label>
+      <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">{label}</label>
       <div
-        className={`min-h-[34px] border rounded-lg px-2 py-1 bg-white cursor-text flex flex-wrap gap-1 items-center transition-all shadow-2xs ${
-          open ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-slate-300 hover:border-slate-400'
+        className={`min-h-[34px] border rounded-[var(--radius-element)] px-2 py-1 bg-[var(--color-surface)] cursor-text flex flex-wrap gap-1 items-center transition-all shadow-[var(--shadow-2xs)] ${
+          open ? 'border-[var(--color-primary)] ring-1 ring-[var(--color-primary)]' : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)]'
         }`}
         onClick={() => { setOpen(true); }}
       >
         {selected.map(val => {
           const opt = options.find(o => o.value === val);
           return (
-            <span key={val} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-xs font-medium border border-blue-200">
+            <span key={val} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] text-xs font-medium border border-[var(--color-border)]">
               {opt?.label ?? val}
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onChange(selected.filter(s => s !== val)); }}
-                className="text-blue-400 hover:text-blue-700 transition-colors ml-0.5"
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors ml-0.5 cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[12px]">close</span>
               </button>
@@ -53,7 +54,7 @@ function ChipSelector({ options, selected, onChange, label }: {
           );
         })}
         <input
-          className="flex-1 min-w-[80px] text-xs outline-none border-none bg-transparent py-0.5 px-1 placeholder:text-slate-400"
+          className="flex-1 min-w-[80px] text-xs outline-none border-none bg-transparent py-0.5 px-1 placeholder:text-[var(--color-text-muted)] text-[var(--color-text-primary)]"
           placeholder={selected.length ? 'Add more…' : 'Search and select fields…'}
           value={search}
           onChange={e => { setSearch(e.target.value); setOpen(true); }}
@@ -61,16 +62,16 @@ function ChipSelector({ options, selected, onChange, label }: {
         />
       </div>
       {open && filtered.length > 0 && (
-        <div className="absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-52 overflow-auto">
+        <div className="absolute z-20 mt-1 w-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] shadow-[var(--shadow-lg)] max-h-52 overflow-auto">
           {filtered.map(opt => (
             <button
               key={opt.value}
               type="button"
-              className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors flex items-center gap-2"
+              className="w-full text-left px-3 py-2 text-xs hover:bg-[var(--color-surface-hover)] transition-colors flex items-center gap-2 text-[var(--color-text-primary)] cursor-pointer"
               onClick={() => { onChange([...selected, opt.value]); setSearch(''); }}
             >
-              <span className="material-symbols-outlined text-[16px] text-slate-400">add_circle_outline</span>
-              <span className="text-slate-700">{opt.label}</span>
+              <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)]">add_circle_outline</span>
+              <span>{opt.label}</span>
             </button>
           ))}
         </div>
@@ -108,6 +109,7 @@ function buildDynamicSuggestions(model: SemanticModel | null): string[] {
 
 export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({ onNavigate }) => {
   const [model, setModel] = useState<SemanticModel | null>(null);
+  const [loading, setLoading] = useState(true);
   const [metric, setMetric] = useState('*');
   const [aggregation, setAggregation] = useState('COUNT');
   const [dimensions, setDimensions] = useState<string[]>([]);
@@ -122,26 +124,42 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
   useEffect(() => {
     let cancelled = false;
     const init = async () => {
-      let context = selectedContext();
-      if (!context) {
-        context = await ensureDefaultContext();
-      }
-      if (!context) {
-        if (!cancelled) setError('Select a dataset and version first.');
-        return;
-      }
+      setLoading(true);
+      setError('');
       try {
+        let context = selectedContext();
+        if (!context) {
+          context = await ensureDefaultContext();
+        }
+        if (!context) {
+          if (!cancelled) setError('Select a dataset and version first.');
+          return;
+        }
         const models = await getSemanticModels(context.datasetId, context.version);
         if (cancelled) return;
         const approved = models.find(m => m.revision === context!.semanticRevision && m.status === 'approved') || models.find(m => m.status === 'approved') || models[0];
-        if (!approved) setError('Approve and select a semantic model before querying this version.');
-        else setModel(approved);
+        if (!approved) {
+          setModel(null);
+        } else {
+          setModel(approved);
+        }
       } catch (err) {
         if (!cancelled) setError(getApiErrorMessage(err, 'Semantic model could not be loaded.'));
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
     void init();
-    return () => { cancelled = true; };
+
+    const handleContextChanged = () => {
+      void init();
+    };
+    window.addEventListener('dataset-context-changed', handleContextChanged);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('dataset-context-changed', handleContextChanged);
+    };
   }, []);
 
   const run = async (natural: boolean) => {
@@ -165,21 +183,26 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
   const definition: AnalyticsDefinition = { id: 'explorer', title: 'Query results', kind: 'table', revision: 1, semantic_revision: model?.revision || 1, query_plan: executedPlan, dependencies: [], explanation: '', status: 'proposed' };
   const dimensionOptions = model?.fields.filter(f => f.role !== 'measure').map(f => ({ value: f.name, label: f.semantic_name })) ?? [];
 
+  // When initial data is loading, render skeleton matching the layout and design
+  if (loading) {
+    return <DataExplorerSkeleton mode={mode} />;
+  }
+
   return (
-    <div className="space-y-3.5 w-full max-w-[1560px] mx-auto pb-16">
+    <div className="space-y-3.5 w-full max-w-[1560px] mx-auto pb-16 animate-fade-in">
       {/* Sleek Single-Row Page Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 py-1.5 px-0.5 border-b border-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-1 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[var(--color-text-primary)] flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-[18px]">explore</span>
           </div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-base font-bold text-slate-900 tracking-tight">Data Explorer</h1>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-base font-semibold text-[var(--color-text-primary)] tracking-tight">Data Explorer</h1>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-full)] text-[11px] font-medium bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               Query Engine
             </span>
             {model && (
-              <span className="text-xs text-slate-400 font-mono hidden sm:inline">
+              <span className="text-xs text-[var(--color-text-muted)] font-mono hidden sm:inline">
                 · Model Rev {model.revision} ({model.fields.length} fields)
               </span>
             )}
@@ -187,30 +210,30 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
         </div>
 
         {/* Mode Selector in Header */}
-        <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-lg border border-slate-200">
+        <div className="flex items-center gap-1 p-1 bg-[var(--color-surface-hover)] rounded-[var(--radius-element)] border border-[var(--color-border)]">
           <button
             onClick={() => setMode('structured')}
-            className={`px-3 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+            className={`px-3 py-1 rounded-[var(--radius-inner)] text-xs font-medium transition-all cursor-pointer ${
               mode === 'structured'
-                ? 'bg-white text-blue-700 shadow-2xs border border-slate-200/80'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-2xs)] border border-[var(--color-border)]'
+                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
             }`}
           >
             <span className="flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[15px]">tune</span>
+              <span className="material-symbols-outlined text-[15px] text-[var(--color-primary)]">tune</span>
               Structured Query
             </span>
           </button>
           <button
             onClick={() => setMode('natural')}
-            className={`px-3 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+            className={`px-3 py-1 rounded-[var(--radius-inner)] text-xs font-medium transition-all cursor-pointer ${
               mode === 'natural'
-                ? 'bg-white text-purple-700 shadow-2xs border border-slate-200/80'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-2xs)] border border-[var(--color-border)]'
+                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
             }`}
           >
             <span className="flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[15px] text-purple-600">auto_awesome</span>
+              <span className="material-symbols-outlined text-[15px] text-[var(--color-text-secondary)]">auto_awesome</span>
               Natural Language (AI)
             </span>
           </button>
@@ -219,22 +242,22 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
 
       {/* Error */}
       {error && (
-        <div role="alert" className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
-          <span className="material-symbols-outlined text-red-600 text-xl mt-0.5">error</span>
-          <p className="text-sm font-medium text-red-800 flex-1">{error}</p>
-          <button onClick={() => setError('')} className="text-red-400 hover:text-red-600">
+        <div role="alert" className="flex items-start gap-3 bg-[var(--color-danger-subtle)] border border-[var(--color-danger-border)] rounded-[var(--radius-container)] p-4 shadow-[var(--shadow-2xs)]">
+          <span className="material-symbols-outlined text-[var(--color-danger)] text-xl mt-0.5">error</span>
+          <p className="text-xs font-medium text-[var(--color-danger)] flex-1">{error}</p>
+          <button onClick={() => setError('')} className="text-[var(--color-text-muted)] hover:text-[var(--color-danger)] cursor-pointer">
             <span className="material-symbols-outlined text-lg">close</span>
           </button>
         </div>
       )}
 
       {!model && (
-        <div className="bg-white border border-slate-200/80 rounded-2xl p-10 text-center space-y-4 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
-          <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center">
-            <span className="material-symbols-outlined text-amber-600 text-3xl">schema</span>
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-page)] p-10 text-center space-y-4 shadow-[var(--shadow-xs)]">
+          <div className="w-12 h-12 mx-auto rounded-[var(--radius-container)] bg-[var(--color-surface-active)] border border-[var(--color-border)] flex items-center justify-center">
+            <span className="material-symbols-outlined text-[var(--color-warning)] text-2xl">schema</span>
           </div>
-          <p className="text-lg font-semibold text-slate-800">No semantic model available</p>
-          <button className="inline-flex items-center gap-2 border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors" onClick={() => onNavigate('upload-dataset')}>
+          <p className="text-sm font-semibold text-[var(--color-text-primary)]">No semantic model available</p>
+          <button className="inline-flex items-center gap-2 border border-[var(--color-border)] rounded-[var(--radius-element)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer" onClick={() => onNavigate('upload-dataset')}>
             <span className="material-symbols-outlined text-[16px]">open_in_new</span>
             Open semantic review
           </button>
@@ -243,16 +266,14 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
 
       {model && (
         <>
-
-
           {/* Structured Query Panel */}
           {mode === 'structured' && (
-            <section className="bg-white border border-slate-200 rounded-xl p-4 space-y-3.5 shadow-2xs">
-              <div className="grid sm:grid-cols-3 gap-4 text-sm">
+            <section className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-4 space-y-3.5 shadow-[var(--shadow-2xs)]">
+              <div className="grid sm:grid-cols-3 gap-4 text-xs">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Metric</label>
+                  <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">Metric</label>
                   <select
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 bg-white text-xs focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none transition-all shadow-2xs"
+                    className="w-full border border-[var(--color-border)] rounded-[var(--radius-element)] px-3 py-1.5 bg-[var(--color-surface)] text-[var(--color-text-primary)] text-xs focus:border-[var(--color-primary)] outline-none transition-all shadow-[var(--shadow-2xs)]"
                     value={metric}
                     onChange={e => { setMetric(e.target.value); setAggregation('COUNT'); }}
                   >
@@ -261,9 +282,9 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Aggregation</label>
+                  <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">Aggregation</label>
                   <select
-                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 bg-white text-xs focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none transition-all shadow-2xs"
+                    className="w-full border border-[var(--color-border)] rounded-[var(--radius-element)] px-3 py-1.5 bg-[var(--color-surface)] text-[var(--color-text-primary)] text-xs focus:border-[var(--color-primary)] outline-none transition-all shadow-[var(--shadow-2xs)]"
                     value={aggregation}
                     onChange={e => setAggregation(e.target.value)}
                   >
@@ -279,16 +300,16 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
                   onChange={setDimensions}
                 />
               </div>
-              <details className="rounded-lg border border-slate-200 overflow-hidden text-xs">
-                <summary className="cursor-pointer text-xs font-semibold text-slate-700 px-3 py-2 bg-slate-50 hover:bg-slate-100 transition-colors flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[16px] text-slate-500">filter_alt</span>
+              <details className="rounded-[var(--radius-element)] border border-[var(--color-border)] overflow-hidden text-xs">
+                <summary className="cursor-pointer text-xs font-medium text-[var(--color-text-primary)] px-3 py-2 bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] transition-colors flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)]">filter_alt</span>
                   Typed filters
                 </summary>
                 <div className="p-4 space-y-2">
-                  <p className="text-xs text-slate-500">Example: <code className="px-1.5 py-0.5 bg-slate-100 rounded text-[11px]">[{`{"column":"Department","operator":"=","value":"IT"}`}]</code></p>
+                  <p className="text-xs text-[var(--color-text-secondary)]">Example: <code className="px-1.5 py-0.5 bg-[var(--color-surface-hover)] rounded text-[11px] border border-[var(--color-border)]">[{`{"column":"Department","operator":"=","value":"IT"}`}]</code></p>
                   <textarea
                     aria-label="Typed query filters"
-                    className="border border-slate-300 rounded-xl p-3 w-full font-mono text-xs resize-y focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none transition-all"
+                    className="border border-[var(--color-border)] rounded-[var(--radius-element)] p-3 w-full font-mono text-xs resize-y bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:border-[var(--color-primary)] outline-none transition-all"
                     rows={3}
                     value={filters}
                     onChange={e => setFilters(e.target.value)}
@@ -298,9 +319,9 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
               <button
                 disabled={busy}
                 onClick={() => void run(false)}
-                className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-3.5 py-1.5 text-xs font-semibold shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
+                className="inline-flex items-center gap-1.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white rounded-[var(--radius-element)] px-3.5 py-1.5 text-xs font-medium shadow-[var(--shadow-2xs)] transition-all disabled:opacity-50 cursor-pointer"
               >
-                <span className={`material-symbols-outlined text-[18px] ${busy ? 'animate-spin' : ''}`}>
+                <span className={`material-symbols-outlined text-[16px] ${busy ? 'animate-spin' : ''}`}>
                   {busy ? 'sync' : 'play_arrow'}
                 </span>
                 <span>{busy ? 'Running…' : 'Execute query'}</span>
@@ -310,10 +331,10 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
 
           {/* Natural Language Panel */}
           {mode === 'natural' && (
-            <section className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 shadow-2xs">
+            <section className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-4 space-y-3 shadow-[var(--shadow-2xs)]">
               <div className="flex items-center gap-2 mb-1">
-                <span className="material-symbols-outlined text-purple-600 text-xl">auto_awesome</span>
-                <h2 className="text-base font-semibold text-slate-900">Ask in natural language</h2>
+                <span className="material-symbols-outlined text-[var(--color-primary)] text-xl">auto_awesome</span>
+                <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Ask in natural language</h2>
               </div>
 
               {/* Suggestion Chips */}
@@ -323,7 +344,7 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
                     key={s}
                     type="button"
                     onClick={() => setPrompt(s)}
-                    className="text-xs px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 text-slate-600 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 transition-all"
+                    className="text-xs px-3 py-1 rounded-[var(--radius-full)] border border-[var(--color-border)] bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-border-strong)] transition-all cursor-pointer"
                   >
                     {s}
                   </button>
@@ -333,23 +354,23 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
               <div className="relative">
                 <textarea
                   aria-label="Analytics question"
-                  className="border border-slate-300 rounded-lg p-3 pr-12 w-full text-xs resize-y focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 outline-none transition-all shadow-2xs"
+                  className="border border-[var(--color-border)] rounded-[var(--radius-element)] p-3 pr-12 w-full text-xs resize-y bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:border-[var(--color-primary)] outline-none transition-all shadow-[var(--shadow-2xs)]"
                   placeholder="Describe the metric, aggregation, and filters…"
                   rows={3}
                   value={prompt}
                   onChange={e => setPrompt(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && prompt.trim()) void run(true); }}
                 />
-                <div className="absolute bottom-3 right-3 text-[10px] text-slate-400 font-mono">
+                <div className="absolute bottom-3 right-3 text-[10px] text-[var(--color-text-muted)] font-mono">
                   ⌘ Enter
                 </div>
               </div>
               <button
                 disabled={busy || !prompt.trim()}
                 onClick={() => void run(true)}
-                className="inline-flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg px-3.5 py-1.5 text-xs font-semibold shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
+                className="inline-flex items-center gap-1.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white rounded-[var(--radius-element)] px-3.5 py-1.5 text-xs font-medium shadow-[var(--shadow-2xs)] transition-all disabled:opacity-50 cursor-pointer"
               >
-                <span className={`material-symbols-outlined text-[18px] ${busy ? 'animate-spin' : ''}`}>
+                <span className={`material-symbols-outlined text-[16px] ${busy ? 'animate-spin' : ''}`}>
                   {busy ? 'sync' : 'psychology'}
                 </span>
                 <span>{busy ? 'Planning…' : 'Plan and execute'}</span>
@@ -360,30 +381,32 @@ export const DataExplorer: React.FC<{ onNavigate: (path: string) => void }> = ({
       )}
 
       {/* Results Section */}
-      {result ? (
-        <section className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 shadow-2xs">
+      {busy ? (
+        <DataExplorerResultsSkeleton />
+      ) : result ? (
+        <section className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-4 space-y-3 shadow-[var(--shadow-2xs)] animate-fade-in">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-slate-900 flex items-center gap-2">
-              <span className="material-symbols-outlined text-blue-600 text-xl">table_chart</span>
+            <h2 className="text-sm font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
+              <span className="material-symbols-outlined text-[var(--color-primary)] text-lg">table_chart</span>
               Query results
             </h2>
           </div>
           <AnalyticsWidget definition={definition} result={result} showTable={true} />
-          <details className="rounded-lg border border-slate-200 overflow-hidden text-xs">
-            <summary className="cursor-pointer text-xs font-semibold text-slate-700 px-3 py-2 bg-slate-50 hover:bg-slate-100 transition-colors flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[16px] text-slate-500">code</span>
+          <details className="rounded-[var(--radius-element)] border border-[var(--color-border)] overflow-hidden text-xs">
+            <summary className="cursor-pointer text-xs font-medium text-[var(--color-text-primary)] px-3 py-2 bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] transition-colors flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)]">code</span>
               Executed query plan
             </summary>
-            <pre className="text-xs bg-slate-50 p-4 overflow-auto font-mono text-slate-700">{JSON.stringify(executedPlan, null, 2)}</pre>
+            <pre className="text-xs bg-[var(--color-surface-hover)] p-3 overflow-auto font-mono text-[var(--color-text-primary)] border-t border-[var(--color-border)]">{JSON.stringify(executedPlan, null, 2)}</pre>
           </details>
         </section>
-      ) : !busy && (
-        <div className="bg-white border border-dashed border-slate-300 rounded-xl p-6 text-center text-slate-500 shadow-2xs">
-          <div className="w-9 h-9 rounded-lg bg-slate-50 text-slate-400 flex items-center justify-center mx-auto mb-1.5 border border-slate-100">
+      ) : (
+        <div className="bg-[var(--color-surface)] border border-dashed border-[var(--color-border)] rounded-[var(--radius-container)] p-8 text-center text-[var(--color-text-secondary)] shadow-[var(--shadow-2xs)] animate-fade-in">
+          <div className="w-10 h-10 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] border border-[var(--color-border)] flex items-center justify-center mx-auto mb-2">
             <span className="material-symbols-outlined text-2xl">insights</span>
           </div>
-          <p className="text-sm font-semibold text-slate-700">Analytical Output Canvas</p>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-sm font-semibold text-[var(--color-text-primary)]">Analytical Output Canvas</p>
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
             Select dimensions or enter a natural language prompt above to compute results over the verified schema.
           </p>
         </div>

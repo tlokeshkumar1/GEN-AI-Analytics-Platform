@@ -110,6 +110,12 @@ class DatasetService:
         return {"datasets": {}, "activeDatasetId": None, "importedFiles": []}
 
     def _write_json(self, path, value):
+        if path == self.catalog_path and self.output_dir == OUTPUT_DIR:
+            try:
+                from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                datasets_metadata_repo.save_catalog(value)
+            except Exception as exc:
+                logger.warning(f"Failed to sync catalog to DATASETS_METADATA: {exc}")
         if self.repository is not None and path == self.catalog_path:
             self.repository.publish(value)
             return

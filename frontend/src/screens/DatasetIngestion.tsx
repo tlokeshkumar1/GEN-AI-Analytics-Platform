@@ -276,19 +276,19 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
   return (
     <div className="flex flex-col w-full max-w-[1560px] mx-auto gap-3.5 pb-16">
       {/* Sleek, Single-Row Compact Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 py-1.5 px-0.5 border-b border-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-1 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[var(--color-text-primary)] flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-[18px]">cloud_upload</span>
           </div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-base font-bold text-slate-900 tracking-tight">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-base font-semibold text-[var(--color-text-primary)] tracking-tight">
               {activeDataset ? activeDataset.name : 'Dataset Ingestion & Management'}
             </h1>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-full)] text-[11px] font-medium bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               Data Studio
             </span>
-            <span className="text-xs text-slate-400 font-mono hidden sm:inline">
+            <span className="text-xs text-[var(--color-text-muted)] font-mono hidden sm:inline">
               · {datasets.length} datasets
             </span>
           </div>
@@ -299,9 +299,9 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
             <button
               type="button"
               onClick={clearDataset}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 hover:border-slate-400 transition-all shadow-2xs cursor-pointer group"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-text-secondary)] bg-[var(--color-surface)] border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-all shadow-[var(--shadow-2xs)] cursor-pointer group"
             >
-              <span className="material-symbols-outlined text-[16px] text-slate-500 group-hover:-translate-x-0.5 transition-transform">
+              <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)] group-hover:-translate-x-0.5 transition-transform">
                 arrow_back
               </span>
               <span>Back to Upload</span>
@@ -320,13 +320,13 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
       {message && (
         <div
           role="status"
-          className="rounded-2xl border border-blue-200/80 bg-blue-50/60 p-4 text-xs font-medium text-blue-900 flex items-center justify-between shadow-sm"
+          className="rounded-[var(--radius-container)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5 text-xs font-medium text-[var(--color-text-primary)] flex items-center justify-between shadow-[var(--shadow-2xs)]"
         >
           <div className="flex items-center gap-2.5">
-            <span className="material-symbols-outlined text-blue-600 text-base">info</span>
+            <span className="material-symbols-outlined text-[var(--color-primary)] text-base">info</span>
             <span>{message}</span>
           </div>
-          <button onClick={() => setMessage('')} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+          <button onClick={() => setMessage('')} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer">
             <span className="material-symbols-outlined text-sm">close</span>
           </button>
         </div>
@@ -334,13 +334,13 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
       {error && (
         <div
           role="alert"
-          className="rounded-2xl border border-red-200 bg-red-50 p-4 text-xs font-medium text-red-800 flex items-center justify-between shadow-sm"
+          className="rounded-[var(--radius-container)] border border-[var(--color-danger-border)] bg-[var(--color-danger-subtle)] p-3.5 text-xs font-medium text-[var(--color-danger)] flex items-center justify-between shadow-[var(--shadow-2xs)]"
         >
           <div className="flex items-center gap-2.5">
-            <span className="material-symbols-outlined text-red-600 text-base">error</span>
+            <span className="material-symbols-outlined text-[var(--color-danger)] text-base">error</span>
             <span>{error}</span>
           </div>
-          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-700 cursor-pointer">
+          <button onClick={() => setError(null)} className="text-[var(--color-text-muted)] hover:text-[var(--color-danger)] cursor-pointer">
             <span className="material-symbols-outlined text-sm">close</span>
           </button>
         </div>
@@ -353,27 +353,27 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
         /* SCREEN B: Dataset Detail View (Image 2) */
         <>
           {/* Back Action Bar */}
-          <div className="flex items-center justify-between bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 shadow-2xs">
+          <div className="flex items-center justify-between bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-3 shadow-[var(--shadow-2xs)]">
             <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 onClick={clearDataset}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 hover:text-blue-600 hover:border-blue-300 transition-all shadow-2xs cursor-pointer group"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-text-secondary)] bg-[var(--color-surface)] border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-all shadow-[var(--shadow-2xs)] cursor-pointer group"
               >
-                <span className="material-symbols-outlined text-[17px] text-slate-500 group-hover:text-blue-600 group-hover:-translate-x-0.5 transition-transform">
+                <span className="material-symbols-outlined text-[17px] text-[var(--color-text-muted)] group-hover:-translate-x-0.5 transition-transform">
                   arrow_back
                 </span>
                 <span>Back to Upload & Datasets</span>
               </button>
-              <span className="text-slate-300">|</span>
+              <span className="text-[var(--color-border)]">|</span>
               <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-blue-600"></span>
-                <span className="text-xs font-medium text-slate-500">Active Dataset:</span>
-                <span className="text-xs font-bold text-slate-900 font-mono">{activeDataset.name}</span>
-                <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-blue-100 text-blue-800 uppercase font-mono">
+                <span className="w-2 h-2 rounded-full bg-[var(--color-primary)]"></span>
+                <span className="text-xs font-medium text-[var(--color-text-secondary)]">Active Dataset:</span>
+                <span className="text-xs font-semibold text-[var(--color-text-primary)] font-mono">{activeDataset.name}</span>
+                <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)] uppercase font-mono">
                   .{activeDataset.format}
                 </span>
-                <span className="text-xs text-slate-500 font-mono">
+                <span className="text-xs text-[var(--color-text-muted)] font-mono">
                   ({activeDataset.rowCount.toLocaleString()} rows)
                 </span>
               </div>
@@ -382,7 +382,7 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
             <button
               type="button"
               onClick={clearDataset}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-blue-700 hover:bg-blue-100/60 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-primary)] hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">upload_file</span>
               <span>Upload New File</span>
@@ -390,8 +390,8 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
           </div>
 
           {/* Visual 4-Step Pipeline Ribbon */}
-          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-3.5 shadow-[var(--shadow-2xs)]">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
               {[
                 { step: 1, title: '1. Ingest Data', desc: 'Excel / CSV Ingestion', icon: 'cloud_upload' },
                 { step: 2, title: '2. Semantic Model', desc: 'Schema Review & Rules', icon: 'account_tree' },
@@ -403,33 +403,33 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
                 return (
                   <div
                     key={item.step}
-                    className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${isCurrent
-                      ? 'bg-blue-50/70 border-blue-500 shadow-sm ring-2 ring-blue-500/20'
+                    className={`flex items-center gap-2.5 p-2.5 rounded-[var(--radius-element)] border transition-all ${isCurrent
+                      ? 'bg-[var(--color-surface)] border-[var(--color-primary)] shadow-[var(--shadow-2xs)] ring-1 ring-[var(--color-primary)]'
                       : isCompleted
-                        ? 'bg-slate-50/60 border-slate-200 text-slate-700'
-                        : 'bg-white border-slate-200/50 text-slate-400 opacity-60'
+                        ? 'bg-[var(--color-surface-hover)] border-[var(--color-border)] text-[var(--color-text-primary)]'
+                        : 'bg-[var(--color-surface)] border-[var(--color-border)] text-[var(--color-text-muted)] opacity-60'
                       }`}
                   >
                     <div
-                      className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${isCurrent
-                        ? 'bg-blue-600 text-white'
+                      className={`w-8 h-8 rounded-[var(--radius-inner)] flex items-center justify-center shrink-0 ${isCurrent
+                        ? 'bg-[var(--color-primary)] text-white'
                         : isCompleted
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : 'bg-slate-100 text-slate-400'
+                          ? 'bg-[var(--color-success-subtle)] text-[var(--color-success)] border border-[var(--color-success-border)]'
+                          : 'bg-[var(--color-surface-active)] text-[var(--color-text-muted)]'
                         }`}
                     >
-                      <span className="material-symbols-outlined text-lg">
+                      <span className="material-symbols-outlined text-base">
                         {isCompleted ? 'check' : item.icon}
                       </span>
                     </div>
                     <div className="min-w-0">
                       <div
-                        className={`text-xs font-bold truncate ${isCurrent ? 'text-blue-900' : isCompleted ? 'text-slate-800' : 'text-slate-500'
+                        className={`text-xs font-semibold truncate ${isCurrent ? 'text-[var(--color-primary)]' : isCompleted ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'
                           }`}
                       >
                         {item.title}
                       </div>
-                      <div className="text-[11px] text-slate-500 truncate">{item.desc}</div>
+                      <div className="text-[10px] text-[var(--color-text-muted)] truncate">{item.desc}</div>
                     </div>
                   </div>
                 );
@@ -559,22 +559,22 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
               }}
             />
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100">
-                <span className="material-symbols-outlined text-xl">upload_file</span>
+              <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] flex items-center justify-center shrink-0 border border-[var(--color-border)]">
+                <span className="material-symbols-outlined text-[18px]">upload_file</span>
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-bold text-slate-800 text-xs">
+                  <span className="font-semibold text-[var(--color-text-primary)] text-xs">
                     {basePermissions.canAppend ? 'Upload / Drag & Drop Enterprise Dataset' : 'Upload Dataset (Admin Only)'}
                   </span>
-                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-600 border border-slate-200 uppercase">
+                  <span className="px-1.5 py-0.2 rounded-[var(--radius-inner)] text-[10px] font-mono font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] border border-[var(--color-border)] uppercase">
                     .XLSX
                   </span>
-                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-600 border border-slate-200 uppercase">
+                  <span className="px-1.5 py-0.2 rounded-[var(--radius-inner)] text-[10px] font-mono font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] border border-[var(--color-border)] uppercase">
                     .CSV
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-500 truncate max-w-xl">
+                <p className="text-[11px] text-[var(--color-text-muted)] truncate max-w-xl">
                   Drop file here or click browse · Max 100MB · Encrypted with AES-256
                 </p>
               </div>
@@ -584,7 +584,7 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
               type="button"
               disabled={isBusy || !basePermissions.canAppend}
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-[0.98] px-3.5 py-1.5 text-xs font-semibold text-white shadow-2xs transition-all disabled:opacity-50 cursor-pointer shrink-0"
+              className="inline-flex items-center gap-1.5 rounded-[var(--radius-element)] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] active:scale-[0.98] px-3.5 py-1.5 text-xs font-medium text-white shadow-[var(--shadow-2xs)] transition-all disabled:opacity-50 cursor-pointer shrink-0"
             >
               <span className="material-symbols-outlined text-[16px]">{basePermissions.canAppend ? 'cloud_upload' : 'lock'}</span>
               <span>{isBusy ? 'Processing...' : basePermissions.canAppend ? 'Upload File' : 'Upload Restricted'}</span>
@@ -592,19 +592,19 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
           </div>
 
           {/* Under That: Available Data & Enterprise Sources */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3.5">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-4 shadow-[var(--shadow-2xs)] space-y-3.5">
             {/* Section Header with Quick Filters & Search */}
             {/* Streamlined Section Toolbar */}
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[var(--color-border)]">
               <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-blue-600 text-lg">database</span>
-                <h2 className="text-sm font-bold text-slate-900">Available Data & Enterprise Sources</h2>
+                <span className="material-symbols-outlined text-[var(--color-primary)] text-lg">database</span>
+                <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Available Data & Enterprise Sources</h2>
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5">
                 {/* Search Bar */}
                 <div className="relative w-48 sm:w-60">
-                  <span className="material-symbols-outlined absolute left-2.5 top-2 text-slate-400 text-[16px] pointer-events-none">
+                  <span className="material-symbols-outlined absolute left-2.5 top-2 text-[var(--color-text-muted)] text-[16px] pointer-events-none">
                     search
                   </span>
                   <input
@@ -612,12 +612,12 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
                     value={searchFilter}
                     onChange={e => setSearchFilter(e.target.value)}
                     placeholder="Search data..."
-                    className="w-full pl-8 pr-7 py-1 text-xs rounded-lg bg-slate-50 border border-slate-200 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white transition-all"
+                    className="w-full pl-8 pr-7 py-1 text-xs rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)] focus:bg-[var(--color-surface)] transition-all"
                   />
                   {searchFilter && (
                     <button
                       onClick={() => setSearchFilter('')}
-                      className="absolute right-2 top-1.5 text-slate-400 hover:text-slate-600"
+                      className="absolute right-2 top-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
                     >
                       <span className="material-symbols-outlined text-[14px]">close</span>
                     </button>
@@ -627,16 +627,16 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
                 <button
                   type="button"
                   onClick={() => onNavigate('system-settings/connections')}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-600 hover:text-blue-700 hover:bg-blue-50 border border-slate-200 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] border border-[var(--color-border)] transition-colors cursor-pointer"
                 >
-                  <span className="material-symbols-outlined text-[15px] text-blue-600">cable</span>
+                  <span className="material-symbols-outlined text-[15px] text-[var(--color-primary)]">cable</span>
                   <span className="hidden sm:inline">System Connections</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => void refresh()}
                   title="Refresh datasets list"
-                  className="w-7 h-7 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-colors"
+                  className="w-7 h-7 rounded-[var(--radius-element)] border border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] flex items-center justify-center text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
                 >
                   <span className="material-symbols-outlined text-[15px]">refresh</span>
                 </button>

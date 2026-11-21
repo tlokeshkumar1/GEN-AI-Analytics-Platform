@@ -27,7 +27,7 @@ export const DatasetStatusBadge: React.FC<StatusBadgeProps> = ({
       label = `Embeddings: Ready${chunkCount !== undefined ? ` (${chunkCount})` : ''}`;
       title = 'Vector embeddings are up to date and active for similarity search.';
     } else if (status === 'Indexing') {
-      label = 'Embeddings: Indexing...';
+      label = 'Embeddings: Indexing…';
       title = 'Generating vector embeddings in the background.';
     } else if (status === 'Pending') {
       label = 'Embeddings: Pending';
@@ -42,7 +42,7 @@ export const DatasetStatusBadge: React.FC<StatusBadgeProps> = ({
       label = 'HANA: Synced';
       title = 'Vectors are synchronized to SAP HANA Cloud vector engine.';
     } else if (isProcessing) {
-      label = 'HANA: Syncing...';
+      label = 'HANA: Syncing…';
       title = 'Synchronizing vectors with SAP HANA Cloud.';
     } else {
       label = 'HANA: Offline';
@@ -51,26 +51,26 @@ export const DatasetStatusBadge: React.FC<StatusBadgeProps> = ({
   }
 
   const badgeColor = isReady
-    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    ? 'bg-[var(--color-success-soft)] text-[var(--color-success)] border-[var(--color-success-muted)]'
     : isProcessing
-    ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
-    : 'bg-rose-50 text-rose-700 border-rose-200';
+    ? 'bg-[var(--color-warning-soft)] text-[var(--color-warning)] border-[var(--color-warning-muted)] animate-pulse'
+    : 'bg-[var(--color-error-soft)] text-[var(--color-error)] border-[var(--color-error-muted)]';
 
   return (
     <div
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border shadow-2xs select-none transition-all ${badgeColor} ${className}`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[var(--radius-full)] text-[11px] font-medium border shadow-[var(--shadow-xs)] select-none transition-all ${badgeColor} ${className}`}
       title={title}
       role="status"
     >
       {type === 'embedding' ? (
-        <Cpu className="w-3.5 h-3.5 shrink-0" />
+        <Cpu className="w-3 h-3 shrink-0" />
       ) : (
-        <Database className="w-3.5 h-3.5 shrink-0" />
+        <Database className="w-3 h-3 shrink-0" />
       )}
       {isProcessing && <Loader2 className="w-3 h-3 shrink-0 animate-spin" />}
-      {isReady && <CheckCircle2 className="w-3 h-3 shrink-0 text-emerald-600" />}
-      {isError && <AlertTriangle className="w-3 h-3 shrink-0 text-rose-600" />}
-      <span className="font-semibold tracking-tight">{label}</span>
+      {isReady && <CheckCircle2 className="w-3 h-3 shrink-0 text-[var(--color-success)]" />}
+      {isError && <AlertTriangle className="w-3 h-3 shrink-0 text-[var(--color-error)]" />}
+      <span className="font-medium tracking-tight">{label}</span>
     </div>
   );
 };

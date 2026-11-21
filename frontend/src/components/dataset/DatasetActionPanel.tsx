@@ -64,7 +64,7 @@ export const DatasetActionPanel: React.FC<DatasetActionPanelProps> = ({
 }) => {
   return (
     <div
-      className={`w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 ${className}`}
+      className={`w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 ${className}`}
       role="navigation"
       aria-label="Dataset operations"
     >
@@ -80,14 +80,14 @@ export const DatasetActionPanel: React.FC<DatasetActionPanelProps> = ({
             type="button"
             disabled={isDisabled}
             onClick={() => onSelectAction(config.id)}
-            className={`group relative flex items-center gap-3.5 p-3.5 sm:p-4 rounded-2xl border transition-all duration-200 text-left cursor-pointer ${
+            className={`group relative flex items-center gap-3 p-3 sm:p-3.5 rounded-[var(--radius-container)] border transition-all duration-150 text-left cursor-pointer ${
               isActive
                 ? config.isDanger
-                  ? 'bg-rose-50/80 text-rose-900 border-rose-300 shadow-sm ring-2 ring-rose-500/15'
-                  : 'bg-[#EFF6FF] text-[#1E40AF] border-[#93C5FD] shadow-sm ring-2 ring-blue-500/15'
+                  ? 'bg-[var(--color-error-soft)] text-[var(--color-error)] border-[var(--color-error-muted)] shadow-[var(--shadow-xs)]'
+                  : 'bg-[var(--color-primary-soft)] text-[var(--color-primary)] border-[var(--color-primary-muted)] shadow-[var(--shadow-xs)]'
                 : isDisabled
-                ? 'opacity-50 cursor-not-allowed bg-slate-50 border-slate-200 text-slate-400'
-                : 'bg-white hover:bg-[#F8FAFC] border-slate-200/90 text-slate-700 hover:text-slate-900 shadow-2xs hover:shadow-xs hover:border-slate-300'
+                ? 'opacity-40 cursor-not-allowed bg-[var(--color-background-subtle)] border-[var(--color-border)] text-[var(--color-text-muted)]'
+                : 'bg-[var(--color-background-surface)] hover:bg-[var(--color-background-subtle)] border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] shadow-[var(--shadow-xs)]'
             }`}
             aria-current={isActive ? 'page' : undefined}
             title={
@@ -96,46 +96,46 @@ export const DatasetActionPanel: React.FC<DatasetActionPanelProps> = ({
                 : config.description
             }
           >
-            {/* Squircle Icon Container */}
+            {/* Concentric Icon Container */}
             <div
-              className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 transition-colors shadow-2xs ${
+              className={`w-9 h-9 rounded-[var(--radius-element)] flex items-center justify-center shrink-0 transition-colors ${
                 isActive
                   ? config.isDanger
-                    ? 'bg-rose-600 text-white'
-                    : 'bg-[#2563EB] text-white'
+                    ? 'bg-[var(--color-error)] text-white'
+                    : 'bg-[var(--color-primary)] text-white'
                   : config.isDanger
-                  ? 'bg-rose-50 text-rose-600 group-hover:bg-rose-100'
-                  : 'bg-[#F1F5F9] text-[#475569] group-hover:bg-[#E2E8F0] group-hover:text-[#0F172A]'
+                  ? 'bg-[var(--color-error-soft)] text-[var(--color-error)] group-hover:bg-[var(--color-error-muted)]'
+                  : 'bg-[var(--color-background-subtle)] text-[var(--color-text-secondary)] group-hover:bg-[var(--color-background-muted)] group-hover:text-[var(--color-text-primary)]'
               }`}
             >
-              <Icon className="w-5 h-5" />
+              <Icon className="w-4 h-4" />
             </div>
 
             {/* Label & Description */}
             <div className="flex flex-col min-w-0 flex-1">
               <div className="flex items-center justify-between gap-1">
                 <span
-                  className={`text-sm font-semibold tracking-tight ${
+                  className={`text-xs font-medium tracking-tight ${
                     isActive
                       ? config.isDanger
-                        ? 'text-rose-900'
-                        : 'text-[#1D4ED8]'
-                      : 'text-[#0F172A]'
+                        ? 'text-[var(--color-error)] font-semibold'
+                        : 'text-[var(--color-primary)] font-semibold'
+                      : 'text-[var(--color-text-primary)]'
                   }`}
                 >
                   {config.label}
                 </span>
                 {!isPermitted && (
-                  <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <Lock className="w-3 h-3 text-[var(--color-text-muted)] shrink-0" />
                 )}
               </div>
               <span
-                className={`text-xs mt-0.5 leading-snug line-clamp-1 truncate ${
+                className={`text-[11px] mt-0.5 leading-snug line-clamp-1 truncate ${
                   isActive
                     ? config.isDanger
-                      ? 'text-rose-700/80'
-                      : 'text-blue-700/80'
-                    : 'text-[#64748B]'
+                      ? 'text-[var(--color-error)]/80'
+                      : 'text-[var(--color-primary)]/80'
+                    : 'text-[var(--color-text-muted)]'
                 }`}
               >
                 {config.description}

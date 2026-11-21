@@ -38,11 +38,15 @@ export function AnalyticsWidget({
   isDashboard = false,
 }: AnalyticsWidgetProps) {
   if (!result.success) {
-    return <p role="alert" className="text-red-700">{result.error || 'Execution failed.'}</p>;
+    return (
+      <div role="alert" className="p-3 rounded-[var(--radius-element)] bg-[var(--color-error-soft)] border border-[var(--color-error-muted)] text-[var(--color-error)] text-xs font-medium">
+        {result.error || 'Execution failed.'}
+      </div>
+    );
   }
 
   if (!result.data || !result.data.length) {
-    return <p className="text-slate-500">No matching records.</p>;
+    return <p className="text-xs text-[var(--color-text-muted)] py-4 text-center">No matching records.</p>;
   }
 
   const rawRows = result.data;
@@ -89,10 +93,10 @@ export function AnalyticsWidget({
     /usd|revenue|margin|price|cost|sales|amount/i.test(definition.title);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3.5">
       {definition.kind === 'kpi' ? (
-        <div className="flex items-baseline gap-3 py-2">
-          <p className="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 tabular-nums">
+        <div className="flex items-baseline gap-3 py-1.5">
+          <p className="text-2xl sm:text-3xl font-semibold tracking-tight text-[var(--color-text-primary)] tabular-nums">
             {String(result.summary?.formatted_value || formatTableCell(rows[0][valueKey] ?? 'N/A', valueKey).display)}
           </p>
         </div>
@@ -165,14 +169,14 @@ export function AnalyticsWidget({
 
       {/* Footer timings (hidden on Executive Dashboard to remove clutter) */}
       {!isDashboard && (
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-medium">
-            {result.records_matched.toLocaleString()} records
+        <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)] pt-1">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-background-subtle)] text-[var(--color-text-secondary)] font-medium">
+            {(result.records_matched ?? 0).toLocaleString()} records
           </span>
-          <span className="text-slate-300">·</span>
-          <span>{result.execution_backend}</span>
-          <span className="text-slate-300">·</span>
-          <span className="tabular-nums">{result.execution_time_ms.toFixed(1)} ms</span>
+          <span>·</span>
+          <span>{result.execution_backend || 'engine'}</span>
+          <span>·</span>
+          <span className="tabular-nums">{(result.execution_time_ms != null ? Number(result.execution_time_ms) : 0).toFixed(1)} ms</span>
         </div>
       )}
     </div>

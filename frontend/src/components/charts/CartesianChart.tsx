@@ -66,18 +66,18 @@ export const CartesianChart: React.FC<CartesianChartProps> = ({
         y={Math.max(y(values[hoveredIndex] ?? 0) - 52, 2)}
         width="140"
         height="44"
-        rx="8"
+        rx="6"
         fill="#FFFFFF"
-        stroke="#CBD5E1"
+        stroke="rgba(0,0,0,0.08)"
         strokeWidth="1"
-        filter="drop-shadow(0 4px 6px rgba(0,0,0,0.08))"
+        filter="drop-shadow(0 2px 4px rgba(0,0,0,0.06))"
       />
       <text
         x={Math.min(Math.max(x(hoveredIndex), 75), 530)}
         y={Math.max(y(values[hoveredIndex] ?? 0) - 34, 16)}
         textAnchor="middle"
         fontSize="10"
-        fill="#64748B"
+        fill="#71717A"
         fontWeight="500"
       >
         {String(rows[hoveredIndex][labelKey] ?? '')}
@@ -87,8 +87,8 @@ export const CartesianChart: React.FC<CartesianChartProps> = ({
         y={Math.max(y(values[hoveredIndex] ?? 0) - 18, 32)}
         textAnchor="middle"
         fontSize="13"
-        fill="#0F172A"
-        fontWeight="700"
+        fill="#1A1A1A"
+        fontWeight="600"
       >
         {formatTableCell(rows[hoveredIndex][valueKey], valueKey).display}
       </text>

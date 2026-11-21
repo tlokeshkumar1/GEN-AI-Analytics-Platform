@@ -1,106 +1,196 @@
 import React, { useState, useEffect } from 'react';
 import { hasAdminRole, getRoleLabel } from '../services/authService';
-import { NeovaticLogo } from './NeovaticLogo';
 
-interface SidebarProps {
+export interface SidebarProps {
   activePath: string;
   onNavigate: (path: string) => void;
   isOpen: boolean;
   onClose: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
   user?: { name?: string; email?: string; role?: string; roles?: string[] } | null;
   onLogout?: () => void;
 }
+
+interface NavItem {
+  id: string;
+  label: string;
+  badge: string | null;
+  icon: string;
+  isAi?: boolean;
+}
+
+// 1) AI Dashboards Navigation Items
+const DASHBOARD_ITEMS: NavItem[] = [
+  {
+    id: 'executive-dashboard',
+    label: 'Executive Dashboard',
+    badge: null,
+    icon: 'dashboard',
+  },
+  {
+    id: 'build-your-kpi-graph-studio',
+    label: 'Build Your KPI',
+    badge: null,
+    icon: 'query_stats',
+    isAi: true,
+  },
+  {
+    id: 'data-explorer',
+    label: 'Data Explorer',
+    badge: null,
+    icon: 'terminal',
+  },
+];
+
+// 2) Administration Navigation Items
+const ADMIN_ITEMS: NavItem[] = [
+  {
+    id: 'ai-agents',
+    label: 'AI Agents',
+    badge: null,
+    icon: 'smart_toy',
+    isAi: true,
+  },
+  {
+    id: 'upload-dataset',
+    label: 'Upload Files',
+    badge: null,
+    icon: 'upload_file',
+  },
+  {
+    id: 'hanaadmin',
+    label: 'HANA Cloud Admin',
+    badge: 'Live',
+    icon: 'database',
+  },
+  {
+    id: 'user-management',
+    label: 'Users',
+    badge: null,
+    icon: 'person',
+  },
+  {
+    id: 'system-settings',
+    label: 'System Management',
+    badge: null,
+    icon: 'settings',
+  },
+];
+
+// 3) Additional Services Navigation Items
+const OTHER_ITEMS: NavItem[] = [
+  {
+    id: 'reports-library',
+    label: 'Reports Library',
+    badge: null,
+    icon: 'folder',
+  },
+  {
+    id: 'data-sources',
+    label: 'Data Sources',
+    badge: null,
+    icon: 'database',
+  },
+];
+
+/**
+ * Astryx Floating Tooltip for Collapsed Sidebar Navigation
+ */
+const NavTooltip: React.FC<{ label: string; badge?: string | null; group?: string }> = ({
+  label,
+  badge,
+  group,
+}) => {
+  return (
+    <div
+      role="tooltip"
+      className="absolute left-full ml-3 top-1/2 -translate-y-1/2 z-50 px-2.5 py-1.5 rounded-[var(--radius-element)] bg-[#18181B] text-white text-xs font-medium shadow-[var(--shadow-md)] whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity duration-150 border border-white/10 flex items-center gap-1.5"
+    >
+      <div className="flex flex-col text-left">
+        {group && (
+          <span className="text-[10px] text-zinc-400 font-semibold uppercase tracking-wider leading-tight">
+            {group}
+          </span>
+        )}
+        <span className="font-medium text-white">{label}</span>
+      </div>
+      {badge && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-full)] bg-white/20 text-white font-mono font-medium">
+          {badge}
+        </span>
+      )}
+      {/* Tiny arrow pointing back to icon */}
+      <span className="absolute right-full top-1/2 -translate-y-1/2 -mr-[1px] border-4 border-transparent border-r-[#18181B]" />
+    </div>
+  );
+};
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activePath,
   onNavigate,
   isOpen,
   onClose,
+  isCollapsed: controlledCollapsed,
+  onToggleCollapse,
   user,
   onLogout,
 }) => {
-  // 1) AI Dashboards Dropdown Items
-  const dashboardItems = [
-    {
-      id: 'executive-dashboard',
-      label: 'Executive Dashboard',
-      badge: null,
-      icon: 'dashboard',
-    },
-    {
-      id: 'build-your-kpi-graph-studio',
-      label: 'Build Your KPI',
-      badge: null,
-      icon: 'query_stats',
-    },
-    {
-      id: 'data-explorer',
-      label: 'Data Explorer',
-      badge: null,
-      icon: 'terminal',
-    },
-  ];
+  // Support persistent internal state if isCollapsed prop is not provided
+  const [internalCollapsed, setInternalCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
-  // 2) Administration Dropdown Items
-  const adminItems = [
-    {
-      id: 'ai-agents',
-      label: 'AI Agents',
-      badge: null,
-      icon: 'smart_toy',
-    },
-    {
-      id: 'upload-dataset',
-      label: 'Upload Files',
-      badge: null,
-      icon: 'upload_file',
-    },
-    {
-      id: 'hanaadmin',
-      label: 'HANA Cloud Admin',
-      badge: 'Live',
-      icon: 'database',
-    },
-    {
-      id: 'user-management',
-      label: 'Users',
-      badge: null,
-      icon: 'person',
-    },
-    {
-      id: 'system-settings',
-      label: 'System Management',
-      badge: null,
-      icon: 'settings',
-    },
-  ];
+  // Track tablet screen width (768px <= width < 1024px)
+  const [isTablet, setIsTablet] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const w = window.innerWidth;
+      return w >= 768 && w < 1024;
+    }
+    return false;
+  });
 
-  // Other pages left as they are
-  const otherItems = [
-    {
-      id: 'reports-library',
-      label: 'Reports Library',
-      badge: null,
-      icon: 'folder',
-    },
-    {
-      id: 'data-sources',
-      label: 'Data Sources',
-      badge: null,
-      icon: 'database',
-    },
-  ];
+  useEffect(() => {
+    const handleResize = () => {
+      const w = window.innerWidth;
+      setIsTablet(w >= 768 && w < 1024);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const isCollapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
+
+  // On tablet, sidebar defaults to compact icon-only mode unless opened as a mobile drawer
+  const effectiveCollapsed = isTablet ? true : isCollapsed;
+
+  const toggleCollapse = () => {
+    if (onToggleCollapse) {
+      onToggleCollapse();
+    } else {
+      setInternalCollapsed(prev => {
+        const next = !prev;
+        try {
+          localStorage.setItem('sidebar_collapsed', String(next));
+        } catch {}
+        return next;
+      });
+    }
+  };
 
   const isAdmin = hasAdminRole(user);
   const displayRole = getRoleLabel(user);
 
-  const isAdminActive = adminItems.some(i => i.id === activePath);
-  const isDashboardActive = dashboardItems.some(i => i.id === activePath);
+  const isAdminActive = ADMIN_ITEMS.some(i => i.id === activePath);
+  const isDashboardActive = DASHBOARD_ITEMS.some(i => i.id === activePath);
 
   const [adminOpen, setAdminOpen] = useState(true);
   const [dashboardsOpen, setDashboardsOpen] = useState(true);
 
-  // Auto-expand dropdown when an item inside it becomes active
   useEffect(() => {
     if (isAdminActive) setAdminOpen(true);
   }, [isAdminActive]);
@@ -109,25 +199,74 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (isDashboardActive) setDashboardsOpen(true);
   }, [isDashboardActive]);
 
-  const renderNavItem = (item: { id: string; label: string; badge: string | null; icon: string }) => {
+  // Render navigation item with black text & black symbols
+  const renderNavItem = (item: NavItem, groupName?: string) => {
     const isActive = activePath === item.id;
-    const isAiItem = item.id === 'build-your-kpi-graph-studio' || item.id === 'ai-agents';
+    const isAiItem = Boolean(item.isAi);
 
-    let activeClasses = 'bg-[#EFF6FF] text-[#1D4ED8] font-medium shadow-xs border border-[#BFDBFE]/80';
-    let activeIconClass = 'text-[#2563EB]';
-    let badgeClasses = 'bg-[#F1F5F9] text-[#475569]';
+    if (effectiveCollapsed) {
+      // Compact / Icon-only mode
+      return (
+        <div key={item.id} className="relative group flex justify-center py-0.5">
+          <button
+            type="button"
+            onClick={() => {
+              onNavigate(item.id);
+              onClose();
+            }}
+            aria-label={item.label}
+            className={`w-10 h-10 rounded-[var(--radius-element)] flex items-center justify-center relative transition-all duration-[var(--transition-fast)] cursor-pointer focus-visible:ring-2 focus-visible:ring-black outline-none ${
+              isActive
+                ? isAiItem
+                  ? 'bg-[var(--color-ai-soft)] text-black font-semibold border border-[var(--color-ai-muted)] shadow-[var(--shadow-2xs)]'
+                  : 'bg-[var(--color-primary-soft)] text-black font-semibold border border-[var(--color-primary-muted)] shadow-[var(--shadow-2xs)]'
+                : 'text-black hover:bg-[var(--color-background-subtle)] border border-transparent'
+            }`}
+          >
+            {/* Active Left Accent Pill Indicator */}
+            {isActive && (
+              <span
+                className={`absolute left-0 top-2 bottom-2 w-1 rounded-r-full ${
+                  isAiItem ? 'bg-[var(--color-ai)]' : 'bg-[var(--color-primary)]'
+                }`}
+              />
+            )}
+
+            <span className="material-symbols-outlined text-[19px] text-black">
+              {item.icon}
+            </span>
+
+            {/* Live Status Badge Pulse Dot */}
+            {item.badge === 'Live' && (
+              <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[var(--color-success)] ring-2 ring-[var(--color-background-surface)] animate-pulse" />
+            )}
+          </button>
+
+          {/* Floating Tooltip */}
+          <NavTooltip label={item.label} badge={item.badge} group={groupName} />
+        </div>
+      );
+    }
+
+    // Expanded mode
+    let activeClasses =
+      'bg-[var(--color-primary-soft)] text-black font-semibold border border-[var(--color-primary-muted)] shadow-[var(--shadow-2xs)]';
+    let badgeClasses = 'bg-[var(--color-background-subtle)] text-black';
 
     if (isActive && isAiItem) {
-      activeClasses = 'bg-[#F5F3FF] text-[#6D28D9] font-medium shadow-xs border border-[#DDD6FE]/80';
-      activeIconClass = 'text-[#7C3AED]';
+      activeClasses =
+        'bg-[var(--color-ai-soft)] text-black font-semibold border border-[var(--color-ai-muted)] shadow-[var(--shadow-2xs)]';
     }
 
     if (item.badge === 'Live') {
-      badgeClasses = 'bg-[#DCFCE7] text-[#166534]';
+      badgeClasses =
+        'bg-[var(--color-success-soft)] text-black border border-[var(--color-success-muted)]';
     } else if (isAiItem) {
-      badgeClasses = isActive ? 'bg-[#EDE9FE] text-[#6D28D9]' : 'bg-[#F3E8FF] text-[#7C3AED]';
+      badgeClasses = isActive
+        ? 'bg-[var(--color-ai-muted)] text-black'
+        : 'bg-[var(--color-ai-soft)] text-black';
     } else if (isActive) {
-      badgeClasses = 'bg-[#DBEAFE] text-[#1D4ED8]';
+      badgeClasses = 'bg-[var(--color-primary-muted)] text-black';
     }
 
     return (
@@ -138,23 +277,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onNavigate(item.id);
           onClose();
         }}
-        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-all text-left cursor-pointer ${
+        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-[var(--radius-element)] transition-all duration-[var(--transition-fast)] text-left cursor-pointer text-xs relative group focus-visible:ring-2 focus-visible:ring-black outline-none ${
           isActive
             ? activeClasses
-            : 'text-[#475569] hover:bg-[#F1F5F9] hover:text-[#0F172A] border border-transparent'
+            : 'text-black hover:bg-[var(--color-background-subtle)] border border-transparent font-medium'
         }`}
       >
-        <div className="flex items-center gap-2.5 truncate">
-          <span className={`material-symbols-outlined text-[17px] ${isActive ? activeIconClass : 'text-[#64748B]'}`}>
+        {/* Active Left Accent Pill Indicator */}
+        {isActive && (
+          <span
+            className={`absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full ${
+              isAiItem ? 'bg-[var(--color-ai)]' : 'bg-[var(--color-primary)]'
+            }`}
+          />
+        )}
+
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="material-symbols-outlined text-[17px] text-black shrink-0">
             {item.icon}
           </span>
-          <span className="truncate text-xs font-medium">{item.label}</span>
+          <span className="truncate text-black font-medium">{item.label}</span>
         </div>
 
         {item.badge && (
           <span
-            className={`font-label-sm text-[10px] px-2 py-0.5 rounded-full shrink-0 font-medium ${badgeClasses}`}
+            className={`font-label-sm text-[10px] px-1.5 py-0.5 rounded-[var(--radius-full)] shrink-0 font-medium ${badgeClasses}`}
           >
+            {item.badge === 'Live' && (
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--color-success)] mr-1 animate-pulse" />
+            )}
             {item.badge}
           </span>
         )}
@@ -164,10 +315,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <>
-      {/* Mobile Backdrop Overlay */}
+      {/* Mobile Backdrop Overlay (< md) */}
       {isOpen && (
         <div
-          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40 lg:hidden transition-opacity duration-200"
+          data-testid="sidebar-backdrop"
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 md:hidden transition-opacity duration-200"
           onClick={onClose}
           aria-hidden="true"
         />
@@ -175,178 +327,266 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed left-0 top-0 lg:top-16 bottom-0 w-[280px] sm:w-[272px] lg:h-[calc(100vh-4rem)] bg-white border-r border-[#E2E8F0] z-50 lg:z-40 flex flex-col justify-between select-none transition-transform duration-300 ease-in-out ${
-          isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+        data-testid="application-sidebar"
+        aria-label="Application Sidebar"
+        className={`fixed left-0 top-0 lg:top-14 bottom-0 bg-[var(--color-background-surface)] border-r border-[var(--color-border)] z-50 md:z-40 flex flex-col justify-between select-none transition-all duration-200 ease-in-out shadow-[var(--shadow-sm)] ${
+          effectiveCollapsed ? 'w-[72px]' : 'w-[256px]'
+        } ${
+          isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         }`}
       >
-        {/* Navigation Scrollable Area */}
-        <div className="flex-1 overflow-y-auto min-h-0 p-3 sm:p-4">
-          {/* Mobile Drawer Header with Close Button */}
-          <div className="flex lg:hidden items-center justify-between pb-3 mb-2 border-b border-[#E2E8F0]">
-            <div className="flex items-center gap-2.5">
-              <NeovaticLogo size={34} showText={false} />
-              <div className="flex flex-col">
-                <span className="font-headline-sm text-[16px] font-semibold text-[#0F172A]">
-                  NEOVATIC
-                </span>
-                <span className="text-[10px] text-[#64748B] uppercase font-mono">
-                  SAP HANA & AI CORE
-                </span>
-              </div>
-            </div>
-            <button
-              onClick={onClose}
-              aria-label="Close navigation"
-              className="w-9 h-9 rounded-xl flex items-center justify-center hover:bg-[#F1F5F9] text-[#0F172A] cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[20px]">close</span>
-            </button>
-          </div>
-
-          <div className="px-2 py-1 mb-2 flex items-center justify-between">
-            <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">
+        {/* Top Header / Platform Navigation with Toggle Button Beside It */}
+        {!effectiveCollapsed ? (
+          <div className="px-3 py-2.5 border-b border-[var(--color-border)] flex items-center justify-between shrink-0">
+            <span className="text-[11px] uppercase tracking-wider text-black font-bold">
               Platform Navigation
             </span>
-          </div>
 
-          <nav className="flex flex-col gap-1">
-            {/* 1) AI Dashboards Dropdown */}
-            <div className="flex flex-col">
+            <div className="flex items-center gap-1">
+              {/* Mobile Drawer Close Button */}
               <button
                 type="button"
-                onClick={() => setDashboardsOpen(prev => !prev)}
-                className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg transition-all text-left cursor-pointer select-none group ${
-                  isDashboardActive
-                    ? 'bg-slate-100/90 text-[#0F172A] font-semibold'
-                    : 'text-[#475569] hover:bg-[#F1F5F9] hover:text-[#0F172A]'
-                }`}
-                aria-expanded={dashboardsOpen}
+                onClick={onClose}
+                aria-label="Close navigation"
+                className="md:hidden w-7 h-7 rounded-[var(--radius-element)] flex items-center justify-center text-black hover:bg-[var(--color-background-subtle)] transition-colors cursor-pointer"
               >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <span className={`material-symbols-outlined text-[18px] transition-colors ${
-                    isDashboardActive ? 'text-blue-600' : 'text-[#64748B] group-hover:text-[#0F172A]'
-                  }`}>
-                    dashboard_customize
-                  </span>
-                  <span className="font-semibold text-xs tracking-tight truncate">AI Dashboards</span>
-                  {isDashboardActive && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0" />
-                  )}
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <span className={`material-symbols-outlined text-[18px] text-[#64748B] transition-transform duration-200 ${
-                    dashboardsOpen ? 'rotate-180' : ''
-                  }`}>
-                    keyboard_arrow_down
-                  </span>
-                </div>
+                <span className="material-symbols-outlined text-[18px] text-black">close</span>
               </button>
 
-              {dashboardsOpen && (
-                <div className="pl-2 ml-3.5 border-l border-slate-200 flex flex-col gap-0.5 my-1 animate-in fade-in duration-150">
-                  {dashboardItems.map(renderNavItem)}
-                </div>
-              )}
+              {/* Desktop / Drawer Collapse Toggle Button beside PLATFORM NAVIGATION */}
+              <button
+                type="button"
+                onClick={toggleCollapse}
+                title="Collapse sidebar (Ctrl+B)"
+                aria-label="Collapse sidebar"
+                className="hidden md:flex w-7 h-7 rounded-[var(--radius-element)] items-center justify-center text-black hover:bg-[var(--color-background-subtle)] transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[18px] text-black">
+                  keyboard_double_arrow_left
+                </span>
+              </button>
             </div>
+          </div>
+        ) : (
+          // Collapsed Mode Header: Expand Button Centered
+          <div className="py-2.5 border-b border-[var(--color-border)] flex items-center justify-center shrink-0">
+            <button
+              type="button"
+              onClick={toggleCollapse}
+              title="Expand sidebar (Ctrl+B)"
+              aria-label="Expand sidebar"
+              className="w-8 h-8 rounded-[var(--radius-element)] flex items-center justify-center text-black hover:bg-[var(--color-background-subtle)] transition-colors cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px] text-black">
+                keyboard_double_arrow_right
+              </span>
+            </button>
+          </div>
+        )}
 
-            {/* 2) Administration Dropdown (Visible only for Admin or Admin+User, hidden for Only User) */}
-            {isAdmin && (
+        {/* Scrollable Navigation Body */}
+        <div className="flex-1 overflow-y-auto min-h-0 py-2 px-2 space-y-1">
+          <nav className="flex flex-col gap-1">
+            {/* 1) AI Dashboards Section */}
+            {effectiveCollapsed ? (
+              // Collapsed mode: direct icons with tooltips
+              <div className="space-y-0.5">
+                {DASHBOARD_ITEMS.map(item => renderNavItem(item, 'AI Dashboards'))}
+              </div>
+            ) : (
+              // Expanded mode: collapsible accordion
               <div className="flex flex-col">
                 <button
                   type="button"
-                  onClick={() => setAdminOpen(prev => !prev)}
-                  className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg transition-all text-left cursor-pointer select-none group ${
-                    isAdminActive
-                      ? 'bg-slate-100/90 text-[#0F172A] font-semibold'
-                      : 'text-[#475569] hover:bg-[#F1F5F9] hover:text-[#0F172A]'
+                  onClick={() => setDashboardsOpen(prev => !prev)}
+                  className={`w-full flex items-center justify-between px-2 py-1.5 rounded-[var(--radius-element)] transition-all duration-[var(--transition-fast)] text-left cursor-pointer select-none group text-xs ${
+                    isDashboardActive
+                      ? 'bg-[var(--color-background-subtle)] text-black font-semibold'
+                      : 'text-black hover:bg-[var(--color-background-subtle)] font-medium'
                   }`}
-                  aria-expanded={adminOpen}
+                  aria-expanded={dashboardsOpen}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <span className={`material-symbols-outlined text-[18px] transition-colors ${
-                      isAdminActive ? 'text-indigo-600' : 'text-[#64748B] group-hover:text-[#0F172A]'
-                    }`}>
-                      admin_panel_settings
+                    <span className="material-symbols-outlined text-[17px] text-black shrink-0">
+                      dashboard_customize
                     </span>
-                    <span className="font-semibold text-xs tracking-tight truncate">Administration</span>
-                    {isAdminActive && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 shrink-0" />
+                    <span className="truncate tracking-tight text-black font-semibold">AI Dashboards</span>
+                    {isDashboardActive && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-primary)] shrink-0" />
                     )}
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <span className={`material-symbols-outlined text-[18px] text-[#64748B] transition-transform duration-200 ${
-                      adminOpen ? 'rotate-180' : ''
-                    }`}>
-                      keyboard_arrow_down
-                    </span>
-                  </div>
+                  <span
+                    className={`material-symbols-outlined text-[16px] text-black transition-transform duration-150 shrink-0 ${
+                      dashboardsOpen ? 'rotate-180' : ''
+                    }`}
+                  >
+                    keyboard_arrow_down
+                  </span>
                 </button>
 
-                {adminOpen && (
-                  <div className="pl-2 ml-3.5 border-l border-slate-200 flex flex-col gap-0.5 my-1 animate-in fade-in duration-150">
-                    {adminItems.map(renderNavItem)}
+                {dashboardsOpen && (
+                  <div className="pl-2 ml-3.5 border-l border-[var(--color-border)] flex flex-col gap-0.5 my-1">
+                    {DASHBOARD_ITEMS.map(item => renderNavItem(item))}
                   </div>
                 )}
               </div>
             )}
 
-            {/* Other Pages Left As They Are */}
-            <div className="pt-2 mt-1 border-t border-[#E2E8F0] flex flex-col gap-1">
-              <div className="px-2 py-1">
-                <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
-                  Other Services
-                </span>
-              </div>
-              {otherItems.map(renderNavItem)}
+            {/* 2) Administration Section (Admin / Admin+User only) */}
+            {isAdmin && (
+              <>
+                {effectiveCollapsed ? (
+                  <div className="pt-2 my-1 border-t border-[var(--color-border)] space-y-0.5">
+                    {ADMIN_ITEMS.map(item => renderNavItem(item, 'Administration'))}
+                  </div>
+                ) : (
+                  <div className="flex flex-col mt-1">
+                    <button
+                      type="button"
+                      onClick={() => setAdminOpen(prev => !prev)}
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-[var(--radius-element)] transition-all duration-[var(--transition-fast)] text-left cursor-pointer select-none group text-xs ${
+                        isAdminActive
+                          ? 'bg-[var(--color-background-subtle)] text-black font-semibold'
+                          : 'text-black hover:bg-[var(--color-background-subtle)] font-medium'
+                      }`}
+                      aria-expanded={adminOpen}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="material-symbols-outlined text-[17px] text-black shrink-0">
+                          admin_panel_settings
+                        </span>
+                        <span className="truncate tracking-tight text-black font-semibold">Administration</span>
+                        {isAdminActive && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-indigo)] shrink-0" />
+                        )}
+                      </div>
+                      <span
+                        className={`material-symbols-outlined text-[16px] text-black transition-transform duration-150 shrink-0 ${
+                          adminOpen ? 'rotate-180' : ''
+                        }`}
+                      >
+                        keyboard_arrow_down
+                      </span>
+                    </button>
+
+                    {adminOpen && (
+                      <div className="pl-2 ml-3.5 border-l border-[var(--color-border)] flex flex-col gap-0.5 my-1">
+                        {ADMIN_ITEMS.map(item => renderNavItem(item))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* 3) Other Services Section */}
+            <div className="pt-2 my-1 border-t border-[var(--color-border)] flex flex-col gap-0.5">
+              {!effectiveCollapsed && (
+                <div className="px-2 py-1 mb-0.5">
+                  <span className="text-[10px] uppercase tracking-wider text-black font-bold">
+                    Other Services
+                  </span>
+                </div>
+              )}
+              {OTHER_ITEMS.map(item => renderNavItem(item, 'Other Services'))}
             </div>
           </nav>
         </div>
 
-        {/* User Profile & Direct Log Out Button at Bottom of Sidebar */}
-        <div className="p-2.5 sm:p-3 border-t border-[#E2E8F0] bg-white shrink-0 mt-auto pb-safe space-y-1.5">
-          <div className="p-2 rounded-lg bg-slate-50 border border-slate-200/70">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-[11px] shrink-0 shadow-2xs">
-                {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-semibold text-slate-900 truncate" title={user?.name || displayRole}>
-                  {user?.name || displayRole}
-                </div>
-                {user?.email && (
-                  <div className="text-[10px] text-slate-500 truncate font-mono" title={user.email}>
-                    {user.email}
+        {/* User Profile & Direct Log Out Footer */}
+        <div className="p-2 border-t border-[var(--color-border)] bg-[var(--color-background-surface)] shrink-0 mt-auto pb-safe space-y-1.5">
+          {!effectiveCollapsed ? (
+            <>
+              {/* User Identity Card */}
+              <div className="p-2 rounded-[var(--radius-element)] bg-[var(--color-background-subtle)] border border-[var(--color-border)]">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-full bg-black text-white flex items-center justify-center font-medium text-[11px] shrink-0">
+                    {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
                   </div>
-                )}
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className="text-xs font-semibold text-black truncate"
+                      title={user?.name || displayRole}
+                    >
+                      {user?.name || displayRole}
+                    </div>
+                    {user?.email && (
+                      <div
+                        className="text-[10px] text-black truncate font-mono"
+                        title={user.email}
+                      >
+                        {user.email}
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded-[var(--radius-inner)] shrink-0 bg-neutral-200 text-black">
+                    {displayRole}
+                  </span>
+                </div>
               </div>
-              <span className={`text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                isAdmin ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-700'
-              }`}>
-                {displayRole}
-              </span>
-            </div>
-          </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              onClose();
-              if (onLogout) {
-                onLogout();
-              } else {
-                onNavigate('enterprise-signin');
-              }
-            }}
-            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-600 hover:text-rose-600 hover:bg-rose-50/70 border border-slate-200/80 hover:border-rose-200 transition-all text-xs font-semibold cursor-pointer group"
-          >
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-[17px] text-slate-400 group-hover:text-rose-500 group-hover:-translate-x-0.5 transition-all">
-                logout
-              </span>
-              <span>Log Out</span>
+              {/* Log Out Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  if (onLogout) {
+                    onLogout();
+                  } else {
+                    onNavigate('enterprise-signin');
+                  }
+                }}
+                className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-[var(--radius-element)] text-black hover:text-[var(--color-error)] hover:bg-[var(--color-error-soft)] border border-[var(--color-border)] hover:border-[var(--color-error-muted)] transition-all text-xs font-medium cursor-pointer group"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[16px] text-black group-hover:text-[var(--color-error)] transition-colors">
+                    logout
+                  </span>
+                  <span className="font-semibold text-black group-hover:text-[var(--color-error)]">
+                    Log Out
+                  </span>
+                </div>
+                <span className="text-[10px] text-black group-hover:text-[var(--color-error)] font-mono transition-colors">
+                  End Session
+                </span>
+              </button>
+            </>
+          ) : (
+            // Collapsed Mode Footer
+            <div className="flex flex-col items-center gap-1.5 py-1">
+              {/* User Avatar with Tooltip */}
+              <div className="relative group cursor-pointer">
+                <div className="w-8 h-8 rounded-full bg-black text-white flex items-center justify-center font-medium text-xs shadow-[var(--shadow-2xs)]">
+                  {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
+                </div>
+                <NavTooltip
+                  label={user?.name || displayRole}
+                  badge={displayRole}
+                  group={user?.email || undefined}
+                />
+              </div>
+
+              {/* Collapsed Log Out Button with Tooltip */}
+              <div className="relative group">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    if (onLogout) {
+                      onLogout();
+                    } else {
+                      onNavigate('enterprise-signin');
+                    }
+                  }}
+                  aria-label="Log Out"
+                  className="w-8 h-8 rounded-[var(--radius-element)] text-black hover:text-[var(--color-error)] hover:bg-[var(--color-error-soft)] transition-colors flex items-center justify-center cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[17px] text-black">logout</span>
+                </button>
+                <NavTooltip label="Log Out" badge="End Session" />
+              </div>
             </div>
-            <span className="text-[10px] text-slate-400 group-hover:text-rose-400 font-mono transition-colors">End Session</span>
-          </button>
+          )}
         </div>
       </aside>
     </>

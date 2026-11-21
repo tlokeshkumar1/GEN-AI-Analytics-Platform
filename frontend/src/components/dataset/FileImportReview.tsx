@@ -146,188 +146,310 @@ export function FileImportReview({
     finally { setBusy(false); }
   };
 
-  const input = 'border border-slate-300 rounded-lg p-2 w-full';
+  const inputClass = 'h-8 px-2.5 rounded-[var(--radius-element)] border border-[var(--color-border)] bg-[var(--color-background-surface)] text-[var(--color-text-primary)] text-xs w-full focus:border-[var(--color-primary)] focus:outline-none';
   const effectiveTableName = tableDestMode === 'new' ? (newTableName.trim() || defaultTableName) : tableDestMode === 'existing' ? existingTableName : '';
 
-  return <section className="bg-white rounded-2xl border border-blue-200 p-5 space-y-4">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div>
-        <h2 className="font-semibold text-lg text-slate-900">Review import: {file.name}</h2>
-        <p className="text-sm text-slate-500">The original source is preserved. Preview these settings before saving a version.</p>
-      </div>
-      <span className="text-xs bg-blue-50 text-blue-700 px-3 py-1 rounded-full font-medium border border-blue-100">
-        AI RAG Vector Store + Direct Relational Cloud Storage
-      </span>
-    </div>
-
-    {error && <p role="alert" className="text-red-700 bg-red-50 p-3 rounded-lg text-sm">{error}</p>}
-
-    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-      {!!sheets.length && <label>Worksheet<select className={input} value={options.sheet || ''} onChange={e => {
-        const nextSheetName = e.target.value || null;
-        const sheetInfo = sheets.find(s => s.name === nextSheetName) || sheets[0];
-        if (!tableUserEdited && nextSheetName) {
-          setNewTableName(deriveDefaultTableName(nextSheetName));
-        }
-        change({
-          sheet: nextSheetName,
-          table: null,
-          ...(typeof sheetInfo?.suggested_header_row === 'number' ? { header_row: sheetInfo.suggested_header_row } : {}),
-        });
-      }}>
-        <option value="">{sheets.length === 1 ? sheets[0].name : 'Choose a sheet'}</option>{sheets.map(sheet => <option key={sheet.name} value={sheet.name}>{sheet.name}</option>)}
-      </select></label>}
-      {!!sheets.find(s => s.name === (options.sheet || sheets[0]?.name))?.tables.length && <label>Table<select className={input} value={options.table || ''} onChange={e => change({ table: e.target.value || null })}>
-        <option value="">Select a table or use the sheet</option>{sheets.find(s => s.name === (options.sheet || sheets[0]?.name))?.tables.map(table => <option key={table.name}>{table.name}</option>)}
-      </select></label>}
-      <label>Header row<input type="number" min={1} className={input} value={options.header_row} onChange={e => change({ header_row: Number(e.target.value) })} /></label>
-      <label>Duplicate policy<select className={input} value={options.duplicate_policy} onChange={e => change({ duplicate_policy: e.target.value })}>
-        <option value="keep">Keep repeated transactions</option><option value="reject">Require review if duplicates exist</option><option value="drop">Remove exact duplicate rows</option>
-      </select></label>
-      <label>Decimal separator<select className={input} value={options.decimal_separator} onChange={e => change({ decimal_separator: e.target.value })}><option>.</option><option>,</option></select></label>
-      <label>Thousands separator<select className={input} value={options.thousands_separator || ''} onChange={e => change({ thousands_separator: e.target.value || null })}><option value="">None</option><option>,</option><option>.</option><option value=" ">Space</option></select></label>
-      <label>Date format<input placeholder="e.g. %d/%m/%Y" className={input} value={options.date_format || ''} onChange={e => change({ date_format: e.target.value || null })} /></label>
-      <label>Time zone<input placeholder="e.g. Asia/Kolkata" className={input} value={options.timezone || ''} onChange={e => change({ timezone: e.target.value || null })} /></label>
-      {file.name.toLowerCase().endsWith('.csv') && <label>CSV delimiter<input maxLength={1} className={input} value={options.delimiter || ','} onChange={e => change({ delimiter: e.target.value })} /></label>}
-    </div>
-
-    {/* SAP HANA Cloud Relational Destination Table Configuration */}
-    <div className="rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/70 to-indigo-50/50 p-4 space-y-3">
+  return (
+    <section className="bg-[var(--color-background-surface)] rounded-[var(--radius-container)] border border-[var(--color-border)] p-4 sm:p-5 space-y-4 shadow-[var(--shadow-xs)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-blue-600 text-lg">cloud_upload</span>
-          <h3 className="font-semibold text-slate-800 text-sm">SAP HANA Cloud Table Destination</h3>
+        <div>
+          <h2 className="font-semibold text-sm text-[var(--color-text-primary)]">Review import: {file.name}</h2>
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">The original source is preserved. Preview these settings before saving a version.</p>
         </div>
-        <span className="text-xs bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded-full font-medium">
-          Direct SQL Table Access
+        <span className="text-[11px] bg-[var(--color-primary-soft)] text-[var(--color-primary)] px-2.5 py-0.5 rounded-[var(--radius-full)] font-medium border border-[var(--color-primary-muted)]">
+          AI RAG Vector Store + Direct Relational Cloud Storage
         </span>
       </div>
-      <p className="text-xs text-slate-600">
-        Choose which relational table in SAP HANA Cloud this tabular data must be stored in so you can access it directly with SQL.
-        Text chunking, 1536-dim vector embeddings in <code className="bg-white/80 px-1 py-0.5 rounded text-blue-700 font-mono">VECTOR_TABLE</code>, and version snapshots will also run in parallel.
-      </p>
 
-      <div className="flex flex-wrap gap-5 text-xs font-medium text-slate-700 pt-1">
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="radio"
-            name="tableDestMode"
-            value="new"
-            checked={tableDestMode === 'new'}
-            onChange={() => setTableDestMode('new')}
-            className="text-blue-600 focus:ring-blue-500"
-          />
-          <span>Create New Table in Cloud</span>
+      {error && (
+        <p role="alert" className="text-[var(--color-error)] bg-[var(--color-error-soft)] border border-[var(--color-error-muted)] p-2.5 rounded-[var(--radius-element)] text-xs font-medium">
+          {error}
+        </p>
+      )}
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+        {!!sheets.length && (
+          <label className="flex flex-col gap-1 font-medium text-[var(--color-text-secondary)]">
+            <span>Worksheet</span>
+            <select className={inputClass} value={options.sheet || ''} onChange={e => {
+              const nextSheetName = e.target.value || null;
+              const sheetInfo = sheets.find(s => s.name === nextSheetName) || sheets[0];
+              if (!tableUserEdited && nextSheetName) {
+                setNewTableName(deriveDefaultTableName(nextSheetName));
+              }
+              change({
+                sheet: nextSheetName,
+                table: null,
+                ...(typeof sheetInfo?.suggested_header_row === 'number' ? { header_row: sheetInfo.suggested_header_row } : {}),
+              });
+            }}>
+              <option value="">{sheets.length === 1 ? sheets[0].name : 'Choose a sheet'}</option>
+              {sheets.map(sheet => <option key={sheet.name} value={sheet.name}>{sheet.name}</option>)}
+            </select>
+          </label>
+        )}
+        {!!sheets.find(s => s.name === (options.sheet || sheets[0]?.name))?.tables.length && (
+          <label className="flex flex-col gap-1 font-medium text-[var(--color-text-secondary)]">
+            <span>Table</span>
+            <select className={inputClass} value={options.table || ''} onChange={e => change({ table: e.target.value || null })}>
+              <option value="">Select a table or use the sheet</option>
+              {sheets.find(s => s.name === (options.sheet || sheets[0]?.name))?.tables.map(table => <option key={table.name}>{table.name}</option>)}
+            </select>
+          </label>
+        )}
+        <label className="flex flex-col gap-1 font-medium text-[var(--color-text-secondary)]">
+          <span>Header row</span>
+          <input type="number" min={1} className={inputClass} value={options.header_row} onChange={e => change({ header_row: Number(e.target.value) })} />
         </label>
-        {cloudTables.length > 0 && (
+        <label className="flex flex-col gap-1 font-medium text-[var(--color-text-secondary)]">
+          <span>Duplicate policy</span>
+          <select className={inputClass} value={options.duplicate_policy} onChange={e => change({ duplicate_policy: e.target.value })}>
+            <option value="keep">Keep repeated transactions</option>
+            <option value="reject">Require review if duplicates exist</option>
+            <option value="drop">Remove exact duplicate rows</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 font-medium text-[var(--color-text-secondary)]">
+          <span>Decimal separator</span>
+          <select className={inputClass} value={options.decimal_separator} onChange={e => change({ decimal_separator: e.target.value })}>
+            <option>.</option>
+            <option>,</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 font-medium text-[var(--color-text-secondary)]">
+          <span>Thousands separator</span>
+          <select className={inputClass} value={options.thousands_separator || ''} onChange={e => change({ thousands_separator: e.target.value || null })}>
+            <option value="">None</option>
+            <option>,</option>
+            <option>.</option>
+            <option value=" ">Space</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 font-medium text-[var(--color-text-secondary)]">
+          <span>Date format</span>
+          <input placeholder="e.g. %d/%m/%Y" className={inputClass} value={options.date_format || ''} onChange={e => change({ date_format: e.target.value || null })} />
+        </label>
+        <label className="flex flex-col gap-1 font-medium text-[var(--color-text-secondary)]">
+          <span>Time zone</span>
+          <input placeholder="e.g. Asia/Kolkata" className={inputClass} value={options.timezone || ''} onChange={e => change({ timezone: e.target.value || null })} />
+        </label>
+        {file.name.toLowerCase().endsWith('.csv') && (
+          <label className="flex flex-col gap-1 font-medium text-[var(--color-text-secondary)]">
+            <span>CSV delimiter</span>
+            <input maxLength={1} className={inputClass} value={options.delimiter || ','} onChange={e => change({ delimiter: e.target.value })} />
+          </label>
+        )}
+      </div>
+
+      {/* SAP HANA Cloud Table Destination Configuration */}
+      <div className="rounded-[var(--radius-element)] border border-[var(--color-border)] bg-[var(--color-background-subtle)] p-3.5 space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[var(--color-primary)] text-[18px]">cloud_upload</span>
+            <h3 className="font-semibold text-[var(--color-text-primary)] text-xs">SAP HANA Cloud Table Destination</h3>
+          </div>
+          <span className="text-[10px] bg-[var(--color-background-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)] px-2 py-0.5 rounded-[var(--radius-full)] font-medium">
+            Direct SQL Table Access
+          </span>
+        </div>
+        <p className="text-[11px] text-[var(--color-text-muted)]">
+          Choose which relational table in SAP HANA Cloud this tabular data must be stored in so you can access it directly with SQL.
+        </p>
+
+        <div className="flex flex-wrap gap-4 text-xs font-medium text-[var(--color-text-secondary)] pt-1">
           <label className="flex items-center gap-1.5 cursor-pointer">
             <input
               type="radio"
               name="tableDestMode"
-              value="existing"
-              checked={tableDestMode === 'existing'}
-              onChange={() => setTableDestMode('existing')}
-              className="text-blue-600 focus:ring-blue-500"
+              value="new"
+              checked={tableDestMode === 'new'}
+              onChange={() => setTableDestMode('new')}
+              className="text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
             />
-            <span>Insert into Existing Table ({cloudTables.length} available)</span>
+            <span>Create New Table in Cloud</span>
           </label>
+          {cloudTables.length > 0 && (
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="radio"
+                name="tableDestMode"
+                value="existing"
+                checked={tableDestMode === 'existing'}
+                onChange={() => setTableDestMode('existing')}
+                className="text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
+              />
+              <span>Insert into Existing Table ({cloudTables.length} available)</span>
+            </label>
+          )}
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="radio"
+              name="tableDestMode"
+              value="none"
+              checked={tableDestMode === 'none'}
+              onChange={() => setTableDestMode('none')}
+              className="text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
+            />
+            <span>Vector &amp; File Store Only</span>
+          </label>
+        </div>
+
+        {tableDestMode === 'new' && (
+          <div className="grid sm:grid-cols-2 gap-3 pt-1">
+            <label className="text-xs font-medium text-[var(--color-text-secondary)] flex flex-col gap-1">
+              <span>HANA Table Name</span>
+              <input
+                type="text"
+                className={`${inputClass} font-mono uppercase text-xs`}
+                placeholder="e.g. ENTERPRISE_DATASET_V1"
+                value={newTableName}
+                onChange={e => {
+                  setNewTableName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'));
+                  setTableUserEdited(true);
+                }}
+              />
+            </label>
+            <div className="flex items-center text-[11px] text-[var(--color-text-muted)] pt-4">
+              Will automatically create a typed <strong className="font-semibold text-[var(--color-text-primary)] ml-1">COLUMN TABLE</strong> in SAP HANA Cloud.
+            </div>
+          </div>
         )}
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="radio"
-            name="tableDestMode"
-            value="none"
-            checked={tableDestMode === 'none'}
-            onChange={() => setTableDestMode('none')}
-            className="text-blue-600 focus:ring-blue-500"
-          />
-          <span>Vector & File Store Only (Skip dedicated table)</span>
-        </label>
+
+        {tableDestMode === 'existing' && (
+          <div className="grid sm:grid-cols-2 gap-3 pt-1">
+            <label className="text-xs font-medium text-[var(--color-text-secondary)] flex flex-col gap-1">
+              <span>Choose Existing HANA Table</span>
+              <select
+                className={`${inputClass} text-xs font-mono`}
+                value={existingTableName}
+                onChange={e => setExistingTableName(e.target.value)}
+              >
+                {cloudTables.map(t => (
+                  <option key={t.name} value={t.name}>
+                    {t.name} ({t.rowCount.toLocaleString()} rows, {t.columnCount} columns)
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-[var(--color-text-secondary)] flex flex-col gap-1">
+              <span>Operation Action</span>
+              <select
+                className={`${inputClass} text-xs`}
+                value={existingTableAction}
+                onChange={e => setExistingTableAction(e.target.value as 'append' | 'replace')}
+              >
+                <option value="append">Append (Add new rows to existing table)</option>
+                <option value="replace">Replace (Delete existing data and reload)</option>
+              </select>
+            </label>
+          </div>
+        )}
       </div>
 
-      {tableDestMode === 'new' && (
-        <div className="grid sm:grid-cols-2 gap-3 pt-2">
-          <label className="text-xs font-medium text-slate-700">
-            HANA Table Name
+      <details className="border border-[var(--color-border)] rounded-[var(--radius-element)] p-3">
+        <summary className="cursor-pointer text-xs font-medium text-[var(--color-text-primary)] select-none">
+          Units, currencies and transformations
+        </summary>
+        <p className="text-[11px] text-[var(--color-text-muted)] my-2">Map source field names to units or ISO currencies. Transformations support trim, rename and fill_missing.</p>
+        {(['units', 'currencies'] as const).map(key => (
+          <label className="block text-xs my-2 font-medium text-[var(--color-text-secondary)]" key={key}>
+            <span className="capitalize">{key}</span>
             <input
-              type="text"
-              className={`${input} font-mono uppercase text-xs mt-1 bg-white`}
-              placeholder="e.g. ENTERPRISE_DATASET_V1"
-              value={newTableName}
+              aria-label={`${key} mapping`}
+              className={`${inputClass} mt-1`}
+              placeholder='{"Amount":"USD"}'
+              value={mappings[key]}
               onChange={e => {
-                setNewTableName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'));
-                setTableUserEdited(true);
+                setProfile(null);
+                setMappings(previous => ({ ...previous, [key]: e.target.value }));
               }}
             />
           </label>
-          <div className="flex items-center text-xs text-slate-600 pt-5">
-            Will automatically create a typed <strong className="font-semibold text-slate-800 ml-1">COLUMN TABLE</strong> in SAP HANA Cloud.
+        ))}
+        <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+          <span>Transformations JSON</span>
+          <textarea
+            aria-label="Transformations JSON"
+            className="w-full mt-1 p-2 rounded-[var(--radius-element)] border border-[var(--color-border)] bg-[var(--color-background-surface)] font-mono text-xs focus:border-[var(--color-primary)] focus:outline-none"
+            rows={3}
+            value={operations}
+            onChange={e => { setOperations(e.target.value); setProfile(null); }}
+          />
+        </label>
+      </details>
+
+      {profile && (
+        <div className="space-y-2 pt-1">
+          <p className="text-xs font-medium text-[var(--color-text-primary)]">
+            {profile.profile.row_count.toLocaleString()} rows · {profile.profile.duplicate_count} matching rows · {profile.profile.fields.length} fields
+          </p>
+          {profile.profile.warnings.map((warning: string) => (
+            <p key={warning} className="text-[var(--color-warning)] text-xs">{warning}</p>
+          ))}
+          <div className="overflow-auto max-h-72 border border-[var(--color-border)] rounded-[var(--radius-element)]">
+            <table className="w-full text-xs text-left border-collapse">
+              <thead className="bg-[var(--color-background-subtle)] border-b border-[var(--color-border)] sticky top-0 text-[var(--color-text-secondary)]">
+                <tr>
+                  <th className="p-2 font-medium">Field</th>
+                  <th className="font-medium">Type</th>
+                  <th className="font-medium">Missing</th>
+                  <th className="font-medium">Distinct</th>
+                  <th className="p-2 font-medium">Examples / warnings</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)]">
+                {profile.profile.fields.map((field: any) => (
+                  <tr key={field.name} className="hover:bg-[var(--color-background-subtle)]">
+                    <td className="p-2 font-mono text-xs">{field.name}</td>
+                    <td>
+                      <select
+                        aria-label={`${field.name} source type`}
+                        className="border border-[var(--color-border)] rounded-[var(--radius-inner)] p-1 text-xs bg-[var(--color-background-surface)]"
+                        value={field.type}
+                        onChange={e => change({ column_types: { ...options.column_types, [field.name]: e.target.value } })}
+                      >
+                        {['string', 'identifier', 'integer', 'decimal', 'boolean', 'date'].map(type => (
+                          <option key={type}>{type}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>{field.missing_count}</td>
+                    <td>{field.distinct_count}</td>
+                    <td className="p-2 text-[11px] text-[var(--color-text-muted)]">
+                      {field.samples.map((v: unknown) => v == null ? 'missing' : String(v)).join(', ')}
+                      {field.warnings.length > 0 && <p className="text-[var(--color-warning)]">{field.warnings.join(' ')}</p>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
-      {tableDestMode === 'existing' && (
-        <div className="grid sm:grid-cols-2 gap-3 pt-2">
-          <label className="text-xs font-medium text-slate-700">
-            Choose Existing HANA Table
-            <select
-              className={`${input} text-xs mt-1 bg-white font-mono`}
-              value={existingTableName}
-              onChange={e => setExistingTableName(e.target.value)}
-            >
-              {cloudTables.map(t => (
-                <option key={t.name} value={t.name}>
-                  {t.name} ({t.rowCount.toLocaleString()} rows, {t.columnCount} columns)
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs font-medium text-slate-700">
-            Operation Action
-            <select
-              className={`${input} text-xs mt-1 bg-white`}
-              value={existingTableAction}
-              onChange={e => setExistingTableAction(e.target.value as 'append' | 'replace')}
-            >
-              <option value="append">Append (Add new rows to existing table)</option>
-              <option value="replace">Replace (Delete existing data and reload)</option>
-            </select>
-          </label>
-        </div>
-      )}
-    </div>
-
-    <details className="border rounded-lg p-3"><summary className="cursor-pointer text-sm font-medium text-slate-700">Units, currencies and transformations</summary>
-      <p className="text-xs text-slate-500 my-2">Map source field names to units or ISO currencies. Transformations support trim, rename and fill_missing; preview shows their effects.</p>
-      {(['units', 'currencies'] as const).map(key => <label className="block text-sm my-2" key={key}>{key}<input aria-label={`${key} mapping`} className={input} placeholder='{"Amount":"USD"}' value={mappings[key]} onChange={e => {
-        setProfile(null); setMappings(previous => ({ ...previous, [key]: e.target.value }));
-      }} /></label>)}
-      <label className="block text-sm">Transformations JSON<textarea aria-label="Transformations JSON" className={`${input} font-mono text-xs`} rows={3} value={operations} onChange={e => { setOperations(e.target.value); setProfile(null); }} /></label>
-    </details>
-
-    {profile && <>
-      <p className="text-sm font-medium text-slate-800">{profile.profile.row_count.toLocaleString()} rows · {profile.profile.duplicate_count} matching rows · {profile.profile.fields.length} fields</p>
-      {profile.profile.warnings.map((warning: string) => <p key={warning} className="text-amber-800 text-sm">{warning}</p>)}
-      <div className="overflow-auto max-h-72 border rounded-lg"><table className="w-full text-sm text-left">
-        <thead className="bg-slate-50 sticky top-0"><tr><th className="p-2">Field</th><th>Type</th><th>Missing</th><th>Distinct</th><th className="p-2">Examples / warnings</th></tr></thead>
-        <tbody>
-          {profile.profile.fields.map((field: any) => <tr key={field.name} className="border-t"><td className="p-2 font-mono text-xs">{field.name}</td><td><select aria-label={`${field.name} source type`} className="border rounded p-1 text-xs" value={field.type} onChange={e => change({ column_types: { ...options.column_types, [field.name]: e.target.value } })}>
-            {['string', 'identifier', 'integer', 'decimal', 'boolean', 'date'].map(type => <option key={type}>{type}</option>)}</select></td>
-            <td>{field.missing_count}</td><td>{field.distinct_count}</td><td className="p-2 text-xs">{field.samples.map((v: unknown) => v == null ? 'missing' : String(v)).join(', ')}<p className="text-amber-800">{field.warnings.join(' ')}</p></td></tr>)}
-        </tbody>
-      </table></div>
-    </>}
-
-    <div className="flex flex-wrap items-center gap-2 pt-2">
-      <button disabled={busy} className="border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg px-4 py-2 text-sm font-medium" onClick={() => void preview()}>
-        {busy ? 'Validating...' : 'Preview and validate'}
-      </button>
-      <button disabled={busy || !profile} className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-5 py-2 text-sm font-medium disabled:opacity-40 shadow-sm" onClick={() => void commit()}>
-        {busy ? 'Processing...' : (tableDestMode !== 'none' && effectiveTableName ? `Save Version & Store into HANA Table '${effectiveTableName}'` : 'Save dataset version')}
-      </button>
-      <button disabled={busy} className="border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg px-4 py-2 text-sm" onClick={onCancel}>
-        Cancel
-      </button>
-    </div>
-  </section>;
+      <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--color-border)]">
+        <button
+          disabled={busy}
+          className="border border-[var(--color-border)] bg-[var(--color-background-surface)] hover:bg-[var(--color-background-muted)] text-[var(--color-text-primary)] rounded-[var(--radius-element)] px-3.5 py-1.5 text-xs font-medium cursor-pointer transition-colors"
+          onClick={() => void preview()}
+        >
+          {busy ? 'Validating…' : 'Preview and validate'}
+        </button>
+        <button
+          disabled={busy || !profile}
+          className="bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white rounded-[var(--radius-element)] px-4 py-1.5 text-xs font-medium disabled:opacity-40 shadow-[var(--shadow-xs)] cursor-pointer transition-colors"
+          onClick={() => void commit()}
+        >
+          {busy ? 'Processing…' : (tableDestMode !== 'none' && effectiveTableName ? `Save Version & Store into '${effectiveTableName}'` : 'Save dataset version')}
+        </button>
+        <button
+          disabled={busy}
+          className="border border-[var(--color-border)] bg-[var(--color-background-surface)] hover:bg-[var(--color-background-muted)] text-[var(--color-text-secondary)] rounded-[var(--radius-element)] px-3.5 py-1.5 text-xs font-medium cursor-pointer transition-colors"
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+    </section>
+  );
 }

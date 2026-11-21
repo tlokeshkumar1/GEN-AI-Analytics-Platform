@@ -62,51 +62,52 @@ export const ReportsLibrary: React.FC<ReportsLibraryProps> = ({ onNavigate }) =>
   };
 
   return (
-    <div className="flex flex-col w-full max-w-[1560px] mx-auto space-y-6 pb-28">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-space-md">
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB]"></span>
-            <span className="font-label-sm uppercase tracking-widest text-[#64748B] font-semibold">
+    <div className="flex flex-col w-full max-w-[1560px] mx-auto space-y-3.5 pb-16">
+      {/* Sleek Single-Row Page Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-1 border-b border-[var(--color-border)]">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[var(--color-text-primary)] flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined text-[18px]">description</span>
+          </div>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-base font-semibold text-[var(--color-text-primary)] tracking-tight">Reports Library</h1>
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[var(--radius-full)] text-[11px] font-medium bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               Enterprise Reporting · SAP BTP Dispatch
             </span>
+            <span className="text-xs text-[var(--color-text-muted)] font-mono hidden sm:inline">
+              · {reports.length} reports
+            </span>
           </div>
-          <h1 className="font-headline-xl text-[#0F172A] font-semibold tracking-tight">
-            Reports Library
-          </h1>
-          <p className="font-body-md text-[#475569] mt-1">
-            Certified fiscal reports, automated board decks, and compliance exports generated from the HANA Column Store.
-          </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0 self-start md:self-end mt-2 md:mt-0">
+        <div className="flex items-center gap-2 shrink-0">
           <button 
             onClick={() => onNavigate('build-your-kpi-graph-studio')}
-            className="inline-flex items-center justify-center gap-1.5 h-9 px-4 rounded-xl bg-white text-[#0F172A] font-label-md text-label-md hover:bg-[#F1F5F9] transition-colors shadow-xs border border-[#CBD5E1] whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] font-medium text-xs shadow-[var(--shadow-2xs)] transition-colors cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[16px] text-[#2563EB]">add</span>
+            <span className="material-symbols-outlined text-[16px]">add</span>
             <span>Create New Report</span>
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-space-md">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
         {reports.map((rep) => (
           <div 
             key={rep.id}
-            className="bg-white p-6 rounded-2xl shadow-xs border border-[#E2E8F0] flex flex-col justify-between hover:border-[#CBD5E1] transition-all"
+            className="bg-[var(--color-surface)] p-4 rounded-[var(--radius-container)] shadow-[var(--shadow-2xs)] border border-[var(--color-border)] flex flex-col justify-between hover:border-[var(--color-border-strong)] transition-all"
           >
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-slate-500">
+                <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">
                   {rep.type}
                 </span>
-                <span className="text-xs font-mono text-[#64748B] bg-[#F1F5F9] px-2 py-0.5 rounded-md border border-[#E2E8F0]">{rep.period}</span>
+                <span className="text-[10px] font-mono text-[var(--color-text-muted)] bg-[var(--color-surface-hover)] px-2 py-0.5 rounded-[var(--radius-inner)] border border-[var(--color-border)]">{rep.period}</span>
               </div>
-              <h3 className="font-headline-sm font-semibold text-[#0F172A] mb-2">
+              <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-1.5 leading-snug">
                 {rep.title}
               </h3>
-              <div className="flex items-center gap-3 text-xs text-[#64748B] mb-4">
+              <div className="flex items-center gap-2.5 text-xs text-[var(--color-text-muted)] mb-3">
                 <span>{rep.format}</span>
                 <span>•</span>
                 <span>{rep.size}</span>
@@ -115,17 +116,17 @@ export const ReportsLibrary: React.FC<ReportsLibraryProps> = ({ onNavigate }) =>
               </div>
             </div>
 
-            <div className="pt-4 border-t border-[#E2E8F0] flex items-center justify-between">
-              <span className="text-xs font-medium text-[#15803D] bg-[#DCFCE7] border border-[#BBF7D0] px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                <span className="material-symbols-outlined text-[13px] text-[#16A34A]">verified</span>
+            <div className="pt-3 border-t border-[var(--color-border)] flex items-center justify-between">
+              <span className="text-[11px] font-medium text-[var(--color-success)] bg-[var(--color-success-subtle)] border border-[var(--color-success-border)] px-2 py-0.5 rounded-[var(--radius-full)] flex items-center gap-1">
+                <span className="material-symbols-outlined text-[13px] text-[var(--color-success)]">verified</span>
                 Audit Signed
               </span>
               <button 
                 onClick={() => handleDownload(rep.id, rep.title)}
                 disabled={downloadingId === rep.id}
-                className="px-4 py-1.5 rounded-xl bg-[#F8FAFC] hover:bg-[#F1F5F9] text-[#0F172A] border border-[#E2E8F0] text-xs font-medium transition-colors flex items-center gap-1.5"
+                className="px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs font-medium transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
-                <span className={`material-symbols-outlined text-[16px] text-[#2563EB] ${downloadingId === rep.id ? 'animate-spin' : ''}`}>
+                <span className={`material-symbols-outlined text-[15px] text-[var(--color-primary)] ${downloadingId === rep.id ? 'animate-spin' : ''}`}>
                   {downloadingId === rep.id ? 'refresh' : 'download'}
                 </span>
                 <span>{downloadingId === rep.id ? 'Exporting...' : 'Download'}</span>

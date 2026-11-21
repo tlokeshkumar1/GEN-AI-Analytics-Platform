@@ -1,10 +1,16 @@
-"""Track and persist user logins and active sessions specifically for this project (GEN-AI Analytics Platform)."""
+"""Track and persist user logins and active sessions specifically for this project (GEN-AI Analytics Platform).
+
+Persistence architecture:
+100% Cloud-Native: SAP HANA Cloud `DATASETS_METADATA` table using
+reserved system dataset id `__project_sessions__` and `PLATFORM_METADATA` store.
+Zero local disk dependencies or file creation.
+"""
 import json
 import logging
 import os
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -13,44 +19,65 @@ _LOGINS_CACHE: dict[str, str] = {}
 _ACTIVE_SESSIONS: set[str] = set()
 _INITIALIZED = False
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-LOCAL_FILE = DATA_DIR / "project_user_logins.json"
-ACTIVE_FILE = DATA_DIR / "active_project_sessions.json"
 NAMESPACE = "project_user_logins"
+HANA_SYSTEM_DATASET_ID = "__project_sessions__"
 
 
-def _load_local_file() -> dict[str, str]:
+def _load_from_hana() -> Tuple[dict[str, str], set[str]]:
+    """Load logins and active sessions from SAP HANA Cloud DATASETS_METADATA."""
     try:
-        if LOCAL_FILE.exists():
-            return json.loads(LOCAL_FILE.read_text(encoding="utf-8"))
+        from api.database.hana_client import hana_client
+        if not hana_client:
+            return {}, set()
+
+        workspace_id = os.getenv("PLATFORM_WORKSPACE_ID", "default")
+        sql = """
+            SELECT METADATA_JSON
+            FROM DATASETS_METADATA
+            WHERE WORKSPACE_ID = ? AND DATASET_ID = ?
+        """
+        rows = hana_client.execute_query(sql, (workspace_id, HANA_SYSTEM_DATASET_ID))
+        if rows and rows[0].get("METADATA_JSON"):
+            meta_raw = rows[0]["METADATA_JSON"]
+            meta = json.loads(meta_raw) if isinstance(meta_raw, str) else (meta_raw or {})
+            logins = meta.get("logins") or {}
+            active = set(meta.get("active_sessions") or [])
+            logger.info(
+                f"[Cloud Persistence] Loaded {len(logins)} logins and {len(active)} active sessions "
+                f"from HANA DATASETS_METADATA ({HANA_SYSTEM_DATASET_ID})"
+            )
+            return logins, active
     except Exception as exc:
-        logger.warning("Could not read local project logins file: %s", exc)
-    return {}
+        logger.debug(f"[Cloud Persistence] Could not load from HANA DATASETS_METADATA: {exc}")
+    return {}, set()
 
 
-def _save_local_file(data: dict[str, str]) -> None:
+def _save_to_hana(logins: dict[str, str], active_sessions: set[str]) -> bool:
+    """Persist logins and active sessions directly into SAP HANA Cloud DATASETS_METADATA."""
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        LOCAL_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        from api.database.hana_client import hana_client
+        if not hana_client:
+            return False
+
+        workspace_id = os.getenv("PLATFORM_WORKSPACE_ID", "default")
+        payload = json.dumps({
+            "logins": logins,
+            "active_sessions": sorted(list(active_sessions)),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, ensure_ascii=False)
+
+        sql = """
+            UPSERT DATASETS_METADATA (
+                WORKSPACE_ID, DATASET_ID, NAME, FOLDER, CURRENT_VERSION,
+                IS_ACTIVE, OWNER_ID, VERSIONS_JSON, METADATA_JSON, UPDATED_AT
+            ) VALUES (?, ?, 'Project Session & Login Tracking', '__system__', 1, FALSE, 'SYSTEM', '[]', ?, CURRENT_TIMESTAMP)
+            WITH PRIMARY KEY
+        """
+        hana_client.execute_query(sql, (workspace_id, HANA_SYSTEM_DATASET_ID, payload))
+        return True
     except Exception as exc:
-        logger.warning("Could not write local project logins file: %s", exc)
-
-
-def _load_active_file() -> set[str]:
-    try:
-        if ACTIVE_FILE.exists():
-            return set(json.loads(ACTIVE_FILE.read_text(encoding="utf-8")))
-    except Exception as exc:
-        logger.warning("Could not read active project sessions file: %s", exc)
-    return set()
-
-
-def _save_active_file(active_set: set[str]) -> None:
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        ACTIVE_FILE.write_text(json.dumps(sorted(list(active_set)), indent=2), encoding="utf-8")
-    except Exception as exc:
-        logger.warning("Could not write active project sessions file: %s", exc)
+        logger.warning(f"[Cloud Persistence] Could not save to HANA DATASETS_METADATA: {exc}")
+        return False
 
 
 def _init_cache_if_needed():
@@ -60,9 +87,13 @@ def _init_cache_if_needed():
     with _LOGINS_LOCK:
         if _INITIALIZED:
             return
-        merged = _load_local_file()
-        _ACTIVE_SESSIONS = _load_active_file()
 
+        # 1. Primary: Load from SAP HANA Cloud DATASETS_METADATA
+        cloud_logins, cloud_active = _load_from_hana()
+        merged_logins: dict[str, str] = dict(cloud_logins)
+        merged_active: set[str] = set(cloud_active)
+
+        # 2. Supplemental PLATFORM_METADATA check
         try:
             from api.platform.store import metadata_store
             store = metadata_store()
@@ -71,13 +102,20 @@ def _init_cache_if_needed():
                 val = doc.get("value") or {}
                 login_time = val.get("last_login")
                 doc_id = doc.get("id")
-                if doc_id and login_time:
-                    merged[doc_id] = login_time
+                if doc_id and login_time and doc_id not in merged_logins:
+                    merged_logins[doc_id] = login_time
+                if doc_id and val.get("is_active"):
+                    merged_active.add(doc_id)
         except Exception as exc:
             logger.debug("Could not load project logins from MetadataStore: %s", exc)
 
-        _LOGINS_CACHE = merged
+        _LOGINS_CACHE = merged_logins
+        _ACTIVE_SESSIONS = merged_active
         _INITIALIZED = True
+
+        # If HANA was initially empty but metadata_store had records, persist to HANA
+        if not cloud_logins and merged_logins:
+            _save_to_hana(_LOGINS_CACHE, _ACTIVE_SESSIONS)
 
 
 def record_project_login(user_id: str | None = None, email: str | None = None) -> str:
@@ -99,8 +137,8 @@ def record_project_login(user_id: str | None = None, email: str | None = None) -
         for key in keys:
             _LOGINS_CACHE[key] = now_iso
             _ACTIVE_SESSIONS.add(key)
-        _save_local_file(_LOGINS_CACHE)
-        _save_active_file(_ACTIVE_SESSIONS)
+        snapshot_logins = dict(_LOGINS_CACHE)
+        snapshot_active = set(_ACTIVE_SESSIONS)
 
     # Invalidate cached user list so the updated status is reflected immediately
     try:
@@ -110,6 +148,10 @@ def record_project_login(user_id: str | None = None, email: str | None = None) -
         pass
 
     def _persist_remote():
+        # Persist directly to SAP HANA Cloud DATASETS_METADATA
+        _save_to_hana(snapshot_logins, snapshot_active)
+
+        # Also persist to PLATFORM_METADATA store for backwards compatibility
         try:
             from api.platform.store import metadata_store
             store = metadata_store()
@@ -146,7 +188,8 @@ def record_project_logout(user_id: str | None = None, email: str | None = None) 
     with _LOGINS_LOCK:
         for key in keys:
             _ACTIVE_SESSIONS.discard(key)
-        _save_active_file(_ACTIVE_SESSIONS)
+        snapshot_logins = dict(_LOGINS_CACHE)
+        snapshot_active = set(_ACTIVE_SESSIONS)
 
     # Invalidate cached user list so the updated status is reflected immediately
     try:
@@ -156,6 +199,10 @@ def record_project_logout(user_id: str | None = None, email: str | None = None) 
         pass
 
     def _persist_remote_logout():
+        # Persist to SAP HANA Cloud DATASETS_METADATA
+        _save_to_hana(snapshot_logins, snapshot_active)
+
+        # Also persist to PLATFORM_METADATA
         try:
             from api.platform.store import metadata_store
             store = metadata_store()

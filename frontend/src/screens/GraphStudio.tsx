@@ -21,9 +21,17 @@ import {
   getDashboardPublication,
   resolveJoin,
   JoinResolution,
+  generateGenAiDashboard,
+  generateGenAiDashboardStream,
+  executeGenAiWidget,
+  GenAIDashboardResponse,
+  GenAIRecommendation,
+  GenAIKpiCard,
+  GenAIChart,
 } from '../services/semanticService';
 import { AnalyticsWidget } from '../components/AnalyticsWidget';
 import { invalidateDashboardCache } from './ExecutiveDashboard';
+import { DragDropDashboardBuilder } from '../components/dashboard/DragDropDashboardBuilder';
 
 const DISPLAY_TYPES = [
   { id: 'kpi', label: 'Stat KPI', icon: 'pin' },
@@ -69,6 +77,19 @@ const TEN_STEPS = [
   { step: 'Step 10', label: 'Stateless Verification' },
 ];
 
+const GENAI_10_STEPS = [
+  { step: 'Step 1', name: 'Understand', desc: 'Natural language intent & metrics' },
+  { step: 'Step 2', name: 'Explore', desc: 'Dynamic schema & metadata inspection' },
+  { step: 'Step 3', name: 'Identify', desc: 'Columns, measures & calculations' },
+  { step: 'Step 4', name: 'Relate', desc: 'JOIN detection & key matching' },
+  { step: 'Step 5', name: 'Generate & Execute', desc: 'Dynamic SQL query execution' },
+  { step: 'Step 6', name: 'Validate', desc: 'Data consistency & calculation safety' },
+  { step: 'Step 7', name: 'Analyze', desc: 'Statistical trends & executive insights' },
+  { step: 'Step 8', name: 'Recommend', desc: 'Proactive AI widget recommendations' },
+  { step: 'Step 9', name: 'Render', desc: 'Dashboard widgets structure & layout' },
+  { step: 'Step 10', name: 'Visualize', desc: 'Interactive charts & Python graphics' },
+];
+
 type CreationMode = 'visual' | 'prompt' | 'data_options';
 
 interface CachedStudioState {
@@ -85,9 +106,11 @@ let cachedStudioState: CachedStudioState | null = null;
 export function GraphStudio({
   onNavigate,
   user,
+  initialMode = 'visual',
 }: {
   onNavigate: (path: string) => void;
   user?: { role?: string; roles?: string[] } | null;
+  initialMode?: CreationMode;
 }) {
   const canPublish = true;
   const [model, setModel] = useState<SemanticModel | null>(cachedStudioState?.model ?? null);
@@ -105,8 +128,69 @@ export function GraphStudio({
   const [datasets, setDatasets] = useState<DatasetItem[]>(cachedStudioState?.datasets ?? []);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string>(cachedStudioState?.selectedDatasetId ?? '');
 
-  // Active Pathway (3 Modes)
-  const [activeMode, setActiveMode] = useState<CreationMode>('visual');
+  // Active Creation Tab ('prompt' = 1. Generative AI Dashboards, 'dashboards' = 2. Build Your Dashboards)
+  const [activeTab, setActiveTab] = useState<'prompt' | 'dashboards'>(
+    initialMode === 'prompt' ? 'prompt' : 'dashboards'
+  );
+  // Dashboard Sub-Mode inside "Build Your Dashboards": 'manual' (Build Manually) or 'drag_drop' (Select Drag and Drop)
+  const [dashboardMode, setDashboardMode] = useState<'manual' | 'drag_drop'>(
+    initialMode === 'data_options' ? 'drag_drop' : 'manual'
+  );
+  const [isModeDropdownOpen, setIsModeDropdownOpen] = useState(false);
+
+  // Backward-compatible activeMode derived state
+  const activeMode: CreationMode = activeTab === 'prompt' ? 'prompt' : (dashboardMode === 'manual' ? 'visual' : 'data_options');
+  const setActiveMode = (mode: CreationMode) => {
+    if (mode === 'prompt') {
+      setActiveTab('prompt');
+    } else if (mode === 'visual') {
+      setActiveTab('dashboards');
+      setDashboardMode('manual');
+    } else if (mode === 'data_options') {
+      setActiveTab('dashboards');
+      setDashboardMode('drag_drop');
+    }
+  };
+
+  useEffect(() => {
+    if (initialMode === 'prompt') {
+      setActiveTab('prompt');
+    } else if (initialMode === 'data_options') {
+      setActiveTab('dashboards');
+      setDashboardMode('drag_drop');
+    } else if (initialMode === 'visual') {
+      setActiveTab('dashboards');
+      setDashboardMode('manual');
+    }
+  }, [initialMode]);
+
+  // Mode 1: Generative AI Dashboards States (Universal NLU, Dynamic SQL & Analysis-First 10 Steps)
+  const [genAiPrompt, setGenAiPrompt] = useState('');
+  const [genAiRunning, setGenAiRunning] = useState(false);
+  const [genAiStep, setGenAiStep] = useState<number>(0);
+  const [genAiStepDetail, setGenAiStepDetail] = useState<string>('');
+  const [genAiDashboard, setGenAiDashboard] = useState<GenAIDashboardResponse | null>(null);
+  const [conversationHistory, setConversationHistory] = useState<Array<{ role: string; content: string }>>([]);
+  const [activeRecommendations, setActiveRecommendations] = useState<GenAIRecommendation[]>([]);
+  const [showSqlInspector, setShowSqlInspector] = useState(false);
+  const [isAddingRecommendation, setIsAddingRecommendation] = useState<Record<string, boolean>>({});
+  const [isPublishingGenAi, setIsPublishingGenAi] = useState(false);
+  const [followUpPrompt, setFollowUpPrompt] = useState('');
+  const [chartViewModes, setChartViewModes] = useState<Record<string, 'chart' | 'table'>>({});
+  const [widgetStatuses, setWidgetStatuses] = useState<Record<string, 'approved' | 'rejected' | 'pending'>>({});
+  const [previewWidget, setPreviewWidget] = useState<{
+    id: string;
+    title: string;
+    kind: string;
+    metric?: string;
+    dimension?: string;
+    aggregation?: string;
+    format?: string;
+    value?: any;
+    data?: any[];
+    subtitle?: string;
+    sql_query?: string;
+  } | null>(null);
 
   // Mode 1: Visual KPI Builder States
   const [title, setTitle] = useState('');
@@ -522,6 +606,168 @@ export function GraphStudio({
     setMessage('Saved definition proposal. Click "Preview Live" below to verify calculations, then "Approve".');
   };
 
+  // ── Mode 1: Generative AI Dashboards Handlers (Analysis-First 10-Step Workflow) ──
+
+  const handleRunGenAiDashboard = async (customPrompt?: string) => {
+    const text = (customPrompt || genAiPrompt || promptInput).trim();
+    if (!text) return;
+    setGenAiRunning(true);
+    setError('');
+    setMessage('');
+    setGenAiStep(1);
+    setGenAiStepDetail('Step 1: Understanding natural language intent and metrics...');
+
+    try {
+      const res = await generateGenAiDashboardStream(
+        {
+          prompt: text,
+          dataset_id: selectedDatasetId === 'all' ? undefined : selectedDatasetId || undefined,
+          conversation_history: conversationHistory,
+        },
+        (stepEvent) => {
+          setGenAiStep(stepEvent.step);
+          setGenAiStepDetail(stepEvent.detail || `Executing Stage ${stepEvent.step} of 10...`);
+        }
+      );
+      setGenAiStep(10);
+      setGenAiStepDetail('All 10 stages completed successfully.');
+      setGenAiDashboard(res);
+
+      // Default all newly synthesized widgets to Approved
+      const initialStatuses: Record<string, 'approved' | 'rejected' | 'pending'> = {};
+      res.kpi_cards?.forEach(k => { initialStatuses[k.id] = 'approved'; });
+      res.charts?.forEach(c => { initialStatuses[c.id] = 'approved'; });
+      setWidgetStatuses(initialStatuses);
+
+      setActiveRecommendations(res.recommendations || []);
+      setConversationHistory(prev => [
+        ...prev,
+        { role: 'user', content: text },
+        { role: 'assistant', content: res.intent_summary || 'Dashboard generated.' },
+      ]);
+      setFollowUpPrompt('');
+      setMessage(`Successfully generated Gen AI Dashboard (${res.kpi_cards?.length || 0} KPIs, ${res.charts?.length || 0} charts) in ${res.execution_time_ms}ms.`);
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Failed to generate Generative AI Dashboard.'));
+    } finally {
+      setGenAiRunning(false);
+    }
+  };
+
+  const handleAcceptRecommendation = async (rec: GenAIRecommendation) => {
+    setIsAddingRecommendation(prev => ({ ...prev, [rec.id]: true }));
+    try {
+      const res = await executeGenAiWidget({
+        widget: rec,
+        dataset_id: selectedDatasetId === 'all' ? undefined : selectedDatasetId || undefined,
+      });
+      if (res.kind === 'kpi' && res.widget) {
+        const w = res.widget;
+        setWidgetStatuses(prev => ({ ...prev, [w.id]: 'approved' }));
+        setGenAiDashboard(prev => prev ? {
+          ...prev,
+          kpi_cards: [...prev.kpi_cards, w],
+        } : prev);
+      } else if (res.widget) {
+        const w = res.widget;
+        setWidgetStatuses(prev => ({ ...prev, [w.id]: 'approved' }));
+        setGenAiDashboard(prev => prev ? {
+          ...prev,
+          charts: [...prev.charts, w],
+        } : prev);
+      }
+      setActiveRecommendations(prev => prev.filter(r => r.id !== rec.id));
+      setMessage(`Added recommended widget "${rec.title}" directly to active dashboard!`);
+    } catch (err) {
+      setError(getApiErrorMessage(err, `Failed to add recommendation "${rec.title}".`));
+    } finally {
+      setIsAddingRecommendation(prev => ({ ...prev, [rec.id]: false }));
+    }
+  };
+
+  const handleDismissRecommendation = (recId: string) => {
+    setActiveRecommendations(prev => prev.filter(r => r.id !== recId));
+  };
+
+  const handlePublishGenAiDashboard = async () => {
+    if (!genAiDashboard) return;
+    const approvedKpis = (genAiDashboard.kpi_cards || []).filter(k => widgetStatuses[k.id] !== 'rejected');
+    const approvedCharts = (genAiDashboard.charts || []).filter(c => widgetStatuses[c.id] !== 'rejected');
+
+    if (approvedKpis.length === 0 && approvedCharts.length === 0) {
+      setError('No approved widgets to publish. Please approve at least one KPI card or chart.');
+      return;
+    }
+
+    setIsPublishingGenAi(true);
+    try {
+      const targetDataset = datasets.find(d => d.id === selectedDatasetId) || datasets[0];
+      const modelRev = model?.revision || 1;
+      const savePromises = [];
+
+      for (const kpi of approvedKpis) {
+        const item: AnalyticsDefinition = {
+          id: `genai_kpi_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          title: kpi.title,
+          kind: 'kpi',
+          revision: 1,
+          semantic_revision: modelRev,
+          dataset_id: targetDataset?.id,
+          dataset_name: targetDataset?.name,
+          source_file: targetDataset?.name,
+          explanation: `Generated by Gen AI Dashboard for: "${genAiDashboard.prompt}"`,
+          status: 'approved',
+          query_plan: {
+            metric: kpi.metric,
+            aggregation: kpi.aggregation,
+            format: kpi.format,
+          },
+          dependencies: [kpi.metric].filter(Boolean),
+        };
+        savePromises.push(saveDefinition(item));
+      }
+
+      for (const chart of approvedCharts) {
+        const item: AnalyticsDefinition = {
+          id: `genai_chart_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          title: chart.title,
+          kind: chart.kind,
+          revision: 1,
+          semantic_revision: modelRev,
+          dataset_id: targetDataset?.id,
+          dataset_name: targetDataset?.name,
+          source_file: targetDataset?.name,
+          explanation: `Generated by Gen AI Dashboard for: "${genAiDashboard.prompt}"`,
+          status: 'approved',
+          query_plan: {
+            metric: chart.metric,
+            dimension: chart.dimension,
+            aggregation: chart.aggregation,
+            chart_type: chart.kind,
+          },
+          dependencies: [chart.metric, chart.dimension].filter(Boolean),
+        };
+        savePromises.push(saveDefinition(item));
+      }
+
+      await Promise.all(savePromises);
+      invalidateDashboardCache();
+      setMessage(`Successfully published ${savePromises.length} approved widgets to the Executive Dashboard!`);
+      setPublishedSuccess(true);
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Failed to publish Gen AI Dashboard widgets.'));
+    } finally {
+      setIsPublishingGenAi(false);
+    }
+  };
+
+  const toggleChartViewMode = (chartId: string) => {
+    setChartViewModes(prev => ({
+      ...prev,
+      [chartId]: prev[chartId] === 'table' ? 'chart' : 'table'
+    }));
+  };
+
   const handleRunAgentPrompt = async () => {
     if (!promptInput.trim()) return;
     setAgentRunning(true);
@@ -634,19 +880,19 @@ export function GraphStudio({
   return (
     <div className="space-y-3.5 w-full max-w-[1560px] mx-auto pb-16">
       {/* Sleek, Single-Row Page Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 py-1.5 px-0.5 border-b border-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-1 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[var(--color-text-primary)] flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-[18px]">query_stats</span>
           </div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-base font-bold text-slate-900 tracking-tight">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-base font-semibold text-[var(--color-text-primary)] tracking-tight">
               Build Your KPI
             </h1>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-full)] text-[11px] font-medium bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               Analytics Studio
             </span>
-            <span className="text-xs text-slate-400 font-mono hidden sm:inline">
+            <span className="text-xs text-[var(--color-text-muted)] font-mono hidden sm:inline">
               · {items.length} definitions
             </span>
           </div>
@@ -671,7 +917,7 @@ export function GraphStudio({
                 }
               }, 'propose')
             }
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold text-xs shadow-2xs hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-medium text-xs shadow-[var(--shadow-2xs)] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
           <span className={`material-symbols-outlined text-[16px] ${busyAction === 'propose' ? 'animate-spin' : ''}`}>
             {busyAction === 'propose' ? 'progress_activity' : 'auto_awesome'}
@@ -683,10 +929,10 @@ export function GraphStudio({
 
       {/* Global Alerts */}
       {error && (
-        <div role="alert" className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl flex items-start gap-3 shadow-sm">
-          <span className="material-symbols-outlined text-rose-600 text-xl mt-0.5">error</span>
-          <div className="flex-1 text-sm font-medium">{error}</div>
-          <button onClick={() => setError('')} className="text-rose-500 hover:text-rose-700 cursor-pointer">
+        <div role="alert" className="p-4 bg-[var(--color-danger-subtle)] border border-[var(--color-danger-border)] text-[var(--color-danger)] rounded-[var(--radius-container)] flex items-start gap-3 shadow-[var(--shadow-2xs)]">
+          <span className="material-symbols-outlined text-[var(--color-danger)] text-xl mt-0.5">error</span>
+          <div className="flex-1 text-xs font-medium">{error}</div>
+          <button onClick={() => setError('')} className="text-[var(--color-text-muted)] hover:text-[var(--color-danger)] cursor-pointer">
             <span className="material-symbols-outlined text-lg">close</span>
           </button>
         </div>
@@ -695,11 +941,11 @@ export function GraphStudio({
       {message && (
         <div
           role="status"
-          className={`p-4 rounded-2xl border flex items-center justify-between gap-3 shadow-sm ${publishedSuccess ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-blue-50 border-blue-200 text-blue-900'
+          className={`p-3.5 rounded-[var(--radius-container)] border flex items-center justify-between gap-3 shadow-[var(--shadow-2xs)] ${publishedSuccess ? 'bg-[var(--color-success-subtle)] border-[var(--color-success-border)] text-[var(--color-success)]' : 'bg-[var(--color-info-subtle)] border-[var(--color-info-border)] text-[var(--color-info)]'
             }`}
         >
-          <div className="flex items-center gap-2.5 text-sm font-medium">
-            <span className={`material-symbols-outlined text-xl ${publishedSuccess ? 'text-emerald-600' : 'text-blue-600'}`}>
+          <div className="flex items-center gap-2.5 text-xs font-medium">
+            <span className={`material-symbols-outlined text-lg ${publishedSuccess ? 'text-[var(--color-success)]' : 'text-[var(--color-info)]'}`}>
               {publishedSuccess ? 'check_circle' : 'info'}
             </span>
             <span>{message}</span>
@@ -709,7 +955,7 @@ export function GraphStudio({
               <button
                 type="button"
                 onClick={() => onNavigate('executive-dashboard')}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 rounded-xl flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                className="bg-[var(--color-success)] hover:opacity-90 text-white text-xs font-medium px-3 py-1.5 rounded-[var(--radius-element)] flex items-center gap-1 shadow-[var(--shadow-2xs)] transition-all cursor-pointer"
               >
                 <span>View Executive Dashboard</span>
                 <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
@@ -720,7 +966,7 @@ export function GraphStudio({
                 setMessage('');
                 setPublishedSuccess(false);
               }}
-              className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
             >
               <span className="material-symbols-outlined text-base">close</span>
             </button>
@@ -728,59 +974,125 @@ export function GraphStudio({
         </div>
       )}
 
-      {/* THREE CREATION PATHWAYS (Top Segmented Mode Selector) */}
-      <div className="bg-slate-100 p-1 rounded-xl border border-slate-200 flex flex-wrap sm:flex-nowrap gap-1.5">
+      {/* CREATION PATHWAYS (Top Segmented Tab Selector) */}
+      <div className="bg-[var(--color-surface-hover)] p-1 rounded-[var(--radius-container)] border border-[var(--color-border)] flex flex-wrap sm:flex-nowrap gap-1">
         <button
           type="button"
-          onClick={() => setActiveMode('visual')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeMode === 'visual'
-              ? 'bg-white text-blue-700 shadow-2xs border border-slate-200/80'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+          onClick={() => setActiveTab('prompt')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-[var(--radius-element)] text-xs font-medium transition-all cursor-pointer ${activeTab === 'prompt'
+              ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-2xs)] border border-[var(--color-border)]'
+              : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface)]/60'
             }`}
         >
-          <span className="material-symbols-outlined text-[17px]">add_chart</span>
-          <span>1. Visual KPI Builder</span>
+          <span className="material-symbols-outlined text-[16px] text-[var(--color-primary)]">psychology</span>
+          <span>1. Generative AI Dashboards</span>
         </button>
 
         <button
           type="button"
-          onClick={() => setActiveMode('prompt')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeMode === 'prompt'
-              ? 'bg-white text-purple-700 shadow-2xs border border-slate-200/80'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+          onClick={() => setActiveTab('dashboards')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-[var(--radius-element)] text-xs font-medium transition-all cursor-pointer ${activeTab === 'dashboards'
+              ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-2xs)] border border-[var(--color-border)]'
+              : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface)]/60'
             }`}
         >
-          <span className="material-symbols-outlined text-[17px] text-purple-600">psychology</span>
-          <span>2. AI Core Graph (Prompt)</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveMode('data_options')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeMode === 'data_options'
-              ? 'bg-white text-emerald-700 shadow-2xs border border-slate-200/80'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-            }`}
-        >
-          <span className="material-symbols-outlined text-[17px] text-emerald-600">auto_graph</span>
-          <span>3. Data-Driven Graph (No Prompt)</span>
+          <span className="material-symbols-outlined text-[16px] text-[var(--color-primary)]">dashboard_customize</span>
+          <span>Build Your Dashboards</span>
         </button>
       </div>
+
+      {/* SUB-MODE SELECTOR DROPDOWN BAR: Visible inside "Build Your Dashboards" tab */}
+      {activeTab === 'dashboards' && (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-3 px-4 shadow-[var(--shadow-2xs)] flex flex-wrap items-center justify-between gap-3 animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] text-[var(--color-primary)] flex items-center justify-center shrink-0 border border-[var(--color-border)]">
+              <span className="material-symbols-outlined text-[18px]">
+                {dashboardMode === 'manual' ? 'edit_note' : 'drag_pan'}
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
+                <span>Dashboard Creation Experience</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-[var(--color-surface-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)]">
+                  {dashboardMode === 'manual' ? 'Form Builder' : 'Drag & Drop Canvas'}
+                </span>
+              </div>
+              <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">
+                {dashboardMode === 'manual'
+                  ? 'Build Manually: Define metrics, dimensions, aggregations, and cross-table joins with full SQL validation.'
+                  : 'Select Drag and Drop: Interactive visual workspace to drag datasets, fields, and chart types directly onto the canvas.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 relative">
+            <span className="text-xs font-medium text-[var(--color-text-secondary)]">Mode:</span>
+            <div className="relative">
+              <button
+                type="button"
+                id="dashboard-mode-selector-btn"
+                onClick={() => setIsModeDropdownOpen(prev => !prev)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] border border-[var(--color-border)] text-xs font-semibold text-[var(--color-text-primary)] transition-all cursor-pointer shadow-[var(--shadow-2xs)]"
+              >
+                <span>{dashboardMode === 'drag_drop' ? 'Select Drag and Drop' : 'Build Manually'}</span>
+                <span className={`material-symbols-outlined text-[16px] text-[var(--color-text-muted)] transition-transform ${isModeDropdownOpen ? 'rotate-180' : ''}`}>
+                  arrow_drop_down
+                </span>
+              </button>
+
+              {isModeDropdownOpen && (
+                <div className="absolute right-0 mt-1 w-48 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)] shadow-lg z-30 py-1 animate-in fade-in">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDashboardMode('manual');
+                      setIsModeDropdownOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors cursor-pointer ${
+                      dashboardMode === 'manual'
+                        ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)] font-semibold'
+                        : 'text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[16px]">edit_note</span>
+                    <span>Build Manually</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDashboardMode('drag_drop');
+                      setIsModeDropdownOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors cursor-pointer ${
+                      dashboardMode === 'drag_drop'
+                        ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)] font-semibold'
+                        : 'text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[16px]">drag_pan</span>
+                    <span>Select Drag and Drop</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODE 1: VISUAL KPI BUILDER (Matches Reference Image 2) */}
       {activeMode === 'visual' && model && (
         <section
           id="definition-form"
-          className={`bg-white border rounded-xl p-4 shadow-2xs transition-all space-y-3.5 ${edit ? 'border-amber-300 ring-4 ring-amber-400/10' : 'border-slate-200/80'
+          className={`bg-[var(--color-surface)] border rounded-[var(--radius-container)] p-4 shadow-[var(--shadow-2xs)] transition-all space-y-3.5 ${edit ? 'border-[var(--color-warning-border)] ring-2 ring-[var(--color-warning)]/20' : 'border-[var(--color-border)]'
             }`}
         >
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)]">
             <div>
-              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <span className="material-symbols-outlined text-blue-600 text-base">{edit ? 'edit_note' : 'add_chart'}</span>
+              <h2 className="text-sm font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
+                <span className="material-symbols-outlined text-[var(--color-primary)] text-base">{edit ? 'edit_note' : 'add_chart'}</span>
                 <span>{edit ? `Editing Definition: "${edit.title}"` : 'Build a Business KPI or Chart'}</span>
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
                 Define aggregations and dimensional breakdowns over active semantic fields.
               </p>
             </div>
@@ -788,7 +1100,7 @@ export function GraphStudio({
               <button
                 type="button"
                 onClick={() => setEdit(null)}
-                className="text-xs text-slate-600 hover:text-slate-900 font-medium px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
+                className="text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] font-medium px-3 py-1.5 rounded-[var(--radius-element)] border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
               >
                 Cancel Edit
               </button>
@@ -798,11 +1110,11 @@ export function GraphStudio({
           <div className="space-y-4">
             <div className={`grid grid-cols-1 sm:grid-cols-2 ${datasets.length > 1 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} gap-4`}>
               <div className="sm:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5">
                   KPI / Chart Title
                 </label>
                 <input
-                  className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
+                  className="border border-[var(--color-border)] rounded-[var(--radius-element)] px-3 py-1.5 w-full bg-[var(--color-surface)] text-[var(--color-text-primary)] text-xs focus:outline-none focus:border-[var(--color-primary)] transition-all shadow-[var(--shadow-2xs)]"
                   placeholder="e.g. Net Revenue by Region"
                   value={title}
                   onChange={e => setTitle(e.target.value)}
@@ -812,13 +1124,13 @@ export function GraphStudio({
               {/* Table / Dataset Name Selector: If datasets.length > 1, show table dropdown */}
               {datasets.length > 1 && !edit && (
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px] text-blue-600">table_chart</span>
+                  <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px] text-[var(--color-primary)]">table_chart</span>
                     <span>Select Table / Dataset</span>
-                    <span className="text-[10px] text-slate-400 font-normal">(Target Measure)</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)] font-normal">(Target Measure)</span>
                   </label>
                   <select
-                    className="border border-blue-300 bg-blue-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
+                    className="border border-[var(--color-border)] bg-[var(--color-surface-hover)] rounded-[var(--radius-element)] px-3 py-1.5 w-full text-[var(--color-text-primary)] text-xs font-medium focus:outline-none focus:border-[var(--color-primary)] transition-all shadow-[var(--shadow-2xs)]"
                     value={selectedDatasetId}
                     onChange={e => void handleSwitchDataset(e.target.value)}
                   >
@@ -839,11 +1151,11 @@ export function GraphStudio({
               {!edit && (
                 <>
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5">
                       Target Measure (Y)
                     </label>
                     <select
-                      className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
+                      className="border border-[var(--color-border)] rounded-[var(--radius-element)] px-3 py-1.5 w-full bg-[var(--color-surface)] text-[var(--color-text-primary)] text-xs focus:outline-none focus:border-[var(--color-primary)] transition-all shadow-[var(--shadow-2xs)]"
                       value={metric}
                       onChange={e => {
                         setMetric(e.target.value);
@@ -860,11 +1172,11 @@ export function GraphStudio({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5">
                       Aggregation
                     </label>
                     <select
-                      className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
+                      className="border border-[var(--color-border)] rounded-[var(--radius-element)] px-3 py-1.5 w-full bg-[var(--color-surface)] text-[var(--color-text-primary)] text-xs focus:outline-none focus:border-[var(--color-primary)] transition-all shadow-[var(--shadow-2xs)]"
                       value={aggregation}
                       onChange={e => setAggregation(e.target.value)}
                     >
@@ -884,13 +1196,13 @@ export function GraphStudio({
                 <div className={`grid grid-cols-1 ${datasets.length > 1 ? 'sm:grid-cols-2' : ''} gap-4 max-w-2xl`}>
                   {datasets.length > 1 && (
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[14px] text-blue-600">table_chart</span>
+                      <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 flex items-center gap-1">
+                        <span className="material-symbols-outlined text-[14px] text-[var(--color-primary)]">table_chart</span>
                         <span>Select Table / Dataset</span>
-                        <span className="text-[10px] text-slate-400 font-normal">(Group by Dimension)</span>
+                        <span className="text-[10px] text-[var(--color-text-muted)] font-normal">(Group by Dimension)</span>
                       </label>
                       <select
-                        className="border border-blue-300 bg-blue-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
+                        className="border border-[var(--color-border)] bg-[var(--color-surface-hover)] rounded-[var(--radius-element)] px-3 py-1.5 w-full text-[var(--color-text-primary)] text-xs font-medium focus:outline-none focus:border-[var(--color-primary)] transition-all shadow-[var(--shadow-2xs)]"
                         value={dimensionDatasetId || selectedDatasetId}
                         onChange={e => void handleDimensionDatasetChange(e.target.value)}
                       >
@@ -910,11 +1222,11 @@ export function GraphStudio({
                   )}
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5">
                       Group by Dimension (X)
                     </label>
                     <select
-                      className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs"
+                      className="border border-[var(--color-border)] rounded-[var(--radius-element)] px-3 py-1.5 w-full bg-[var(--color-surface)] text-[var(--color-text-primary)] text-xs focus:outline-none focus:border-[var(--color-primary)] transition-all shadow-[var(--shadow-2xs)]"
                       value={dimension}
                       onChange={e => setDimension(e.target.value)}
                       disabled={dimensionDatasetId !== selectedDatasetId && (!joinResolution || !joinResolution.joinable)}
@@ -938,26 +1250,26 @@ export function GraphStudio({
                 {dimensionDatasetId && dimensionDatasetId !== selectedDatasetId && (
                   <div>
                     {isResolvingJoin && (
-                      <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                      <div className="flex items-center gap-2 text-xs text-[var(--color-info)] bg-[var(--color-info-subtle)] border border-[var(--color-info-border)] rounded-[var(--radius-element)] px-3 py-2">
                         <span className="material-symbols-outlined animate-spin text-[16px]">progress_activity</span>
                         <span>Verifying join keys and value overlap between selected tables...</span>
                       </div>
                     )}
                     {!isResolvingJoin && joinResolution?.joinable && (
-                      <div className="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                        <span className="material-symbols-outlined text-emerald-600 text-[18px]">verified</span>
+                      <div className="flex items-center gap-2 text-xs text-[var(--color-success)] bg-[var(--color-success-subtle)] border border-[var(--color-success-border)] rounded-[var(--radius-element)] px-3 py-2">
+                        <span className="material-symbols-outlined text-[var(--color-success)] text-[18px]">verified</span>
                         <div>
                           <span className="font-semibold">Join Verified: </span>
-                          <span>Linked via <code className="font-mono bg-emerald-100 px-1 py-0.5 rounded">{joinResolution.left_key}</code> = <code className="font-mono bg-emerald-100 px-1 py-0.5 rounded">{joinResolution.right_key}</code> ({joinResolution.overlap_count?.toLocaleString()} matching records, {joinResolution.cardinality})</span>
+                          <span>Linked via <code className="font-mono bg-[var(--color-surface)] border border-[var(--color-border)] px-1 py-0.5 rounded">{joinResolution.left_key}</code> = <code className="font-mono bg-[var(--color-surface)] border border-[var(--color-border)] px-1 py-0.5 rounded">{joinResolution.right_key}</code> ({joinResolution.overlap_count?.toLocaleString()} matching records, {joinResolution.cardinality})</span>
                           {joinResolution.warning && (
-                            <p className="mt-0.5 text-amber-700 text-[11px]">{joinResolution.warning}</p>
+                            <p className="mt-0.5 text-[var(--color-warning)] text-[11px]">{joinResolution.warning}</p>
                           )}
                         </div>
                       </div>
                     )}
                     {!isResolvingJoin && joinResolution && !joinResolution.joinable && (
-                      <div className="flex items-center gap-2 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
-                        <span className="material-symbols-outlined text-rose-600 text-[18px]">cancel</span>
+                      <div className="flex items-center gap-2 text-xs text-[var(--color-danger)] bg-[var(--color-danger-subtle)] border border-[var(--color-danger-border)] rounded-[var(--radius-element)] px-3 py-2">
+                        <span className="material-symbols-outlined text-[var(--color-danger)] text-[18px]">cancel</span>
                         <div>
                           <span className="font-semibold">Tables Cannot Be Joined: </span>
                           <span>{joinResolution.reason || 'No common matching key with data found between these datasets.'} Widget creation is disabled.</span>
@@ -971,18 +1283,18 @@ export function GraphStudio({
 
             {/* Display Visualization Style Icon Tiles */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-2">
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-2">
                 Display Visualization Style
               </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
                 {DISPLAY_TYPES.map(type => (
                   <button
                     key={type.id}
                     type="button"
                     onClick={() => setKind(type.id)}
-                    className={`flex flex-col items-center justify-center p-2 rounded-lg border text-[11px] font-semibold transition-all cursor-pointer ${kind === type.id
-                        ? 'bg-blue-50/80 border-blue-500 text-blue-700 shadow-sm ring-2 ring-blue-500/20'
-                        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                    className={`flex flex-col items-center justify-center p-2 rounded-[var(--radius-element)] border text-[11px] font-medium transition-all cursor-pointer ${kind === type.id
+                        ? 'bg-[var(--color-surface-active)] border-[var(--color-primary)] text-[var(--color-primary)] shadow-[var(--shadow-2xs)]'
+                        : 'bg-[var(--color-surface)] border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-hover)]'
                       }`}
                   >
                     <span className="material-symbols-outlined text-base mb-0.5">{type.icon}</span>
@@ -994,11 +1306,11 @@ export function GraphStudio({
 
             {edit && (
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5">
                   Query Plan (JSON)
                 </label>
                 <textarea
-                  className="border border-slate-300 rounded-xl p-3 w-full font-mono text-xs bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                  className="border border-[var(--color-border)] rounded-[var(--radius-element)] p-3 w-full font-mono text-xs bg-[var(--color-surface-hover)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-all"
                   rows={6}
                   value={planText}
                   onChange={e => setPlanText(e.target.value)}
@@ -1006,11 +1318,11 @@ export function GraphStudio({
               </div>
             )}
 
-            <div className="flex items-center gap-3 pt-3 border-t border-slate-100">
+            <div className="flex items-center gap-3 pt-3 border-t border-[var(--color-border)]">
               <button
                 disabled={busy || (dimensionDatasetId !== selectedDatasetId && (!joinResolution || !joinResolution.joinable))}
                 onClick={() => void run(saveVisualDefinition, 'save')}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-xs hover:bg-blue-700 active:scale-[0.98] transition-all shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-primary)] text-white font-medium text-xs hover:bg-[var(--color-primary-hover)] active:scale-[0.98] transition-all shadow-[var(--shadow-2xs)] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 title={dimensionDatasetId !== selectedDatasetId && (!joinResolution || !joinResolution.joinable) ? "Tables cannot be joined; widget creation disabled" : undefined}
               >
                 <span className={`material-symbols-outlined text-lg ${busyAction === 'save' ? 'animate-spin' : ''}`}>
@@ -1040,124 +1352,177 @@ export function GraphStudio({
         </section>
       )}
 
-      {/* MODE 2: AI CORE CUSTOM GRAPH (Prompt-Driven with 10 Steps) */}
+      {/* MODE 1: GENERATIVE AI DASHBOARDS (Universal NLU, Dynamic SQL & Analysis-First 10 Steps) */}
       {activeMode === 'prompt' && (
-        <section className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3.5">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <section className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-4 sm:p-5 shadow-[var(--shadow-2xs)] space-y-5">
+          {/* Section Header & Master Prompt Branding */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[var(--color-border)]">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shrink-0 border border-purple-100">
-                <span className="material-symbols-outlined text-xl">psychology</span>
+              <div className="w-10 h-10 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] text-[var(--color-primary)] flex items-center justify-center shrink-0 border border-[var(--color-border)] shadow-[var(--shadow-2xs)]">
+                <span className="material-symbols-outlined text-[22px]">psychology</span>
               </div>
               <div>
-                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <span>SAP AI Core Custom Graph Generator</span>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">
-                    GPT-4o-mini
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-sm sm:text-base font-semibold text-[var(--color-text-primary)] tracking-tight">
+                    1. Generative AI Dashboards
+                  </h2>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-primary)]/10 text-[var(--color-primary)] border border-[var(--color-primary)]/20">
+                    Analysis-First 10 Steps
                   </span>
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Natural language synthesis executing through the 10-step Python runtime with dual-path reconciliation.
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
+                    Domain-Independent LLM Engine
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
+                  Universal Natural Language Understanding, Dynamic Data Analysis &amp; AI-Powered Widget Generation. Automatically explores schemas, detects JOIN operations, generates SQL, and analyzes results before recommending widgets.
                 </p>
               </div>
             </div>
+
+            {conversationHistory.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setConversationHistory([]);
+                  setGenAiDashboard(null);
+                  setGenAiStep(0);
+                  setMessage('Conversational context reset for fresh exploration.');
+                }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs font-medium transition-colors cursor-pointer"
+                title="Reset conversation context"
+              >
+                <span className="material-symbols-outlined text-[14px]">restart_alt</span>
+                <span>Reset Context ({Math.floor(conversationHistory.length / 2)})</span>
+              </button>
+            )}
           </div>
 
-          <div className="space-y-4">
-            {datasets.length > 1 && (
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
-                  <span className="material-symbols-outlined text-[14px] text-purple-600">table_chart</span>
-                  <span>Target Table / Dataset</span>
-                </label>
-                <select
-                  className="border border-purple-300 bg-purple-50/30 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all shadow-2xs max-w-sm"
-                  value={selectedDatasetId}
-                  onChange={e => void handleSwitchDataset(e.target.value)}
-                >
-                  {datasets.map(d => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} {d.isActive ? '★' : ''} ({d.rowCount?.toLocaleString() || 0} rows)
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+          {/* Dataset & Schema Exploration Scope Selector */}
+          <div className="bg-[var(--color-surface-hover)] p-3 rounded-[var(--radius-element)] border border-[var(--color-border)] flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 flex-1 min-w-[240px]">
+              <span className="material-symbols-outlined text-[16px] text-[var(--color-primary)]">database</span>
+              <span className="font-medium text-[var(--color-text-primary)]">Target Data Scope:</span>
+              <select
+                className="border border-[var(--color-border)] bg-[var(--color-surface)] rounded-[var(--radius-element)] px-2.5 py-1 text-xs text-[var(--color-text-primary)] font-medium focus:outline-none focus:border-[var(--color-primary)] transition-all shadow-[var(--shadow-2xs)] cursor-pointer"
+                value={selectedDatasetId}
+                onChange={e => void handleSwitchDataset(e.target.value)}
+              >
+                <option value="">🌐 Cross-Table Intelligence (All Available Tables &amp; Auto-JOIN)</option>
+                {datasets.map(d => (
+                  <option key={d.id} value={d.id}>
+                    📊 {d.name} ({d.rowCount?.toLocaleString() || 0} rows · {d.columnCount || d.columns?.length || 0} cols)
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="text-[11px] text-[var(--color-text-muted)] flex items-center gap-2">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--color-success)]" />
+              <span>{datasets.length} tables loaded &amp; ready for dynamic JOIN analysis</span>
+            </div>
+          </div>
 
+          {/* Natural Language Query Console */}
+          <div className="space-y-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Natural Language Visualization Prompt
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1.5 flex items-center justify-between">
+                <span>Conversational Analytics Prompt (Natural Language):</span>
+                <span className="text-[10px] text-[var(--color-text-muted)] font-mono">Supports complex multi-part queries &amp; follow-ups</span>
               </label>
               <div className="relative">
                 <textarea
-                  className="border border-slate-300 rounded-lg p-3 pr-14 w-full text-xs resize-y focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all outline-none"
-                  placeholder="e.g., Generate a distribution heatmap across primary measures and dimensions..."
+                  className="border border-[var(--color-border)] rounded-[var(--radius-element)] p-3.5 pr-16 w-full text-xs resize-y bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:border-[var(--color-primary)] transition-all outline-none shadow-[var(--shadow-2xs)] leading-relaxed"
+                  placeholder="e.g., Generate an executive dashboard with total revenue, average order value, top categories by sales, and regional distribution with trend analysis..."
                   rows={3}
-                  value={promptInput}
-                  onChange={e => setPromptInput(e.target.value)}
+                  value={genAiPrompt || promptInput}
+                  onChange={e => {
+                    setGenAiPrompt(e.target.value);
+                    setPromptInput(e.target.value);
+                  }}
                   onKeyDown={e => {
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && promptInput.trim() && !agentRunning) {
-                      void handleRunAgentPrompt();
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (genAiPrompt || promptInput).trim() && !genAiRunning) {
+                      void handleRunGenAiDashboard();
                     }
                   }}
                 />
-                <span className="absolute bottom-3 right-3 text-[10px] font-mono text-slate-400">⌘ Enter</span>
+                <span className="absolute bottom-3 right-3 text-[10px] font-mono text-[var(--color-text-muted)] bg-[var(--color-surface-hover)] px-1.5 py-0.5 rounded border border-[var(--color-border)] select-none">
+                  ⌘ Enter
+                </span>
               </div>
             </div>
 
-            <div>
-              <span className="text-xs font-semibold text-slate-500">Quick Suggestions:</span>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {SUGGESTED_PROMPTS.map(suggestion => (
-                  <button
-                    key={suggestion}
-                    type="button"
-                    onClick={() => setPromptInput(suggestion)}
-                    className="px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-purple-50 border border-slate-200 hover:border-purple-200 text-xs text-slate-700 hover:text-purple-700 text-left transition-all cursor-pointer"
-                  >
-                    💡 {suggestion}
-                  </button>
-                ))}
-              </div>
-            </div>
+            {/* Primary Execution Action */}
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                type="button"
+                disabled={genAiRunning || !(genAiPrompt || promptInput).trim()}
+                onClick={() => void handleRunGenAiDashboard()}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[var(--radius-element)] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-medium text-xs shadow-[var(--shadow-sm)] active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer"
+              >
+                <span className={`material-symbols-outlined text-[18px] ${genAiRunning ? 'animate-spin' : ''}`}>
+                  {genAiRunning ? 'sync' : 'auto_mode'}
+                </span>
+                <span>
+                  {genAiRunning
+                    ? `Executing 10-Step Pipeline (Stage ${genAiStep}/10)…`
+                    : 'Execute Analysis & Generate Dashboard (10 Steps)'}
+                </span>
+              </button>
 
-            <button
-              disabled={agentRunning || !promptInput.trim()}
-              onClick={() => void handleRunAgentPrompt()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
-            >
-              <span className={`material-symbols-outlined text-lg ${agentRunning ? 'animate-spin' : ''}`}>
-                {agentRunning ? 'sync' : 'play_arrow'}
-              </span>
-              <span>{agentRunning ? 'Executing 10-Step Workflow…' : 'Generate Custom Graph (10 Steps)'}</span>
-            </button>
+              {genAiDashboard && (
+                <button
+                  type="button"
+                  onClick={() => setShowSqlInspector(prev => !prev)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] border border-[var(--color-border)] text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[15px]">code</span>
+                  <span>{showSqlInspector ? 'Hide SQL & Join Plan' : 'Inspect SQL & Join Plan'}</span>
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* 10-Step Visual Progress Stepper */}
-          {agentRunning && (
-            <div className="p-5 bg-purple-50/60 border border-purple-200 rounded-2xl space-y-3 animate-in fade-in">
-              <div className="flex items-center justify-between text-xs font-bold text-purple-900">
+          {/* 10-STEP ANALYSIS-FIRST VISUAL PROGRESS STEPPER */}
+          {(genAiRunning || genAiStep > 0) && (
+            <div className="p-3.5 bg-[var(--color-surface-hover)] border border-[var(--color-border)] rounded-[var(--radius-container)] space-y-2.5 animate-in fade-in">
+              <div className="flex items-center justify-between text-xs font-semibold text-[var(--color-text-primary)]">
                 <span className="flex items-center gap-2">
-                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-purple-600 animate-ping" />
-                  <span>Executing 10-Step Custom Graph Generation Pipeline</span>
+                  <span className={`inline-block w-2.5 h-2.5 rounded-full ${genAiRunning ? 'bg-[var(--color-primary)] animate-ping' : 'bg-[var(--color-success)]'}`} />
+                  <span>Mandatory 10-Step Analysis-First Execution Pipeline</span>
                 </span>
-                <span>Stage {agentStep} of 10</span>
+                <span className="text-[11px] font-mono text-[var(--color-text-secondary)]">
+                  {genAiRunning ? `Stage ${genAiStep} of 10` : 'All 10 Stages Completed'}
+                </span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2">
-                {TEN_STEPS.map((s, idx) => {
-                  const isDone = agentStep > idx + 1;
-                  const isCurrent = agentStep === idx + 1;
+              {genAiStepDetail && (
+                <div className="text-[11px] font-mono text-[var(--color-primary)] flex items-center gap-1.5 px-2.5 py-1 rounded bg-[var(--color-surface)] border border-[var(--color-border)]">
+                  <span className={`material-symbols-outlined text-[14px] ${genAiRunning ? 'animate-spin' : 'text-[var(--color-success)]'}`}>
+                    {genAiRunning ? 'progress_activity' : 'verified'}
+                  </span>
+                  <span>{genAiStepDetail}</span>
+                </div>
+              )}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
+                {GENAI_10_STEPS.map((s, idx) => {
+                  const stepNum = idx + 1;
+                  const isDone = genAiStep > stepNum || (!genAiRunning && genAiStep === 10);
+                  const isCurrent = genAiRunning && genAiStep === stepNum;
                   return (
                     <div
                       key={s.step}
-                      className={`p-2 rounded-lg text-[11px] font-semibold border transition-all ${isDone
-                          ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                      className={`p-2 rounded-[var(--radius-element)] text-[11px] font-medium border transition-all ${
+                        isDone
+                          ? 'bg-[var(--color-success-subtle)] border-[var(--color-success-border)] text-[var(--color-success)]'
                           : isCurrent
-                            ? 'bg-white border-purple-500 text-purple-900 shadow-sm ring-2 ring-purple-500/20'
-                            : 'bg-white/60 border-slate-200 text-slate-400 opacity-60'
-                        }`}
+                          ? 'bg-[var(--color-surface)] border-[var(--color-primary)] text-[var(--color-primary)] shadow-[var(--shadow-2xs)] ring-1 ring-[var(--color-primary)]/20'
+                          : 'bg-[var(--color-surface)]/60 border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
+                      }`}
                     >
-                      <div className="text-[10px] font-mono capitalize">{s.step.toLowerCase()}</div>
-                      <div className="truncate mt-0.5">{s.label}</div>
+                      <div className="flex items-center justify-between text-[10px] font-mono">
+                        <span>{s.step}</span>
+                        {isDone && <span className="material-symbols-outlined text-[13px]">check_circle</span>}
+                      </div>
+                      <div className="truncate font-semibold mt-0.5">{s.name}</div>
+                      <div className="text-[9px] text-[var(--color-text-muted)] truncate mt-0.5">{s.desc}</div>
                     </div>
                   );
                 })}
@@ -1165,309 +1530,699 @@ export function GraphStudio({
             </div>
           )}
 
-          {/* Output Display for Mode 2 */}
-          {agentResult && agentResult.image_base64 && (
-            <div className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50 p-4 space-y-4 shadow-sm animate-in fade-in">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-sm">{agentResult.prompt}</h3>
-                  <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
-                    <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold text-[10px]">
-                      {agentResult.verified ? 'Dual-Path Verified' : 'Validated'}
+          {/* DYNAMIC SQL & JOIN STRATEGY INSPECTOR (Expandable) */}
+          {genAiDashboard && showSqlInspector && (
+            <div className="p-4 bg-[var(--color-surface-active)] border border-[var(--color-border)] rounded-[var(--radius-container)] space-y-3 text-xs animate-in fade-in">
+              <div className="flex items-center justify-between pb-2 border-b border-[var(--color-border)]">
+                <div className="flex items-center gap-2 font-semibold text-[var(--color-text-primary)]">
+                  <span className="material-symbols-outlined text-[16px] text-[var(--color-primary)]">data_object</span>
+                  <span>Intelligent SQL &amp; Dynamic JOIN Execution Plan</span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)]">
+                  <span>Latency: {genAiDashboard.execution_time_ms}ms</span>
+                  <span>•</span>
+                  <span>{genAiDashboard.sql_info.records_matched?.toLocaleString()} of {genAiDashboard.sql_info.records_total?.toLocaleString()} records</span>
+                </div>
+              </div>
+
+              <div>
+                <span className="text-[11px] font-medium text-[var(--color-text-secondary)] block mb-1">Generated Dynamic SQL:</span>
+                <pre className="p-3 rounded-[var(--radius-element)] bg-slate-900 text-slate-100 font-mono text-[11px] overflow-x-auto leading-relaxed border border-slate-800">
+                  {genAiDashboard.sql_info.sql_query}
+                </pre>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                <div className="p-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)]">
+                  <span className="text-[10px] text-[var(--color-text-muted)] uppercase font-mono">Relationship Type</span>
+                  <div className="font-semibold text-[var(--color-text-primary)] mt-0.5">
+                    {genAiDashboard.sql_info.join_required ? genAiDashboard.sql_info.join_type || 'Cross-Table JOIN' : 'Single Table (No JOIN Needed)'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)]">
+                  <span className="text-[10px] text-[var(--color-text-muted)] uppercase font-mono">Data Validation &amp; Safety</span>
+                  <div className="font-semibold text-[var(--color-success)] mt-0.5 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px]">verified</span>
+                    <span>No row duplication / Verified</span>
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)]">
+                  <span className="text-[10px] text-[var(--color-text-muted)] uppercase font-mono">Calculations Quality</span>
+                  <div className="font-semibold text-[var(--color-text-primary)] mt-0.5">
+                    100% Validated Aggregations
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* DYNAMIC GENERATIVE AI DASHBOARD OUTPUT */}
+          {genAiDashboard && (
+            <div className="space-y-5 pt-2">
+              {/* Step 7: AI Executive Insights Banner */}
+              {genAiDashboard.executive_insights && genAiDashboard.executive_insights.length > 0 && (
+                <div className="p-4 rounded-[var(--radius-container)] bg-gradient-to-r from-[var(--color-surface-active)] to-[var(--color-surface-hover)] border border-[var(--color-border)] shadow-[var(--shadow-2xs)] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-[var(--color-text-primary)]">
+                      <span className="material-symbols-outlined text-[18px] text-[var(--color-primary)]">insights</span>
+                      <span>AI Executive Insights &amp; Data Findings (Analysis-First)</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-[var(--color-text-muted)] bg-[var(--color-surface)] px-2 py-0.5 rounded border border-[var(--color-border)]">
+                      Backed by Actual Query Execution
                     </span>
-                    <span>•</span>
-                    <span>{agentResult.records_matched?.toLocaleString()} of {agentResult.records_in_source?.toLocaleString()} records matched</span>
-                    {agentResult.data_as_of && (
-                      <>
+                  </div>
+                  <ul className="space-y-1.5 pt-1">
+                    {genAiDashboard.executive_insights.map((insight, idx) => (
+                      <li key={idx} className="text-xs text-[var(--color-text-secondary)] flex items-start gap-2 leading-relaxed">
+                        <span className="text-[var(--color-primary)] font-bold mt-0.5">›</span>
+                        <span>{insight}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Step 4 & 9: KPI Summary Cards Grid */}
+              {genAiDashboard.kpi_cards && genAiDashboard.kpi_cards.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider mb-2.5 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-[14px]">pin</span>
+                      <span>Executive KPI Metrics</span>
+                    </span>
+                    <span className="text-[11px] font-mono text-[var(--color-text-muted)] lowercase">
+                      {genAiDashboard.kpi_cards.filter(k => widgetStatuses[k.id] !== 'rejected').length} of {genAiDashboard.kpi_cards.length} approved
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                    {genAiDashboard.kpi_cards.map(kpi => {
+                      const status = widgetStatuses[kpi.id] || 'approved';
+                      return (
+                        <div
+                          key={kpi.id}
+                          className={`p-4 rounded-[var(--radius-container)] bg-[var(--color-surface)] border shadow-[var(--shadow-2xs)] space-y-2 transition-all ${
+                            status === 'rejected'
+                              ? 'opacity-60 border-[var(--color-danger-border)] bg-[var(--color-danger-subtle)]/10'
+                              : status === 'approved'
+                              ? 'border-[var(--color-success-border)] hover:border-[var(--color-success)]'
+                              : 'border-[var(--color-border)] hover:border-[var(--color-primary)]/40'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                            <span className="font-medium truncate max-w-[130px]">{kpi.title}</span>
+                            <div className="flex items-center gap-1">
+                              <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border uppercase ${
+                                status === 'approved'
+                                  ? 'bg-[var(--color-success-subtle)] text-[var(--color-success)] border-[var(--color-success-border)]'
+                                  : status === 'rejected'
+                                  ? 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)] border-[var(--color-danger-border)]'
+                                  : 'bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border-[var(--color-border)]'
+                              }`}>
+                                {status}
+                              </span>
+                              <span className="text-[10px] font-mono uppercase bg-[var(--color-surface-active)] px-1.5 py-0.5 rounded border border-[var(--color-border)]">
+                                {kpi.aggregation}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="text-2xl font-bold text-[var(--color-text-primary)] tracking-tight tabular-nums">
+                            {kpi.format === 'currency'
+                              ? `$${Number(kpi.value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                              : kpi.format === 'percent'
+                              ? `${kpi.value}%`
+                              : Number(kpi.value).toLocaleString()}
+                          </div>
+                          {kpi.subtitle && (
+                            <div className="text-[11px] text-[var(--color-text-muted)] truncate">
+                              {kpi.subtitle}
+                            </div>
+                          )}
+
+                          {/* Approve, Reject, Preview Live Buttons */}
+                          <div className="flex items-center gap-1.5 pt-2 border-t border-[var(--color-border)]">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewWidget({
+                                id: kpi.id,
+                                title: kpi.title,
+                                kind: 'kpi',
+                                metric: kpi.metric,
+                                aggregation: kpi.aggregation,
+                                format: kpi.format,
+                                value: kpi.value,
+                                subtitle: kpi.subtitle,
+                                sql_query: genAiDashboard.sql_info?.sql_query,
+                              })}
+                              className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] text-[10px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] transition-colors cursor-pointer"
+                              title="Preview Live Widget"
+                            >
+                              <span className="material-symbols-outlined text-[13px]">visibility</span>
+                              <span>Preview Live</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setWidgetStatuses(prev => ({ ...prev, [kpi.id]: 'approved' }))}
+                              className={`px-2 py-1 rounded-[var(--radius-element)] text-[10px] font-medium border transition-colors cursor-pointer ${
+                                status === 'approved'
+                                  ? 'bg-[var(--color-success)] text-white border-[var(--color-success)]'
+                                  : 'bg-[var(--color-surface)] text-[var(--color-success)] border-[var(--color-success-border)] hover:bg-[var(--color-success-subtle)]'
+                              }`}
+                              title="Approve KPI"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setWidgetStatuses(prev => ({ ...prev, [kpi.id]: 'rejected' }))}
+                              className={`px-2 py-1 rounded-[var(--radius-element)] text-[10px] font-medium border transition-colors cursor-pointer ${
+                                status === 'rejected'
+                                  ? 'bg-[var(--color-danger)] text-white border-[var(--color-danger)]'
+                                  : 'bg-[var(--color-surface)] text-[var(--color-danger)] border-[var(--color-danger-border)] hover:bg-[var(--color-danger-subtle)]'
+                              }`}
+                              title="Reject KPI"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Step 4 & 9 & 10: Dynamic Interactive Charts Grid */}
+              {genAiDashboard.charts && genAiDashboard.charts.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider mb-2.5 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-[14px]">bar_chart</span>
+                      <span>Interactive Analytical Charts</span>
+                    </span>
+                    <span className="text-[11px] font-mono text-[var(--color-text-muted)] lowercase">
+                      {genAiDashboard.charts.filter(c => widgetStatuses[c.id] !== 'rejected').length} of {genAiDashboard.charts.length} approved
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {genAiDashboard.charts.map(chart => {
+                      const isTableView = chartViewModes[chart.id] === 'table';
+                      const status = widgetStatuses[chart.id] || 'approved';
+                      const maxVal = Math.max(...chart.data.map(d => d.value || 0), 1);
+                      return (
+                        <div
+                          key={chart.id}
+                          className={`p-4 rounded-[var(--radius-container)] bg-[var(--color-surface)] border shadow-[var(--shadow-2xs)] space-y-3 flex flex-col justify-between transition-all ${
+                            status === 'rejected'
+                              ? 'opacity-60 border-[var(--color-danger-border)] bg-[var(--color-danger-subtle)]/10'
+                              : status === 'approved'
+                              ? 'border-[var(--color-success-border)] hover:border-[var(--color-success)]'
+                              : 'border-[var(--color-border)] hover:border-[var(--color-primary)]/40'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between pb-2 border-b border-[var(--color-border)]">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-xs font-semibold text-[var(--color-text-primary)] flex items-center gap-1.5">
+                                  <span className="material-symbols-outlined text-[16px] text-[var(--color-primary)]">
+                                    {chart.kind === 'donut' ? 'donut_large' : chart.kind === 'line' ? 'show_chart' : 'bar_chart'}
+                                  </span>
+                                  <span>{chart.title}</span>
+                                </h4>
+                                <span className={`text-[9px] font-semibold px-1.5 py-0.2 rounded border uppercase ${
+                                  status === 'approved'
+                                    ? 'bg-[var(--color-success-subtle)] text-[var(--color-success)] border-[var(--color-success-border)]'
+                                    : status === 'rejected'
+                                    ? 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)] border-[var(--color-danger-border)]'
+                                    : 'bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border-[var(--color-border)]'
+                                }`}>
+                                  {status}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                                {chart.aggregation} of {chart.metric} grouped by {chart.dimension}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => toggleChartViewMode(chart.id)}
+                              className="px-2 py-1 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] text-[10px] font-mono text-[var(--color-text-secondary)] border border-[var(--color-border)] transition-colors cursor-pointer"
+                              title="Toggle Chart / Table view"
+                            >
+                              {isTableView ? '📊 Chart View' : '📋 Table View'}
+                            </button>
+                          </div>
+
+                          {/* Chart or Table Rendering */}
+                          <div className="min-h-[220px] flex flex-col justify-center">
+                            {isTableView ? (
+                              <div className="overflow-x-auto max-h-[260px]">
+                                <table className="w-full text-left text-xs">
+                                  <thead>
+                                    <tr className="border-b border-[var(--color-border)] text-[var(--color-text-secondary)]">
+                                      <th className="py-1.5 px-2 font-medium">#</th>
+                                      <th className="py-1.5 px-2 font-medium">{chart.dimension}</th>
+                                      <th className="py-1.5 px-2 font-medium text-right">{chart.metric}</th>
+                                      <th className="py-1.5 px-2 font-medium text-right">Share</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {chart.data.map((row, rIdx) => {
+                                      const total = chart.data.reduce((acc, d) => acc + (d.value || 0), 0);
+                                      const share = total > 0 ? ((row.value / total) * 100).toFixed(1) : '0';
+                                      return (
+                                        <tr key={rIdx} className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-hover)]">
+                                          <td className="py-1.5 px-2 text-[var(--color-text-muted)] font-mono">{rIdx + 1}</td>
+                                          <td className="py-1.5 px-2 text-[var(--color-text-primary)] font-medium">{row.label}</td>
+                                          <td className="py-1.5 px-2 text-right font-mono tabular-nums text-[var(--color-text-primary)]">
+                                            {Number(row.value).toLocaleString()}
+                                          </td>
+                                          <td className="py-1.5 px-2 text-right font-mono text-[var(--color-text-secondary)]">
+                                            {share}%
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              <div className="space-y-2 py-1">
+                                {chart.data.map((point, pIdx) => {
+                                  const pct = Math.max(Math.round((point.value / maxVal) * 100), 4);
+                                  return (
+                                    <div key={pIdx} className="space-y-0.5">
+                                      <div className="flex items-center justify-between text-[11px]">
+                                        <span className="font-medium text-[var(--color-text-primary)] truncate max-w-[200px]">
+                                          {point.label}
+                                        </span>
+                                        <span className="font-mono text-[var(--color-text-secondary)] tabular-nums">
+                                          {Number(point.value).toLocaleString()}
+                                        </span>
+                                      </div>
+                                      <div className="w-full bg-[var(--color-surface-hover)] rounded-full h-2 overflow-hidden border border-[var(--color-border)]/40">
+                                        <div
+                                          className="h-full rounded-full transition-all duration-500"
+                                          style={{
+                                            width: `${pct}%`,
+                                            backgroundColor: `hsl(${210 + pIdx * 18}, 75%, ${50 + (pIdx % 3) * 5}%)`
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Approve, Reject, Preview Live Action Buttons */}
+                          <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--color-border)]">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewWidget({
+                                id: chart.id,
+                                title: chart.title,
+                                kind: chart.kind,
+                                metric: chart.metric,
+                                dimension: chart.dimension,
+                                aggregation: chart.aggregation,
+                                data: chart.data,
+                                sql_query: genAiDashboard.sql_info?.sql_query,
+                              })}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] text-[11px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] transition-colors cursor-pointer"
+                              title="Preview Live Widget"
+                            >
+                              <span className="material-symbols-outlined text-[14px]">visibility</span>
+                              <span>Preview Live</span>
+                            </button>
+
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setWidgetStatuses(prev => ({ ...prev, [chart.id]: 'approved' }))}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-element)] text-[11px] font-medium border transition-colors cursor-pointer ${
+                                  status === 'approved'
+                                    ? 'bg-[var(--color-success)] text-white border-[var(--color-success)]'
+                                    : 'bg-[var(--color-surface)] text-[var(--color-success)] border-[var(--color-success-border)] hover:bg-[var(--color-success-subtle)]'
+                                }`}
+                                title="Approve Chart"
+                              >
+                                <span className="material-symbols-outlined text-[13px]">check</span>
+                                <span>Approve</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setWidgetStatuses(prev => ({ ...prev, [chart.id]: 'rejected' }))}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-element)] text-[11px] font-medium border transition-colors cursor-pointer ${
+                                  status === 'rejected'
+                                    ? 'bg-[var(--color-danger)] text-white border-[var(--color-danger)]'
+                                    : 'bg-[var(--color-surface)] text-[var(--color-danger)] border-[var(--color-danger-border)] hover:bg-[var(--color-danger-subtle)]'
+                                }`}
+                                title="Reject Chart"
+                              >
+                                <span className="material-symbols-outlined text-[13px]">close</span>
+                                <span>Reject</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Step 5 & 10: Python Advanced Visualization Engine (Matplotlib / Seaborn) */}
+              {genAiDashboard.python_visual && genAiDashboard.python_visual.image_base64 && (
+                <div className="border border-[var(--color-border)] rounded-[var(--radius-container)] overflow-hidden bg-[var(--color-surface)] p-4 space-y-3 shadow-[var(--shadow-2xs)]">
+                  <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[var(--color-border)]">
+                    <div>
+                      <h4 className="text-xs font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
+                        <span className="material-symbols-outlined text-[16px] text-[var(--color-primary)]">grid_view</span>
+                        <span>Python Matplotlib / Seaborn Advanced Visualization</span>
+                        <span className="px-2 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-success-subtle)] text-[var(--color-success)] text-[10px] font-medium border border-[var(--color-success-border)]">
+                          Dual-Path Verified
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                        {genAiDashboard.python_visual.prompt}
+                      </p>
+                    </div>
+
+                    <a
+                      href={genAiDashboard.python_visual.image_base64}
+                      download="genai_advanced_analysis.png"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)] text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] shadow-[var(--shadow-2xs)] transition-colors cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[14px]">download</span>
+                      <span>Download High-Res PNG</span>
+                    </a>
+                  </div>
+
+                  <div className="bg-[var(--color-surface-active)] rounded-[var(--radius-element)] p-3 border border-[var(--color-border)] flex items-center justify-center">
+                    <img
+                      src={genAiDashboard.python_visual.image_base64}
+                      alt={genAiDashboard.python_visual.prompt}
+                      className="max-h-[480px] object-contain rounded-[var(--radius-inner)] w-full"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Step 8: Proactive AI-Powered Widget Recommendations (Analysis-First) */}
+              {activeRecommendations && activeRecommendations.length > 0 && (
+                <div className="p-4 rounded-[var(--radius-container)] bg-[var(--color-surface-hover)] border border-[var(--color-border)] space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-semibold text-[var(--color-text-primary)] flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[18px] text-[var(--color-primary)]">auto_awesome</span>
+                        <span>Proactive AI Widget Recommendations (Analysis-First)</span>
+                      </h4>
+                      <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">
+                        Synthesized after completing analysis on actual query results. Click "+ Add to Dashboard" to insert directly.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                    {activeRecommendations.map(rec => (
+                      <div
+                        key={rec.id}
+                        className="p-3.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-primary)]/40 transition-all flex flex-col justify-between space-y-2.5 shadow-[var(--shadow-2xs)]"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono uppercase bg-[var(--color-surface-active)] px-1.5 py-0.5 rounded border border-[var(--color-border)] text-[var(--color-primary)]">
+                              {rec.kind}
+                            </span>
+                            <span className="text-[10px] text-[var(--color-text-muted)] font-mono">
+                              {rec.aggregation}
+                            </span>
+                          </div>
+                          <div className="font-semibold text-xs text-[var(--color-text-primary)] leading-snug">
+                            {rec.title}
+                          </div>
+                          <p className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
+                            {rec.rationale}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-1 border-t border-[var(--color-border)]">
+                          <button
+                            type="button"
+                            disabled={isAddingRecommendation[rec.id]}
+                            onClick={() => void handleAcceptRecommendation(rec)}
+                            className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-[var(--radius-element)] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-[11px] font-medium shadow-[var(--shadow-2xs)] transition-all cursor-pointer disabled:opacity-50"
+                          >
+                            <span className={`material-symbols-outlined text-[14px] ${isAddingRecommendation[rec.id] ? 'animate-spin' : ''}`}>
+                              {isAddingRecommendation[rec.id] ? 'sync' : 'add'}
+                            </span>
+                            <span>{isAddingRecommendation[rec.id] ? 'Adding…' : 'Add to Dashboard'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDismissRecommendation(rec.id)}
+                            className="px-2 py-1.5 rounded-[var(--radius-element)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] text-[11px] transition-colors cursor-pointer"
+                            title="Dismiss recommendation"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Conversational Follow-Up Refinement Console */}
+              <div className="p-3.5 rounded-[var(--radius-container)] bg-[var(--color-surface-hover)] border border-[var(--color-border)] flex items-center gap-2.5">
+                <span className="material-symbols-outlined text-[18px] text-[var(--color-primary)] shrink-0">chat</span>
+                <input
+                  type="text"
+                  className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-element)] px-3 py-1.5 text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)] transition-all"
+                  placeholder="Modify this dashboard with conversational follow-up (e.g. 'Add a breakdown by country', 'Filter out inactive items', 'Switch chart to donut')..."
+                  value={followUpPrompt}
+                  onChange={e => setFollowUpPrompt(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && followUpPrompt.trim() && !genAiRunning) {
+                      void handleRunGenAiDashboard(followUpPrompt);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={genAiRunning || !followUpPrompt.trim()}
+                  onClick={() => void handleRunGenAiDashboard(followUpPrompt)}
+                  className="px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-medium shadow-[var(--shadow-2xs)] transition-all cursor-pointer disabled:opacity-50 shrink-0"
+                >
+                  Refine
+                </button>
+              </div>
+
+              {/* Publish to Executive Dashboard Deployment Action */}
+              <div className="p-4 rounded-[var(--radius-container)] bg-gradient-to-r from-[var(--color-surface-active)] to-[var(--color-surface)] border border-[var(--color-border)] flex flex-wrap items-center justify-between gap-3 shadow-[var(--shadow-2xs)]">
+                <div>
+                  <div className="text-xs font-semibold text-[var(--color-text-primary)] flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[16px] text-[var(--color-success)]">cloud_upload</span>
+                    <span>Ready to deploy this AI-generated dashboard?</span>
+                  </div>
+                  <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">
+                    Publishes approved KPIs, charts, and metric summaries live to the Executive Dashboard for all platform stakeholders.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={isPublishingGenAi || ((genAiDashboard.kpi_cards?.filter(k => widgetStatuses[k.id] !== 'rejected').length || 0) + (genAiDashboard.charts?.filter(c => widgetStatuses[c.id] !== 'rejected').length || 0) === 0)}
+                  onClick={() => void handlePublishGenAiDashboard()}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[var(--radius-element)] bg-[var(--color-success)] hover:opacity-90 text-white font-medium text-xs shadow-[var(--shadow-2xs)] active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <span className={`material-symbols-outlined text-[16px] ${isPublishingGenAi ? 'animate-spin' : ''}`}>
+                    {isPublishingGenAi ? 'sync' : 'publish'}
+                  </span>
+                  <span>
+                    {isPublishingGenAi
+                      ? 'Publishing Dashboard…'
+                      : `Publish ${
+                          (genAiDashboard.kpi_cards?.filter(k => widgetStatuses[k.id] !== 'rejected').length || 0) +
+                          (genAiDashboard.charts?.filter(c => widgetStatuses[c.id] !== 'rejected').length || 0)
+                        } Approved Widgets to Executive Dashboard`}
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Live Preview & Verification Modal for Gen AI Widgets */}
+          {previewWidget && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+              <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] max-w-2xl w-full p-5 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)]">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-primary)]/10 text-[var(--color-primary)] flex items-center justify-center shrink-0 border border-[var(--color-primary)]/20">
+                      <span className="material-symbols-outlined text-[18px]">
+                        {previewWidget.kind === 'kpi' ? 'pin' : previewWidget.kind === 'donut' ? 'donut_large' : previewWidget.kind === 'line' ? 'show_chart' : 'bar_chart'}
+                      </span>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
+                        {previewWidget.title}
+                      </h3>
+                      <div className="flex items-center gap-2 text-[10px] text-[var(--color-text-muted)] font-mono">
+                        <span>Live Preview &amp; Verification Mode</span>
                         <span>•</span>
-                        <span>As of: {new Date(agentResult.data_as_of).toLocaleDateString()}</span>
-                      </>
-                    )}
+                        <span className={widgetStatuses[previewWidget.id] === 'rejected' ? 'text-[var(--color-danger)] font-bold' : 'text-[var(--color-success)] font-bold'}>
+                          Status: {widgetStatuses[previewWidget.id] === 'rejected' ? 'Rejected' : 'Approved'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewWidget(null)}
+                    className="p-1 rounded-[var(--radius-element)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">close</span>
+                  </button>
+                </div>
+
+                {/* Widget Render Preview */}
+                <div className="p-6 rounded-[var(--radius-container)] bg-[var(--color-surface-hover)] border border-[var(--color-border)]">
+                  {previewWidget.kind === 'kpi' ? (
+                    <div className="text-center space-y-2">
+                      <span className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wider">
+                        {previewWidget.aggregation} of {previewWidget.metric}
+                      </span>
+                      <div className="text-4xl font-extrabold text-[var(--color-text-primary)] tracking-tight tabular-nums">
+                        {previewWidget.format === 'currency'
+                          ? `$${Number(previewWidget.value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                          : previewWidget.format === 'percent'
+                          ? `${previewWidget.value}%`
+                          : Number(previewWidget.value).toLocaleString()}
+                      </div>
+                      {previewWidget.subtitle && (
+                        <p className="text-xs text-[var(--color-text-muted)]">{previewWidget.subtitle}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="text-xs font-medium text-[var(--color-text-secondary)] flex justify-between">
+                        <span>{previewWidget.aggregation} of {previewWidget.metric}</span>
+                        <span>Grouped by: {previewWidget.dimension}</span>
+                      </div>
+                      <div className="space-y-2 py-2">
+                        {previewWidget.data?.map((pt: any, idx: number) => {
+                          const maxVal = Math.max(...(previewWidget.data || []).map((d: any) => d.value || 0), 1);
+                          const pct = Math.max(Math.round((pt.value / maxVal) * 100), 4);
+                          return (
+                            <div key={idx} className="space-y-1">
+                              <div className="flex justify-between text-xs font-mono">
+                                <span className="text-[var(--color-text-primary)] font-medium">{pt.label}</span>
+                                <span className="text-[var(--color-text-secondary)]">{Number(pt.value).toLocaleString()}</span>
+                              </div>
+                              <div className="w-full bg-[var(--color-surface)] h-2 rounded-full overflow-hidden border border-[var(--color-border)]/50">
+                                <div
+                                  className="h-full rounded-full transition-all duration-500"
+                                  style={{
+                                    width: `${pct}%`,
+                                    backgroundColor: `hsl(${210 + idx * 24}, 75%, 50%)`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Query & Aggregation Specs */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div className="p-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)]">
+                    <div className="text-[10px] text-[var(--color-text-muted)] font-mono uppercase">Metric</div>
+                    <div className="font-semibold text-[var(--color-text-primary)] truncate">{previewWidget.metric || 'N/A'}</div>
+                  </div>
+                  <div className="p-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)]">
+                    <div className="text-[10px] text-[var(--color-text-muted)] font-mono uppercase">Aggregation</div>
+                    <div className="font-semibold text-[var(--color-text-primary)] truncate">{previewWidget.aggregation || 'N/A'}</div>
+                  </div>
+                  <div className="p-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)]">
+                    <div className="text-[10px] text-[var(--color-text-muted)] font-mono uppercase">Dimension</div>
+                    <div className="font-semibold text-[var(--color-text-primary)] truncate">{previewWidget.dimension || 'None (Single Metric)'}</div>
+                  </div>
+                  <div className="p-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)]">
+                    <div className="text-[10px] text-[var(--color-text-muted)] font-mono uppercase">Status</div>
+                    <div className={`font-semibold ${widgetStatuses[previewWidget.id] === 'rejected' ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}`}>
+                      {widgetStatuses[previewWidget.id] === 'rejected' ? 'Rejected' : 'Approved'}
+                    </div>
                   </div>
                 </div>
 
-                <a
-                  href={agentResult.image_base64}
-                  download="ai_core_graph.png"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
-                >
-                  <span className="material-symbols-outlined text-[16px]">download</span>
-                  <span>Download PNG</span>
-                </a>
-              </div>
+                {/* Backed SQL Execution Query snippet */}
+                {previewWidget.sql_query && (
+                  <div>
+                    <span className="text-[10px] font-mono text-[var(--color-text-muted)] uppercase block mb-1">Backed SQL Execution Query:</span>
+                    <pre className="p-2.5 rounded-[var(--radius-element)] bg-slate-900 text-slate-100 font-mono text-[10px] overflow-x-auto leading-relaxed border border-slate-800">
+                      {previewWidget.sql_query}
+                    </pre>
+                  </div>
+                )}
 
-              <div className="bg-white rounded-xl p-3 border border-slate-200 flex items-center justify-center">
-                <img
-                  src={agentResult.image_base64}
-                  alt={agentResult.prompt}
-                  className="max-h-[520px] object-contain rounded-lg w-full"
-                />
-              </div>
+                {/* Action Footer */}
+                <div className="flex items-center justify-between pt-3 border-t border-[var(--color-border)]">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewWidget(null)}
+                    className="px-4 py-2 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] text-xs font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] transition-colors cursor-pointer"
+                  >
+                    Close Preview
+                  </button>
 
-              {agentResult.insights && (
-                <div className="bg-white rounded-xl p-4 border border-slate-200 text-xs text-slate-700 space-y-1">
-                  <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-purple-600 text-sm">insights</span>
-                    AI Executive Insights:
-                  </span>
-                  <p className="leading-relaxed">{agentResult.insights}</p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWidgetStatuses(prev => ({ ...prev, [previewWidget.id]: 'approved' }));
+                        setPreviewWidget(null);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[var(--radius-element)] bg-[var(--color-success)] hover:opacity-90 text-white text-xs font-medium shadow-[var(--shadow-2xs)] transition-all cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                      <span>Approve Widget</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWidgetStatuses(prev => ({ ...prev, [previewWidget.id]: 'rejected' }));
+                        setPreviewWidget(null);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[var(--radius-element)] bg-[var(--color-danger)] hover:opacity-90 text-white text-xs font-medium shadow-[var(--shadow-2xs)] transition-all cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">cancel</span>
+                      <span>Reject Widget</span>
+                    </button>
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
           )}
         </section>
       )}
 
-      {/* MODE 3: AUTOMATED CUSTOM GRAPH (Data-Driven / No Prompt Required) */}
-      {activeMode === 'data_options' && model && (
-        <section className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3.5">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100">
-                <span className="material-symbols-outlined text-xl">auto_graph</span>
-              </div>
-              <div>
-                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <span>Data-Driven Custom Graph Generator</span>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    No Prompt Needed
-                  </span>
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Select your metrics, dimensions, and Seaborn visual style. The 10-step dual-path engine executes automatically.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Data Shown Options Form */}
-          <div className="space-y-5">
-            <div className={`grid grid-cols-1 sm:grid-cols-2 ${datasets.length > 1 ? 'lg:grid-cols-3' : 'lg:grid-cols-4'} gap-4`}>
-              {datasets.length > 1 && (
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px] text-emerald-600">table_chart</span>
-                    <span>Source Table (Measure Y)</span>
-                  </label>
-                  <select
-                    className="border border-emerald-300 bg-emerald-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
-                    value={selectedDatasetId}
-                    onChange={e => void handleSwitchDataset(e.target.value)}
-                  >
-                    {datasets.map(d => {
-                      const label = d.tableName || d.displayName || d.name;
-                      const hasDistinctSource = d.sourceFile && d.sourceFile !== label;
-                      const sourceHint = hasDistinctSource ? ` [${d.sourceFile}${d.sheetName ? ` · ${d.sheetName}` : ''}]` : '';
-                      return (
-                        <option key={d.id} value={d.id}>
-                          {label}{sourceHint} {d.isActive ? '★' : ''} ({(d.rowCount || 0).toLocaleString()} rows)
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Target Measure (Y)
-                </label>
-                <select
-                  className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
-                  value={selectedDataMetric}
-                  onChange={e => setSelectedDataMetric(e.target.value)}
-                >
-                  {model.fields
-                    .filter(f => f.role === 'measure' || f.name.includes('USD') || f.name.includes('Quantity'))
-                    .map(f => (
-                      <option key={f.name} value={f.name}>
-                        {f.semantic_name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              {datasets.length > 1 && (
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px] text-emerald-600">table_chart</span>
-                    <span>Dimension Table (Dimension X)</span>
-                  </label>
-                  <select
-                    className="border border-emerald-300 bg-emerald-50/40 rounded-lg px-3 py-1.5 w-full text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
-                    value={dataDimensionDatasetId || selectedDatasetId}
-                    onChange={e => void handleDataDimensionDatasetChange(e.target.value)}
-                  >
-                    {datasets.map(d => (
-                      <option key={d.id} value={d.id}>
-                        {d.name} {d.id === selectedDatasetId ? '(Same Table)' : ''} ({d.rowCount?.toLocaleString() || 0} rows)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Breakdown Dimension (X)
-                </label>
-                <select
-                  className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
-                  value={selectedDataDimension}
-                  onChange={e => setSelectedDataDimension(e.target.value)}
-                  disabled={dataDimensionDatasetId !== selectedDatasetId && (!dataJoinResolution || !dataJoinResolution.joinable)}
-                >
-                  {((dataDimensionDatasetId && dataDimensionDatasetId !== selectedDatasetId && dataDimensionModel)
-                    ? dataDimensionModel.fields
-                    : model.fields
-                  )
-                    .filter(f => ['dimension', 'identifier', 'time'].includes(f.role))
-                    .map(f => (
-                      <option key={f.name} value={f.name}>
-                        {f.semantic_name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Color Theme Palette
-                </label>
-                <select
-                  className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
-                  value={selectedPalette}
-                  onChange={e => setSelectedPalette(e.target.value)}
-                >
-                  <option value="Blues">Seaborn Blues (Corporate)</option>
-                  <option value="viridis">Viridis (Vibrant Gradient)</option>
-                  <option value="rocket">Rocket (Warm Sunset)</option>
-                  <option value="mako">Mako (Deep Ocean Teal)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Top-N Limit
-                </label>
-                <select
-                  className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-2xs"
-                  value={dataLimit}
-                  onChange={e => setDataLimit(Number(e.target.value))}
-                >
-                  <option value={5}>Top 5 Categories</option>
-                  <option value={10}>Top 10 Categories</option>
-                  <option value={20}>Top 20 Categories</option>
-                  <option value={50}>All Available</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Live Cross-Table Join Validation Status for Mode 3 */}
-            {dataDimensionDatasetId && dataDimensionDatasetId !== selectedDatasetId && (
-              <div className="mt-2">
-                {isResolvingDataJoin && (
-                  <div className="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                    <span className="material-symbols-outlined animate-spin text-[16px]">progress_activity</span>
-                    <span>Verifying join keys and value overlap between selected tables...</span>
-                  </div>
-                )}
-                {!isResolvingDataJoin && dataJoinResolution?.joinable && (
-                  <div className="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                    <span className="material-symbols-outlined text-emerald-600 text-[18px]">verified</span>
-                    <div>
-                      <span className="font-semibold">Join Verified: </span>
-                      <span>Linked via <code className="font-mono bg-emerald-100 px-1 py-0.5 rounded">{dataJoinResolution.left_key}</code> = <code className="font-mono bg-emerald-100 px-1 py-0.5 rounded">{dataJoinResolution.right_key}</code> ({dataJoinResolution.overlap_count?.toLocaleString()} matching records, {dataJoinResolution.cardinality})</span>
-                    </div>
-                  </div>
-                )}
-                {!isResolvingDataJoin && dataJoinResolution && !dataJoinResolution.joinable && (
-                  <div className="flex items-center gap-2 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
-                    <span className="material-symbols-outlined text-rose-600 text-[18px]">cancel</span>
-                    <div>
-                      <span className="font-semibold">Tables Cannot Be Joined: </span>
-                      <span>{dataJoinResolution.reason || 'No common matching key with data found between these datasets.'} Chart generation is disabled.</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Advanced Python Chart Type Tiles */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-2">
-                Select Charts
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                {ADVANCED_PYTHON_TYPES.map(type => (
-                  <button
-                    key={type.id}
-                    type="button"
-                    onClick={() => setSelectedAdvancedChart(type.id)}
-                    className={`flex flex-col items-center justify-center p-2 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${selectedAdvancedChart === type.id
-                        ? 'bg-emerald-50/80 border-emerald-500 text-emerald-800 shadow-sm ring-2 ring-emerald-500/20'
-                        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-                      }`}
-                  >
-                    <span className="material-symbols-outlined text-base mb-0.5">{type.icon}</span>
-                    <span className="font-bold text-[11px]">{type.label}</span>
-                    <span className="text-[10px] text-slate-400 font-normal mt-0.5 text-center leading-tight">
-                      {type.desc}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <button
-              disabled={dataModeRunning || (dataDimensionDatasetId !== selectedDatasetId && (!dataJoinResolution || !dataJoinResolution.joinable))}
-              onClick={() => void handleRunDataDrivenAgent()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-2xs transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-              title={dataDimensionDatasetId !== selectedDatasetId && (!dataJoinResolution || !dataJoinResolution.joinable) ? "Tables cannot be joined; chart generation disabled" : undefined}
-            >
-              <span className={`material-symbols-outlined text-lg ${dataModeRunning ? 'animate-spin' : ''}`}>
-                {dataModeRunning ? 'sync' : 'auto_graph'}
-              </span>
-              <span>{dataModeRunning ? 'Rendering 10-Step Graph…' : 'Generate Data-Driven Graph'}</span>
-            </button>
-          </div>
-
-          {/* Output Display for Mode 3 */}
-          {dataModeResult && dataModeResult.image_base64 && (
-            <div className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50 p-4 space-y-4 shadow-sm animate-in fade-in">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-sm">
-                    {selectedDataMetric} by {selectedDataDimension} ({selectedAdvancedChart})
-                  </h3>
-                  <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
-                    <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold text-[10px]">
-                      Verified Pre-computed Result
-                    </span>
-                    <span>•</span>
-                    <span>{dataModeResult.records_matched?.toLocaleString()} records processed</span>
-                  </div>
-                </div>
-
-                <a
-                  href={dataModeResult.image_base64}
-                  download="datadriven_chart.png"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
-                >
-                  <span className="material-symbols-outlined text-[16px]">download</span>
-                  <span>Download PNG</span>
-                </a>
-              </div>
-
-              <div className="bg-white rounded-xl p-3 border border-slate-200 flex items-center justify-center">
-                <img
-                  src={dataModeResult.image_base64}
-                  alt={dataModeResult.prompt}
-                  className="max-h-[520px] object-contain rounded-lg w-full"
-                />
-              </div>
-            </div>
-          )}
+      {/* SELECT DRAG AND DROP: Interactive Drag & Drop Dashboard Builder */}
+      {activeTab === 'dashboards' && dashboardMode === 'drag_drop' && (
+        <section className="space-y-4 animate-in fade-in">
+          <DragDropDashboardBuilder
+            datasets={datasets}
+            selectedDatasetId={selectedDatasetId}
+            onSwitchDataset={handleSwitchDataset}
+            model={model}
+            existingItems={items}
+            onSavedDefinition={() => {
+              void getRecommendations(true).then(setItems);
+            }}
+            user={user}
+          />
         </section>
       )}
 
@@ -1648,7 +2403,7 @@ export function GraphStudio({
                           type="button"
                           disabled={busy}
                           onClick={() => setConfirmBulkDelete(true)}
-                          className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="px-2.5 py-1.5 rounded-[var(--radius-element)] text-xs font-medium bg-[var(--color-danger-subtle)] text-[var(--color-danger)] border border-[var(--color-danger-border)] hover:bg-[var(--color-danger-subtle)] flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <span className="material-symbols-outlined text-[15px]">delete</span>
                           <span>Delete ({selectedInView.length})</span>
@@ -1661,7 +2416,7 @@ export function GraphStudio({
                             type="button"
                             disabled={busy}
                             onClick={() => void handleBulkDelete(selectedInView)}
-                            className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="px-2.5 py-1.5 rounded-[var(--radius-element)] text-xs font-medium bg-[var(--color-danger)] text-white hover:opacity-90 flex items-center gap-1 shadow-[var(--shadow-2xs)] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <span className={`material-symbols-outlined text-[15px] ${busyAction === 'bulk_delete' ? 'animate-spin' : ''}`}>
                               {busyAction === 'bulk_delete' ? 'progress_activity' : 'delete_forever'}
@@ -1672,7 +2427,7 @@ export function GraphStudio({
                             type="button"
                             disabled={busy}
                             onClick={() => setConfirmBulkDelete(false)}
-                            className="px-2 py-1.5 rounded-xl text-xs font-semibold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+                            className="px-2 py-1.5 rounded-[var(--radius-element)] text-xs font-medium bg-[var(--color-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] cursor-pointer disabled:opacity-50"
                           >
                             Cancel
                           </button>
@@ -1682,7 +2437,7 @@ export function GraphStudio({
                   )}
 
                   {items.length > 0 && (
-                    <div className="text-xs font-semibold px-3 py-1 bg-slate-100 text-slate-700 rounded-full border border-slate-200">
+                    <div className="text-xs font-medium px-2.5 py-1 bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] rounded-[var(--radius-full)] border border-[var(--color-border)]">
                       {approvedCount} of {items.length} Approved
                     </div>
                   )}
@@ -1690,13 +2445,13 @@ export function GraphStudio({
               </div>
 
               {model && !items.length && (
-                <div className="p-12 text-center bg-white border border-dashed border-slate-300 rounded-2xl space-y-4 shadow-sm">
-                  <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
-                    <span className="material-symbols-outlined text-3xl">query_stats</span>
+                <div className="p-12 text-center bg-[var(--color-surface)] border border-dashed border-[var(--color-border)] rounded-[var(--radius-page)] space-y-4 shadow-[var(--shadow-xs)]">
+                  <div className="w-12 h-12 rounded-[var(--radius-container)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] border border-[var(--color-border)] flex items-center justify-center mx-auto">
+                    <span className="material-symbols-outlined text-2xl">query_stats</span>
                   </div>
                   <div>
-                    <h3 className="font-bold text-slate-900 text-base">No KPI Definitions Found</h3>
-                    <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                    <h3 className="font-semibold text-[var(--color-text-primary)] text-sm">No KPI Definitions Found</h3>
+                    <p className="text-xs text-[var(--color-text-secondary)] mt-1 max-w-md mx-auto">
                       Click &quot;Propose AI Recommendations&quot; above to auto-generate supported KPI metrics from your schema, or create one using the options above.
                     </p>
                   </div>
@@ -1704,19 +2459,19 @@ export function GraphStudio({
               )}
 
               {displayedItems.length === 0 && items.length > 0 && (
-                <div className="p-8 text-center bg-white border border-dashed border-slate-200 rounded-2xl text-slate-500 text-xs">
+                <div className="p-8 text-center bg-[var(--color-surface)] border border-dashed border-[var(--color-border)] rounded-[var(--radius-container)] text-[var(--color-text-secondary)] text-xs">
                   No widgets match the selected filter (&quot;{filterDashboard === 'published' ? 'Live on Dashboard' : 'Not on Dashboard'}&quot;).
                   <button
                     type="button"
                     onClick={() => setFilterDashboard('all')}
-                    className="ml-2 text-blue-600 font-semibold hover:underline cursor-pointer"
+                    className="ml-2 text-[var(--color-primary)] font-medium hover:underline cursor-pointer"
                   >
                     Show all
                   </button>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4.5 items-start">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-start">
                 {displayedItems.map(item => {
                   const key = `${item.id}:${item.revision}`;
                   const isPublished = publishedKeys.includes(key);
@@ -1731,13 +2486,13 @@ export function GraphStudio({
                   return (
                     <article
                       key={key}
-                      className={`bg-white border rounded-xl p-3.5 shadow-2xs transition-all flex flex-col justify-between h-full space-y-2.5 relative overflow-hidden ${isDeleteSelected
-                          ? 'border-rose-300 ring-2 ring-rose-500/15 bg-rose-50/10'
+                      className={`bg-[var(--color-surface)] border rounded-[var(--radius-container)] p-3.5 shadow-[var(--shadow-2xs)] transition-all flex flex-col justify-between h-full space-y-2.5 relative overflow-hidden ${isDeleteSelected
+                          ? 'border-[var(--color-danger-border)] ring-2 ring-[var(--color-danger)]/15 bg-[var(--color-danger-subtle)]/30'
                           : isPublished
-                            ? 'border-blue-300 ring-2 ring-blue-500/15 bg-blue-50/10'
+                            ? 'border-[var(--color-border)] ring-1 ring-[var(--color-border-strong)]'
                             : isSelected
-                              ? 'border-emerald-300 ring-4 ring-emerald-400/10 bg-emerald-50/10'
-                              : 'border-slate-200/80 hover:border-slate-300 hover:shadow-md'
+                              ? 'border-[var(--color-success-border)] ring-2 ring-[var(--color-success)]/15'
+                              : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:shadow-[var(--shadow-xs)]'
                         }`}
                     >
                       {/* Header with Title, Kind Badge, Dashboard Status, and Review Status */}
@@ -1757,20 +2512,20 @@ export function GraphStudio({
                                     prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
                                   );
                                 }}
-                                className="w-3.5 h-3.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer shrink-0"
+                                className="w-3.5 h-3.5 rounded-[var(--radius-inner)] border-[var(--color-border)] text-[var(--color-danger)] focus:ring-[var(--color-danger)] cursor-pointer shrink-0"
                               />
-                              <h3 className="font-bold text-xs sm:text-sm text-slate-900 leading-snug truncate" title={item.title}>
+                              <h3 className="font-semibold text-xs sm:text-sm text-[var(--color-text-primary)] leading-snug truncate" title={item.title}>
                                 {item.title}
                               </h3>
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-wide shrink-0">
+                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)] uppercase tracking-wide shrink-0">
                                 {item.kind}
                               </span>
                               {(item.source_file || item.dataset_name) && (
                                 <span
-                                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 truncate max-w-[170px]"
+                                  className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] border border-[var(--color-border)] truncate max-w-[170px]"
                                   title={`Source File: ${item.source_file || item.dataset_name}`}
                                 >
-                                  <span className="material-symbols-outlined text-[12px] text-indigo-600">description</span>
+                                  <span className="material-symbols-outlined text-[12px] text-[var(--color-text-muted)]">description</span>
                                   <span className="truncate">{item.source_file || item.dataset_name}</span>
                                 </span>
                               )}
@@ -1781,27 +2536,27 @@ export function GraphStudio({
                             {isPublished ? (
                               <span
                                 title="This KPI is currently active and visible on the Executive Dashboard."
-                                className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs whitespace-nowrap"
+                                className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-medium px-2 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-success-subtle)] text-[var(--color-success)] border border-[var(--color-success-border)] shadow-[var(--shadow-2xs)] whitespace-nowrap"
                               >
-                                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse"></span>
+                                <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
                                 <span>Live on Dashboard</span>
                               </span>
                             ) : (
                               <span
                                 title="This KPI is not currently included on the Executive Dashboard."
-                                className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap"
+                                className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-normal px-2 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-surface-active)] text-[var(--color-text-muted)] border border-[var(--color-border)] whitespace-nowrap"
                               >
-                                <span className="material-symbols-outlined text-[13px] text-slate-400">dashboard_customize</span>
+                                <span className="material-symbols-outlined text-[13px] text-[var(--color-text-muted)]">dashboard_customize</span>
                                 <span>Not on Dashboard</span>
                               </span>
                             )}
 
                             <span
-                              className={`text-[10px] sm:text-[11px] font-semibold px-2 py-0.5 rounded-full border shrink-0 whitespace-nowrap ${item.status === 'approved'
-                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              className={`text-[10px] sm:text-[11px] font-medium px-2 py-0.5 rounded-[var(--radius-full)] border shrink-0 whitespace-nowrap ${item.status === 'approved'
+                                  ? 'bg-[var(--color-success-subtle)] text-[var(--color-success)] border-[var(--color-success-border)]'
                                   : item.status === 'rejected'
-                                    ? 'bg-rose-50 text-rose-800 border-rose-200'
-                                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                                    ? 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)] border-[var(--color-danger-border)]'
+                                    : 'bg-[var(--color-warning-subtle)] text-[var(--color-warning)] border-[var(--color-warning-border)]'
                                 }`}
                             >
                               {item.status.charAt(0).toUpperCase() + item.status.slice(1)} (Rev {item.revision})
@@ -1809,28 +2564,28 @@ export function GraphStudio({
                           </div>
                         </div>
 
-                        <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed" title={item.explanation}>
+                        <p className="text-xs text-[var(--color-text-secondary)] line-clamp-2 leading-relaxed" title={item.explanation}>
                           {item.explanation}
                         </p>
 
                         {item.reviewer && (
-                          <p className="text-[10px] text-slate-400 font-mono truncate" title={`Reviewed by ${item.reviewer} · ${new Date(item.reviewed_at || '').toLocaleString()}`}>
+                          <p className="text-[10px] text-[var(--color-text-muted)] font-mono truncate" title={`Reviewed by ${item.reviewer} · ${new Date(item.reviewed_at || '').toLocaleString()}`}>
                             Reviewed by {item.reviewer.slice(0, 10)}... · {new Date(item.reviewed_at || '').toLocaleDateString()}
                           </p>
                         )}
                       </div>
 
                       {/* Query Plan Accordion */}
-                      <details className="text-[11px] text-slate-600 bg-slate-50 rounded-lg p-2 border border-slate-100">
-                        <summary className="cursor-pointer font-medium text-slate-700 select-none flex items-center gap-1.5 text-xs">
-                          <span className="material-symbols-outlined text-sm text-slate-500">code</span>
+                      <details className="text-[11px] text-[var(--color-text-secondary)] bg-[var(--color-surface-hover)] rounded-[var(--radius-element)] p-2 border border-[var(--color-border)]">
+                        <summary className="cursor-pointer font-medium text-[var(--color-text-primary)] select-none flex items-center gap-1.5 text-xs">
+                          <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">code</span>
                           <span>View Dependencies & Query Plan</span>
                         </summary>
                         <div className="mt-2 space-y-1.5">
                           <p className="text-[11px] truncate">
                             <strong>Dependencies:</strong> {(item.dependencies || []).join(', ') || 'Source rows count'}
                           </p>
-                          <pre className="overflow-auto max-h-36 bg-slate-900 text-slate-100 rounded-lg p-2.5 text-[10px] font-mono leading-relaxed">
+                          <pre className="overflow-auto max-h-36 bg-[var(--color-text-primary)] text-[var(--color-surface)] rounded-[var(--radius-inner)] p-2.5 text-[10px] font-mono leading-relaxed">
                             {JSON.stringify(item.query_plan, null, 2)}
                           </pre>
                         </div>
@@ -1838,16 +2593,16 @@ export function GraphStudio({
 
                       {/* Calculation Live Preview (Formatted $34.09M values) */}
                       {isPreviewOpen && (
-                        <div className="border border-blue-200 bg-blue-50/20 rounded-xl p-3 mt-1 shadow-inner overflow-hidden">
-                          <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-blue-100 text-xs font-semibold text-blue-900">
+                        <div className="border border-[var(--color-border)] bg-[var(--color-surface-hover)] rounded-[var(--radius-element)] p-3 mt-1 shadow-inner overflow-hidden">
+                          <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-[var(--color-border)] text-xs font-semibold text-[var(--color-text-primary)]">
                             <span className="flex items-center gap-1.5 text-xs">
-                              <span className="material-symbols-outlined text-blue-600 text-sm">visibility</span>
+                              <span className="material-symbols-outlined text-[var(--color-primary)] text-sm">visibility</span>
                               <span>Live Calculation Engine Preview</span>
                             </span>
                             <button
                               type="button"
                               onClick={() => void togglePreview(item)}
-                              className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                              className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
                               title="Hide preview"
                             >
                               <span className="material-symbols-outlined text-sm">close</span>
@@ -1860,15 +2615,15 @@ export function GraphStudio({
                       )}
 
                       {/* Action Bar */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-slate-100 mt-auto">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-[var(--color-border)] mt-auto">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <button
                             type="button"
                             disabled={busy || isPreviewLoading || isCardReviewing}
                             onClick={() => void togglePreview(item)}
-                            className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all border cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${isPreviewOpen
-                                ? 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100'
-                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 shadow-2xs'
+                            className={`px-2 py-1 rounded-[var(--radius-element)] text-xs font-medium flex items-center gap-1 transition-all border cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${isPreviewOpen
+                                ? 'bg-[var(--color-surface-active)] text-[var(--color-primary)] border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]'
+                                : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] shadow-[var(--shadow-2xs)]'
                               }`}
                           >
                             <span className={`material-symbols-outlined text-[15px] ${isPreviewLoading ? 'animate-spin' : ''}`}>
@@ -1890,7 +2645,7 @@ export function GraphStudio({
                               setActiveMode('visual');
                               document.getElementById('definition-form')?.scrollIntoView({ behavior: 'smooth' });
                             }}
-                            className="px-2 py-1 rounded-lg text-xs font-semibold text-slate-700 border border-slate-200 bg-white hover:bg-slate-50 flex items-center gap-1 transition-all shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="px-2 py-1 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] flex items-center gap-1 transition-all shadow-[var(--shadow-2xs)] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <span className="material-symbols-outlined text-[15px]">edit</span>
                             <span>Edit Query</span>
@@ -1901,7 +2656,7 @@ export function GraphStudio({
                             disabled={busy || isPreviewLoading || isCardReviewing || isCardDeleting}
                             onClick={() => void handleDeleteItem(item)}
                             title="Delete this widget"
-                            className="px-2 py-1 rounded-lg text-xs font-semibold text-rose-600 border border-rose-200 bg-white hover:bg-rose-50 flex items-center gap-1 transition-all shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="px-2 py-1 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-danger)] border border-[var(--color-danger-border)] bg-[var(--color-surface)] hover:bg-[var(--color-danger-subtle)] flex items-center gap-1 transition-all shadow-[var(--shadow-2xs)] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <span className={`material-symbols-outlined text-[15px] ${isCardDeleting ? 'animate-spin' : ''}`}>
                               {isCardDeleting ? 'progress_activity' : 'delete'}
@@ -1910,12 +2665,12 @@ export function GraphStudio({
                           </button>
 
                           {item.status === 'proposed' && (
-                            <div className="flex items-center gap-1.5 pl-1.5 border-l border-slate-200">
+                            <div className="flex items-center gap-1.5 pl-1.5 border-l border-[var(--color-border)]">
                               <button
                                 type="button"
                                 disabled={busy || isPreviewLoading || isCardReviewing}
                                 onClick={() => void handleReviewItem(item, 'approved')}
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 shadow-2xs transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                                className="bg-[var(--color-success)] hover:opacity-90 text-white font-medium text-xs px-2.5 py-1.5 rounded-[var(--radius-element)] flex items-center gap-1 shadow-[var(--shadow-2xs)] transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                               >
                                 <span className={`material-symbols-outlined text-[15px] ${reviewingDecision === 'approved' ? 'animate-spin' : ''}`}>
                                   {reviewingDecision === 'approved' ? 'progress_activity' : 'check'}
@@ -1927,7 +2682,7 @@ export function GraphStudio({
                                 type="button"
                                 disabled={busy || isPreviewLoading || isCardReviewing}
                                 onClick={() => void handleReviewItem(item, 'rejected')}
-                                className="border border-rose-200 text-rose-600 hover:bg-rose-50 font-semibold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                                className="border border-[var(--color-danger-border)] text-[var(--color-danger)] hover:bg-[var(--color-danger-subtle)] font-medium text-xs px-2.5 py-1.5 rounded-[var(--radius-element)] flex items-center gap-1 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                               >
                                 <span className={`material-symbols-outlined text-[15px] ${reviewingDecision === 'rejected' ? 'animate-spin' : ''}`}>
                                   {reviewingDecision === 'rejected' ? 'progress_activity' : 'close'}
@@ -1947,9 +2702,9 @@ export function GraphStudio({
                                   prev.includes(key) ? prev.filter(v => v !== key) : [...prev, key]
                                 );
                               }}
-                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer select-none border shrink-0 ${isSelected
-                                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
-                                  : 'bg-white text-slate-700 border-slate-300 hover:border-emerald-500 hover:text-emerald-700'
+                              className={`px-2.5 py-1 rounded-[var(--radius-element)] text-xs font-medium flex items-center gap-1 transition-all cursor-pointer select-none border shrink-0 ${isSelected
+                                  ? 'bg-[var(--color-success)] text-white border-[var(--color-success)] shadow-[var(--shadow-2xs)]'
+                                  : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]'
                                 }`}
                             >
                               <span className="material-symbols-outlined text-[16px]">
@@ -1960,9 +2715,9 @@ export function GraphStudio({
                           ) : (
                             <div
                               title="Only Admin or Admin+User accounts have permission to publish widgets to the Executive Dashboard."
-                              className="px-2.5 py-1.5 rounded-xl text-xs font-medium text-slate-400 bg-slate-50 border border-slate-200 flex items-center gap-1.5 shrink-0 select-none cursor-not-allowed"
+                              className="px-2.5 py-1.5 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-text-muted)] bg-[var(--color-surface-active)] border border-[var(--color-border)] flex items-center gap-1.5 shrink-0 select-none cursor-not-allowed"
                             >
-                              <span className="material-symbols-outlined text-[14px] text-slate-400">lock</span>
+                              <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">lock</span>
                               <span>Publishing (Admin Only)</span>
                             </div>
                           )
@@ -1976,18 +2731,18 @@ export function GraphStudio({
 
             {/* Sticky Bottom Publishing Bar */}
             {canPublish ? (
-              <div className="sticky bottom-4 z-40 bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="sticky bottom-4 z-40 bg-[var(--color-surface)]/95 backdrop-blur-md border border-[var(--color-border)] shadow-[var(--shadow-lg)] rounded-[var(--radius-page)] p-4 flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                  <div className="w-10 h-10 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] border border-[var(--color-border)] flex items-center justify-center shrink-0">
                     <span className="material-symbols-outlined text-xl">dashboard_customize</span>
                   </div>
                   <div>
-                    <div className="text-sm font-bold text-slate-900">
+                    <div className="text-sm font-semibold text-[var(--color-text-primary)]">
                       {selected.length === 0
                         ? 'No widgets selected for Executive Dashboard'
                         : `${selected.length} widget${selected.length > 1 ? 's' : ''} ready to publish (${publishedKeys.length} live on dashboard)`}
                     </div>
-                    <div className="text-xs text-slate-500">
+                    <div className="text-xs text-[var(--color-text-secondary)]">
                       {selected.length === 0
                         ? 'Click "Include on Dashboard" on any approved KPI card above.'
                         : 'Click button to deploy selected widgets live to the Executive Dashboard.'}
@@ -1999,9 +2754,9 @@ export function GraphStudio({
                   type="button"
                   disabled={busy || selected.length === 0}
                   onClick={() => void handlePublishDashboard()}
-                  className={`inline-flex items-center gap-2 font-bold text-sm px-6 py-2.5 rounded-xl shadow-md transition-all ${selected.length > 0
-                      ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer hover:shadow-lg'
-                      : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                  className={`inline-flex items-center gap-2 font-medium text-xs px-5 py-2.5 rounded-[var(--radius-element)] shadow-[var(--shadow-sm)] transition-all ${selected.length > 0
+                      ? 'bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white cursor-pointer'
+                      : 'bg-[var(--color-surface-active)] text-[var(--color-text-muted)] cursor-not-allowed shadow-none border border-[var(--color-border)]'
                     }`}
                 >
                   <span className={`material-symbols-outlined text-lg ${busyAction === 'publish' ? 'animate-spin' : ''}`}>
@@ -2017,19 +2772,19 @@ export function GraphStudio({
                 </button>
               </div>
             ) : (
-              <div className="sticky bottom-4 z-40 bg-slate-50/95 backdrop-blur-md border border-slate-200/80 shadow-md rounded-2xl p-3.5 flex items-center justify-between gap-4">
+              <div className="sticky bottom-4 z-40 bg-[var(--color-surface-hover)]/95 backdrop-blur-md border border-[var(--color-border)] shadow-[var(--shadow-md)] rounded-[var(--radius-page)] p-3.5 flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-slate-200/80 text-slate-600 flex items-center justify-center shrink-0">
+                  <div className="w-9 h-9 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)] flex items-center justify-center shrink-0">
                     <span className="material-symbols-outlined text-lg">admin_panel_settings</span>
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-slate-800">Publishing Restricted to Administrators</div>
-                    <div className="text-[11px] text-slate-500">
+                    <div className="text-xs font-semibold text-[var(--color-text-primary)]">Publishing Restricted to Administrators</div>
+                    <div className="text-[11px] text-[var(--color-text-secondary)]">
                       Only <strong>Admin</strong> or <strong>Admin+User</strong> accounts have permission to publish widgets to the Executive Dashboard.
                     </div>
                   </div>
                 </div>
-                <span className="text-[11px] font-semibold text-slate-500 bg-slate-200/70 border border-slate-300/80 px-2.5 py-1 rounded-lg select-none">
+                <span className="text-[11px] font-medium text-[var(--color-text-muted)] bg-[var(--color-surface-active)] border border-[var(--color-border)] px-2.5 py-1 rounded-[var(--radius-inner)] select-none">
                   Read-Only
                 </span>
               </div>

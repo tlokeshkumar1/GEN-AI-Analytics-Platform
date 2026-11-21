@@ -22,28 +22,28 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   return (
     <nav 
       aria-label="Mobile Bottom Navigation"
-      className="fixed bottom-0 left-0 right-0 z-40 lg:hidden bg-white/95 backdrop-blur-md border-t border-[#E2E8F0] pb-safe"
+      className="fixed bottom-0 left-0 right-0 z-40 lg:hidden bg-[var(--color-background-surface)]/98 backdrop-blur-md border-t border-[var(--color-border)] pb-safe"
     >
-      <div className="grid grid-cols-6 items-center h-14 sm:h-16 px-0.5 sm:px-1 max-w-lg mx-auto">
+      <div className="grid grid-cols-6 items-center h-14 px-1 max-w-lg mx-auto">
         {tabs.map((tab) => {
           const isActive = activePath === tab.id;
           const isAiTab = tab.id === 'build-your-kpi-graph-studio' || tab.id === 'ai-agents';
-          const activeColor = isAiTab ? 'text-[#7C3AED]' : 'text-[#2563EB]';
+          const activeColor = isAiTab ? 'text-[var(--color-ai)]' : 'text-[var(--color-primary)]';
 
           return (
             <button
               key={tab.id}
               onClick={() => onNavigate(tab.id)}
-              className={`flex flex-col items-center justify-center py-1 px-0.5 rounded-lg transition-colors min-h-[44px] ${
+              className={`flex flex-col items-center justify-center py-1 px-0.5 rounded-[var(--radius-element)] transition-colors min-h-[44px] cursor-pointer ${
                 isActive
-                  ? `${activeColor} font-semibold`
-                  : 'text-[#64748B] hover:text-[#0F172A]'
+                  ? `${activeColor} font-medium`
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
               }`}
             >
-              <span className={`material-symbols-outlined text-[19px] sm:text-[22px] ${isActive ? 'font-bold' : ''}`}>
+              <span className={`material-symbols-outlined text-[19px] ${isActive ? 'font-semibold' : ''}`}>
                 {tab.icon}
               </span>
-              <span className={`text-[9px] sm:text-[10px] tracking-tight leading-tight mt-0.5 truncate max-w-[46px] sm:max-w-[54px] ${isActive ? 'font-semibold' : ''}`}>
+              <span className={`text-[10px] tracking-tight leading-tight mt-0.5 truncate max-w-[50px] ${isActive ? 'font-medium' : ''}`}>
                 {tab.label}
               </span>
             </button>
@@ -53,13 +53,13 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
         {/* More Menu Trigger */}
         <button
           onClick={onOpenDrawer}
-          className="flex flex-col items-center justify-center py-1 px-0.5 rounded-lg transition-colors min-h-[44px] text-[#64748B] hover:text-[#0F172A]"
+          className="flex flex-col items-center justify-center py-1 px-0.5 rounded-[var(--radius-element)] transition-colors min-h-[44px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
           aria-label="More navigation items"
         >
-          <span className="material-symbols-outlined text-[19px] sm:text-[22px]">
+          <span className="material-symbols-outlined text-[19px]">
             menu
           </span>
-          <span className="text-[9px] sm:text-[10px] tracking-tight leading-tight mt-0.5">
+          <span className="text-[10px] tracking-tight leading-tight mt-0.5">
             More
           </span>
         </button>

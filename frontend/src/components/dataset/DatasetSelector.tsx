@@ -132,32 +132,32 @@ export const DatasetSelector: React.FC<DatasetSelectorProps> = ({
         <button
           type="button"
           onClick={() => setIsOpen((prev) => !prev)}
-          className={`h-10 px-3.5 sm:px-4 rounded-xl border transition-all duration-150 flex items-center gap-2.5 shadow-xs text-left cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#2563EB]/30 ${
+          className={`h-9 px-3 rounded-[var(--radius-element)] border transition-all duration-150 flex items-center gap-2.5 shadow-[var(--shadow-xs)] text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${
             selectedDataset
-              ? 'bg-[#EFF6FF] border-[#BFDBFE] text-[#1E3A8A] hover:bg-[#DBEAFE]'
-              : 'bg-white border-[#CBD5E1] text-[#0F172A] hover:bg-[#F8FAFC]'
+              ? 'bg-[var(--color-primary-soft)] border-[var(--color-primary-muted)] text-[var(--color-primary)] hover:bg-[var(--color-primary-muted)]'
+              : 'bg-[var(--color-background-surface)] border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-background-subtle)]'
           }`}
           aria-haspopup="listbox"
           aria-expanded={isOpen}
           aria-label="Dataset selector"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <span className="p-1 rounded-lg bg-white/80 border border-slate-200 text-[#2563EB] shrink-0">
-              <Database className="w-4 h-4" />
+            <span className="p-1 rounded-[var(--radius-inner)] bg-[var(--color-background-surface)] border border-[var(--color-border)] text-[var(--color-primary)] shrink-0">
+              <Database className="w-3.5 h-3.5" />
             </span>
             <div className="flex flex-col min-w-0 pr-1">
-              <span className="text-xs font-semibold truncate max-w-[170px] sm:max-w-[220px]">
+              <span className="text-xs font-medium truncate max-w-[170px] sm:max-w-[220px]">
                 {selectedDataset ? selectedDataset.name : 'Select dataset'}
               </span>
               {selectedDataset && (
-                <span className="text-[10px] text-[#475569] font-mono leading-none truncate">
+                <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-none truncate">
                   {selectedDataset.rowCount.toLocaleString()} rows · {selectedDataset.format.toUpperCase()}
                 </span>
               )}
             </div>
           </div>
           <ChevronDown
-            className={`w-4 h-4 text-slate-500 transition-transform duration-200 shrink-0 ${
+            className={`w-3.5 h-3.5 text-[var(--color-text-muted)] transition-transform duration-150 shrink-0 ${
               isOpen ? 'rotate-180' : ''
             }`}
           />
@@ -171,54 +171,54 @@ export const DatasetSelector: React.FC<DatasetSelectorProps> = ({
               e.stopPropagation();
               onClearSelection();
             }}
-            className="h-10 px-2.5 rounded-xl bg-white border border-[#CBD5E1] text-[#64748B] hover:text-[#0F172A] hover:bg-[#F1F5F9] transition-colors shadow-xs flex items-center justify-center cursor-pointer"
-            title="Clear selection (Return to default upload view)"
+            className="h-9 px-2 rounded-[var(--radius-element)] bg-[var(--color-background-surface)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-background-subtle)] transition-colors shadow-[var(--shadow-xs)] flex items-center justify-center cursor-pointer"
+            title="Clear selection"
             aria-label="Clear dataset selection"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         )}
       </div>
 
       {/* Dropdown Menu Popup */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-white border border-[#CBD5E1] shadow-2xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
+        <div className="absolute right-0 mt-1.5 w-80 sm:w-96 rounded-[var(--radius-container)] bg-[var(--color-background-surface)] border border-[var(--color-border)] shadow-[var(--shadow-xl)] z-50 overflow-hidden animate-in fade-in duration-150">
           {/* Search Header */}
-          <div className="p-2.5 border-b border-[#E2E8F0] bg-[#F8FAFC]">
+          <div className="p-2 border-b border-[var(--color-border)] bg-[var(--color-background-subtle)]">
             <div className="relative">
-              <Search className="w-4 h-4 text-[#64748B] absolute left-3 top-2.5 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 text-[var(--color-text-muted)] absolute left-2.5 top-2.5 pointer-events-none" />
               <input
                 ref={searchInputRef}
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search datasets by name or format..."
-                className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl bg-white border border-[#CBD5E1] text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20 transition-all font-sans"
+                placeholder="Search datasets by name or format…"
+                className="w-full pl-8 pr-3 py-1.5 text-xs rounded-[var(--radius-element)] bg-[var(--color-background-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-placeholder)] focus:outline-none focus:border-[var(--color-primary)] transition-all font-sans"
               />
             </div>
           </div>
 
           {/* Options Body */}
-          <div className="max-h-80 overflow-y-auto p-1.5 space-y-1">
+          <div className="max-h-80 overflow-y-auto p-1.5 space-y-0.5">
             {/* Loading State */}
             {isLoading && (
-              <div className="py-8 px-4 flex flex-col items-center justify-center gap-2 text-slate-500 text-xs">
-                <RefreshCw className="w-5 h-5 animate-spin text-[#2563EB]" />
-                <span>Loading available datasets...</span>
+              <div className="py-8 px-4 flex flex-col items-center justify-center gap-2 text-[var(--color-text-muted)] text-xs">
+                <RefreshCw className="w-4 h-4 animate-spin text-[var(--color-primary)]" />
+                <span>Loading available datasets…</span>
               </div>
             )}
 
             {/* Error State */}
             {!isLoading && error && (
               <div className="p-4 text-center space-y-2">
-                <div className="flex items-center justify-center gap-1.5 text-rose-600 text-xs font-semibold">
+                <div className="flex items-center justify-center gap-1.5 text-[var(--color-error)] text-xs font-medium">
                   <AlertCircle className="w-4 h-4" />
                   <span>{error}</span>
                 </div>
                 <button
                   type="button"
                   onClick={fetchDatasetList}
-                  className="px-3 py-1 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs font-medium transition-colors"
+                  className="px-3 py-1 rounded-[var(--radius-element)] bg-[var(--color-error-soft)] text-[var(--color-error)] text-xs font-medium transition-colors cursor-pointer"
                 >
                   Retry loading
                 </button>
@@ -227,14 +227,14 @@ export const DatasetSelector: React.FC<DatasetSelectorProps> = ({
 
             {/* Empty State */}
             {!isLoading && !error && filteredDatasets.length === 0 && (
-              <div className="py-8 px-4 text-center space-y-2 text-slate-500">
-                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
-                  <Layers className="w-5 h-5" />
+              <div className="py-8 px-4 text-center space-y-2 text-[var(--color-text-muted)]">
+                <div className="w-9 h-9 rounded-full bg-[var(--color-background-subtle)] flex items-center justify-center mx-auto text-[var(--color-text-muted)]">
+                  <Layers className="w-4 h-4" />
                 </div>
-                <div className="text-xs font-medium text-slate-700">
+                <div className="text-xs font-medium text-[var(--color-text-primary)]">
                   {searchQuery ? 'No matching datasets found' : 'No datasets yet'}
                 </div>
-                <p className="text-[11px] text-slate-500 max-w-[200px] mx-auto">
+                <p className="text-[11px] text-[var(--color-text-muted)] max-w-[200px] mx-auto">
                   {searchQuery ? 'Try adjusting your search query' : 'Upload one to get started'}
                 </p>
               </div>
@@ -242,7 +242,7 @@ export const DatasetSelector: React.FC<DatasetSelectorProps> = ({
 
             {/* Dataset Options List */}
             {!isLoading && !error && (
-              <ul ref={listboxRef} role="listbox" aria-label="Available datasets" className="space-y-1">
+              <ul ref={listboxRef} role="listbox" aria-label="Available datasets" className="space-y-0.5">
                 {filteredDatasets.map((ds, index) => {
                   const isSelected = selectedDataset?.id === ds.id;
                   const isFocused = focusedIndex === index;
@@ -257,51 +257,46 @@ export const DatasetSelector: React.FC<DatasetSelectorProps> = ({
                         setIsOpen(false);
                         setSearchQuery('');
                       }}
-                      className={`p-2.5 rounded-xl cursor-pointer transition-all flex items-start justify-between gap-2.5 ${
+                      className={`p-2 rounded-[var(--radius-element)] cursor-pointer transition-all flex items-start justify-between gap-2.5 ${
                         isSelected
-                          ? 'bg-[#EFF6FF] border border-[#BFDBFE]'
+                          ? 'bg-[var(--color-primary-soft)] border border-[var(--color-primary-muted)]'
                           : isFocused
-                          ? 'bg-[#F1F5F9]'
-                          : 'hover:bg-[#F8FAFC]'
+                          ? 'bg-[var(--color-background-subtle)]'
+                          : 'hover:bg-[var(--color-background-subtle)]'
                       }`}
                     >
                       <div className="flex items-start gap-2.5 min-w-0 flex-1">
                         <div
-                          className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                          className={`w-6 h-6 rounded-[var(--radius-inner)] flex items-center justify-center shrink-0 mt-0.5 ${
                             ds.format === 'xlsx'
-                              ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                              ? 'bg-[var(--color-success-soft)] text-[var(--color-success)] border border-[var(--color-success-muted)]'
                               : ds.format === 'csv'
-                              ? 'bg-blue-50 text-blue-600 border border-blue-200'
-                              : 'bg-purple-50 text-purple-600 border border-purple-200'
+                              ? 'bg-[var(--color-primary-soft)] text-[var(--color-primary)] border border-[var(--color-primary-muted)]'
+                              : 'bg-[var(--color-ai-soft)] text-[var(--color-ai)] border border-[var(--color-ai-muted)]'
                           }`}
                         >
-                          <FileSpreadsheet className="w-4 h-4" />
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
                         </div>
                         <div className="flex flex-col min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-semibold text-xs text-[#0F172A] truncate" title={ds.name}>
+                            <span className="font-medium text-xs text-[var(--color-text-primary)] truncate" title={ds.name}>
                               {ds.name}
                             </span>
-                            <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 font-medium">
+                            <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded-[var(--radius-inner)] bg-[var(--color-background-subtle)] text-[var(--color-text-secondary)] font-medium">
                               {ds.format}
                             </span>
                           </div>
-                          <div className="text-[11px] text-[#64748B] flex items-center gap-2 mt-0.5">
+                          <div className="text-[11px] text-[var(--color-text-muted)] flex items-center gap-2 mt-0.5">
                             <span className="font-mono">{ds.rowCount.toLocaleString()} rows</span>
                             <span>·</span>
                             <span>{ds.lastUpdated}</span>
                           </div>
-                          {ds.source && (
-                            <span className="text-[10px] text-[#94A3B8] truncate mt-0.5">
-                              {ds.source}
-                            </span>
-                          )}
                         </div>
                       </div>
 
                       {isSelected && (
-                        <div className="w-5 h-5 rounded-full bg-[#2563EB] text-white flex items-center justify-center shrink-0 mt-1 shadow-2xs">
-                          <Check className="w-3 h-3 stroke-[3]" />
+                        <div className="w-4 h-4 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shrink-0 mt-1">
+                          <Check className="w-2.5 h-2.5 stroke-[3]" />
                         </div>
                       )}
                     </li>
@@ -313,9 +308,9 @@ export const DatasetSelector: React.FC<DatasetSelectorProps> = ({
 
           {/* Footer Action: Clear Selection */}
           {selectedDataset && (
-            <div className="p-2 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
-              <span className="text-[11px] text-[#64748B] font-medium">
-                Active: <strong className="text-[#0F172A]">{selectedDataset.name}</strong>
+            <div className="p-2 border-t border-[var(--color-border)] bg-[var(--color-background-subtle)] flex items-center justify-between">
+              <span className="text-[11px] text-[var(--color-text-muted)] font-medium">
+                Active: <strong className="text-[var(--color-text-primary)]">{selectedDataset.name}</strong>
               </span>
               <button
                 type="button"
@@ -324,9 +319,9 @@ export const DatasetSelector: React.FC<DatasetSelectorProps> = ({
                   setIsOpen(false);
                   setSearchQuery('');
                 }}
-                className="text-xs font-semibold text-rose-600 hover:text-rose-700 hover:underline flex items-center gap-1 cursor-pointer"
+                className="text-xs font-medium text-[var(--color-error)] hover:underline flex items-center gap-1 cursor-pointer"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-3 h-3" />
                 <span>Clear selection</span>
               </button>
             </div>

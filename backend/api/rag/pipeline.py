@@ -103,6 +103,57 @@ class RAGPipeline:
                   "METADATA": json.dumps({"context": context, "source": dataset_name})}
         llm_model_name = ai_settings()["llm_model"]
 
+        # ── Fast-path 0: Instant Greetings & Capabilities Fast-Path (< 10ms, 0 latency) ────
+        clean_msg = re.sub(r"[^\w\s]", "", (message or "").strip().lower())
+        greetings = {
+            "hello", "hi", "hey", "greetings", "good morning", "good afternoon",
+            "good evening", "howdy", "hola", "hi there", "hello there", "hey there",
+            "who are you", "what can you do", "help"
+        }
+        is_greeting = clean_msg in greetings or (
+            len(clean_msg.split()) <= 3
+            and any(clean_msg.startswith(g) for g in ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"])
+            and not any(w in clean_msg for w in [
+                "total", "sum", "average", "avg", "count", "show", "what", "how", "which",
+                "list", "compare", "plot", "chart", "graph", "find", "analyze", "order", "status", "phase"
+            ])
+        )
+
+        if is_greeting:
+            self._emit(callback, "intent", "completed", "Verified intent: General Assistant Greeting & Capabilities.")
+            from api.services.dataset_service import dataset_service
+            cat = dataset_service._catalog()
+            active_tables = [
+                d.get("displayName") or d.get("name") or d.get("tableName")
+                for d in cat.get("datasets", {}).values() if d
+            ]
+            table_list_md = "\n".join(f"- `{t}`" for t in active_tables) if active_tables else "- *No tables loaded yet*"
+
+            reply = (
+                f"### 👋 Hello! Welcome to the NEOVATIC Analytics Assistant\n\n"
+                f"I am connected to your enterprise data warehouse in **SAP HANA Cloud**. "
+                f"All your tables are active and ready for analysis:\n\n"
+                f"{table_list_md}\n\n"
+                f"### 💡 What you can ask me:\n"
+                f"1. **Metrics & KPIs:** *\"What is the total planned vs actual volume?\"* or *\"Count projects by phase.\"*\n"
+                f"2. **Interactive Visualizations:** *\"Plot a bar chart of milestone status.\"*\n"
+                f"3. **Record Lookups:** *\"full details for Purchase Order 100-011.\"*\n"
+                f"4. **Multi-Table Scoping:** Ask questions across projects, milestones, or production reports.\n\n"
+                f"How can I help you today?"
+            )
+            if callback and stream:
+                callback({"type": "token", "content": reply})
+
+            return {
+                "reply": reply,
+                "sources": [source],
+                "intent": "greeting",
+                "status": "success",
+                "context": context,
+                "model": llm_model_name,
+                "cosine_score": 1.0,
+            }
+
         # ── Fast-path 1: Dynamic Record / Order ID lookup (Zero-Hardcode & Fast-Path) ────
         order_id = self._is_order_id_query(message)
         if not order_id and history and self._is_pure_order_lookup(message):
@@ -392,9 +443,15 @@ class RAGPipeline:
                 model = None
                 field_bullets = ""
 
+            # Quality filter: discard chunks with weak cosine similarity (< 0.15) to prevent hallucinations on general questions
+            has_exact_record = query_order_id and chunks and chunks[0].get("ID") == f"order:{query_order_id}"
+            relevant_chunks = chunks if has_exact_record else [
+                c for c in chunks if isinstance(c.get("SCORE"), (int, float)) and float(c.get("SCORE", 0)) >= 0.15
+            ]
+
             # Scoped evidence chunks with size capping (reduces tokens from ~7,000 to ~1,000)
             evidence_parts = []
-            for chunk in chunks[:3]:
+            for chunk in relevant_chunks[:3]:
                 txt = str(chunk.get("TEXT_CHUNK", "")).strip()
                 if len(txt) > 800:
                     txt = txt[:800] + "... [truncated]"
@@ -406,26 +463,38 @@ class RAGPipeline:
             if history:
                 recent_convo = "\n".join(f"{h.get('role', 'user').title()}: {str(h.get('content', ''))[:150]}" for h in history[-3:])
 
-            prompt = (
-                f"Source Evidence:\n{evidence}\n\n"
-                + (f"Recent Context:\n{recent_convo}\n\n" if recent_convo else "")
-                + f"Question: {message}"
-            )
-            # Extract top cosine similarity score from HANA Cloud vector retrieval
-            top_score = max((float(c.get("SCORE", 0)) for c in chunks if isinstance(c.get("SCORE"), (int, float))), default=None)
-            score_msg = f" (HANA Cosine Sim: {top_score:.3f})" if top_score is not None else ""
-            self._emit(callback, "retrieval", "completed", f"Retrieved {len(chunks)} scoped evidence chunks from SAP HANA Cloud Vector Engine{score_msg}.", details={"engine": "SAP HANA Cloud Vector Engine", "top_score": round(top_score, 3) if top_score is not None else "N/A"})
+            if evidence:
+                prompt = (
+                    f"Source Evidence:\n{evidence}\n\n"
+                    + (f"Recent Context:\n{recent_convo}\n\n" if recent_convo else "")
+                    + f"Question: {message}"
+                )
+                policy = (
+                    "You are an enterprise AI data assistant explaining dataset definitions and evidence.\n"
+                    "Respond in clear, professional GitHub-flavored Markdown:\n"
+                    "- Use structured sections with concise headings (###).\n"
+                    "- Format numerical data, records, entities, and metrics in clean Markdown tables (| Metric | Value |).\n"
+                    "- Highlight key terms, metrics, and dates in **bold**.\n"
+                    "- Never output unformatted key-value lists (e.g. 'RecordID: ...'). Always format as structured Markdown tables or bullet lists.\n"
+                    "- Do not invent numerical totals or calculations not present in the evidence.\n"
+                    "- Keep explanations executive, concise, and beautifully structured."
+                )
+            else:
+                prompt = (
+                    (f"Recent Context:\n{recent_convo}\n\n" if recent_convo else "")
+                    + f"Question: {message}"
+                )
+                policy = (
+                    "You are an enterprise AI data assistant for SAP HANA Cloud.\n"
+                    "Respond conversationally, concisely, and helpfully in GitHub-flavored Markdown.\n"
+                    "If the user asks an analytical question that lacks matching data, guide them on what questions or metrics they can query from their active tables.\n"
+                    "Do NOT invent fictional dataset records, numbers, or tables."
+                )
 
-            policy = (
-                "You are an enterprise AI data assistant explaining dataset definitions and evidence.\n"
-                "Respond in clear, professional GitHub-flavored Markdown:\n"
-                "- Use structured sections with concise headings (###).\n"
-                "- Format numerical data, records, entities, and metrics in clean Markdown tables (| Metric | Value |).\n"
-                "- Highlight key terms, metrics, and dates in **bold**.\n"
-                "- Never output unformatted key-value lists (e.g. 'RecordID: ...'). Always format as structured Markdown tables or bullet lists.\n"
-                "- Do not invent numerical totals or calculations not present in the evidence.\n"
-                "- Keep explanations executive, concise, and beautifully structured."
-            )
+            # Extract top cosine similarity score from HANA Cloud vector retrieval
+            top_score = max((float(c.get("SCORE", 0)) for c in relevant_chunks if isinstance(c.get("SCORE"), (int, float))), default=None)
+            score_msg = f" (HANA Cosine Sim: {top_score:.3f})" if top_score is not None else ""
+            self._emit(callback, "retrieval", "completed", f"Retrieved {len(relevant_chunks)} scoped evidence chunks from SAP HANA Cloud Vector Engine{score_msg}.", details={"engine": "SAP HANA Cloud Vector Engine", "top_score": round(top_score, 3) if top_score is not None else "N/A"})
             if stream:
                 tokens = []
                 for token in generator.generate_stream(prompt, system_prompt=policy, stop_event=stop_event):
@@ -437,7 +506,7 @@ class RAGPipeline:
                 reply = generator.generate(prompt, system_prompt=policy)
             from api.platform.ai_settings import ai_settings
             # Put real retrieved chunks first so similarity score is available at index 0
-            all_sources = [*chunks, source] if chunks else [source]
+            all_sources = [*relevant_chunks, source] if relevant_chunks else [source]
             return {
                 "reply": reply,
                 "sources": all_sources,

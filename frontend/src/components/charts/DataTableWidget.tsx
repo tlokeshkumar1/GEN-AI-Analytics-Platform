@@ -8,34 +8,32 @@ interface DataTableWidgetProps {
 
 export const DataTableWidget: React.FC<DataTableWidgetProps> = ({ columns, rows }) => {
   return (
-    <div className="overflow-auto max-h-80 rounded-xl border border-slate-200">
-      <table className="w-full text-sm text-left">
+    <div className="overflow-auto max-h-80 rounded-[var(--radius-container)] border border-[var(--color-border)] bg-[var(--color-background-surface)]">
+      <table className="w-full text-left border-collapse">
         <thead>
-          <tr className="bg-slate-50/80">
+          <tr className="bg-[var(--color-background-subtle)] border-b border-[var(--color-border)]">
             {columns.map(c => (
               <th
                 key={c}
-                className="px-4 py-2.5 font-semibold text-slate-700 text-xs tracking-wider border-b border-slate-200 whitespace-nowrap"
+                className="px-3.5 py-2 font-medium text-[var(--color-text-secondary)] text-[11px] tracking-wider uppercase whitespace-nowrap"
               >
                 {humanizeColumnName(c)}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-[var(--color-border)]">
           {rows.slice(0, 100).map((row, index) => (
             <tr
               key={index}
-              className={`border-b border-slate-100 transition-colors hover:bg-blue-50/40 ${
-                index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
-              }`}
+              className="transition-colors hover:bg-[var(--color-background-subtle)]"
             >
               {columns.map(c => {
                 const formatted = formatTableCell(row[c], c);
                 return (
                   <td
                     key={c}
-                    className="px-4 py-2.5 whitespace-nowrap text-slate-700 tabular-nums text-xs"
+                    className="px-3.5 py-2 whitespace-nowrap text-[var(--color-text-primary)] tabular-nums text-xs"
                     title={formatted.tooltip}
                   >
                     {formatted.display}
@@ -47,11 +45,10 @@ export const DataTableWidget: React.FC<DataTableWidgetProps> = ({ columns, rows 
         </tbody>
       </table>
       {rows.length > 100 && (
-        <div className="px-4 py-2 text-center text-xs text-slate-500 bg-slate-50/60 border-t border-slate-200">
+        <div className="px-3.5 py-1.5 text-center text-[11px] text-[var(--color-text-muted)] bg-[var(--color-background-subtle)] border-t border-[var(--color-border)]">
           Showing first 100 of {rows.length.toLocaleString()} rows
         </div>
       )}
     </div>
   );
 };
-

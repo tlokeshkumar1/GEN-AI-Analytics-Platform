@@ -83,13 +83,16 @@ class DatasetsMetadataRepository:
             imported_files: List[str] = []
 
             for row in rows:
-                d_id = row.get("DATASET_ID")
+                d_id = str(row.get("DATASET_ID") or "")
                 if d_id == "__catalog__":
                     # Special record for catalog-wide metadata
                     meta_raw = row.get("METADATA_JSON")
                     if meta_raw:
                         meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
                         imported_files = meta.get("importedFiles", [])
+                    continue
+                if d_id.startswith("__"):
+                    # System metadata record (e.g. __project_sessions__) - exclude from public datasets
                     continue
 
                 versions_raw = row.get("VERSIONS_JSON")
@@ -157,7 +160,7 @@ class DatasetsMetadataRepository:
 
             # Upsert each dataset
             for d_id, entry in datasets.items():
-                is_active = (d_id == active_id)
+                is_active = True
                 table_name = entry.get("tableName") or entry.get("table_name")
                 display_name = entry.get("displayName") or entry.get("display_name")
                 sheet_name = entry.get("sheetName") or entry.get("sheet_name")
@@ -211,7 +214,7 @@ class DatasetsMetadataRepository:
             """
             client.execute_query(catalog_sql, (self.workspace_id, catalog_meta))
 
-            # Delete any dataset rows removed from catalog
+            # Delete any dataset rows removed from catalog (protect internal system records starting with __)
             current_ids = set(datasets.keys())
             current_ids.add("__catalog__")
             existing_rows = client.execute_query(
@@ -219,8 +222,8 @@ class DatasetsMetadataRepository:
                 (self.workspace_id,)
             )
             for row in existing_rows:
-                row_id = row.get("DATASET_ID")
-                if row_id and row_id not in current_ids:
+                row_id = str(row.get("DATASET_ID") or "")
+                if row_id and not row_id.startswith("__") and row_id not in current_ids:
                     client.execute_query(
                         "DELETE FROM DATASETS_METADATA WHERE WORKSPACE_ID = ? AND DATASET_ID = ?",
                         (self.workspace_id, row_id)
@@ -234,6 +237,9 @@ class DatasetsMetadataRepository:
 
     def delete_dataset(self, dataset_id: str) -> bool:
         """Explicitly purge a dataset registration from DATASETS_METADATA."""
+        if str(dataset_id).startswith("__"):
+            logger.warning(f"Blocked deletion of protected system record '{dataset_id}'")
+            return False
         self.invalidate_cache()
         client = self._client()
         if not client:

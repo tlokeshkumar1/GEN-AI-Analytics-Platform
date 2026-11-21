@@ -115,31 +115,31 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in"
       role="dialog"
       aria-modal="true"
       aria-labelledby="delete-dialog-title"
     >
-      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden space-y-0">
+      <div className="bg-[var(--color-background-surface)] rounded-[var(--radius-container)] shadow-[var(--shadow-xl)] max-w-lg w-full border border-[var(--color-border)] overflow-hidden space-y-0">
         {/* Modal Header */}
-        <div className="p-5 border-b border-slate-200 bg-rose-50/50 flex items-center justify-between">
+        <div className="p-4 sm:p-5 border-b border-[var(--color-border)] bg-[var(--color-error-soft)]/50 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0 border border-rose-200">
-              <Trash2 className="w-5 h-5" />
+            <div className="w-9 h-9 rounded-[var(--radius-element)] bg-[var(--color-error-soft)] text-[var(--color-error)] flex items-center justify-center shrink-0 border border-[var(--color-error-muted)]">
+              <Trash2 className="w-4 h-4" />
             </div>
             <div>
-              <h2 id="delete-dialog-title" className="font-semibold text-sm text-[#0F172A]">
+              <h2 id="delete-dialog-title" className="font-semibold text-sm text-[var(--color-text-primary)]">
                 Delete Records or Dataset
               </h2>
-              <p className="text-xs text-[#64748B] mt-0.5 truncate max-w-xs" title={dataset.name}>
-                Target: <strong>{dataset.name}</strong>
+              <p className="text-xs text-[var(--color-text-muted)] mt-0.5 truncate max-w-xs" title={dataset.name}>
+                Target: <span className="font-medium text-[var(--color-text-secondary)]">{dataset.name}</span>
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-[var(--radius-element)] hover:bg-[var(--color-background-subtle)] flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
             aria-label="Close dialog"
           >
             <X className="w-4 h-4" />
@@ -147,15 +147,15 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 space-y-4 text-xs">
+        <div className="p-4 sm:p-5 space-y-4 text-xs">
           {/* Mode Tabs */}
-          <div className="p-1 rounded-xl bg-slate-100 flex items-center gap-1">
+          <div className="p-1 rounded-[var(--radius-element)] bg-[var(--color-background-subtle)] border border-[var(--color-border)] flex items-center gap-1">
             <button
               type="button"
               onClick={() => setDeleteMode('rows')}
-              className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${deleteMode === 'rows'
-                ? 'bg-white text-slate-900 shadow-2xs font-semibold'
-                : 'text-slate-600 hover:text-slate-900'
+              className={`flex-1 py-1.5 rounded-[var(--radius-inner)] font-medium transition-all cursor-pointer text-xs ${deleteMode === 'rows'
+                ? 'bg-[var(--color-background-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-xs)] font-semibold'
+                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
                 }`}
             >
               Delete Selected Rows
@@ -163,9 +163,9 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
             <button
               type="button"
               onClick={() => setDeleteMode('full')}
-              className={`flex-1 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${deleteMode === 'full'
-                ? 'bg-rose-600 text-white shadow-2xs font-semibold'
-                : 'text-rose-700 hover:text-rose-900'
+              className={`flex-1 py-1.5 rounded-[var(--radius-inner)] font-medium transition-all cursor-pointer text-xs ${deleteMode === 'full'
+                ? 'bg-[var(--color-error)] text-white shadow-[var(--shadow-xs)] font-semibold'
+                : 'text-[var(--color-error)] hover:opacity-80'
                 }`}
             >
               Delete Entire Dataset
@@ -175,42 +175,42 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
           {/* Option A: Select rows to delete */}
           {deleteMode === 'rows' && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between text-slate-600">
-                <span>Select row items to remove from the in-memory cache:</span>
+              <div className="flex items-center justify-between text-[var(--color-text-secondary)]">
+                <span>Select row items to remove:</span>
                 <button
                   type="button"
                   onClick={handleSelectAllRows}
-                  className="text-xs font-semibold text-[#2563EB] hover:underline cursor-pointer"
+                  className="text-xs font-medium text-[var(--color-primary)] hover:underline cursor-pointer"
                 >
                   {selectedRowIds.size === sampleRows.length ? 'Deselect all' : 'Select all'}
                 </button>
               </div>
 
-              <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100 bg-[#F8FAFC]">
+              <div className="max-h-56 overflow-y-auto rounded-[var(--radius-element)] border border-[var(--color-border)] divide-y divide-[var(--color-border)] bg-[var(--color-background-subtle)]">
                 {isLoadingRows ? (
-                  <div className="py-8 text-center text-slate-400">Loading rows...</div>
+                  <div className="py-8 text-center text-[var(--color-text-muted)]">Loading rows…</div>
                 ) : sampleRows.length === 0 ? (
-                  <div className="py-8 text-center text-slate-400">No rows in dataset</div>
+                  <div className="py-8 text-center text-[var(--color-text-muted)]">No rows in dataset</div>
                 ) : (
                   sampleRows.map((r) => {
                     const isChecked = selectedRowIds.has((r.__rowId ?? r.id));
                     return (
                       <label
                         key={(r.__rowId ?? r.id)}
-                        className={`p-2.5 flex items-center gap-3 cursor-pointer hover:bg-white transition-colors ${isChecked ? 'bg-rose-50/50' : ''
+                        className={`p-2.5 flex items-center gap-3 cursor-pointer hover:bg-[var(--color-background-surface)] transition-colors ${isChecked ? 'bg-[var(--color-error-soft)]/60' : ''
                           }`}
                       >
                         <input
                           type="checkbox"
                           checked={isChecked}
                           onChange={() => handleToggleRow((r.__rowId ?? r.id))}
-                          className="w-4 h-4 accent-rose-600 rounded cursor-pointer"
+                          className="w-4 h-4 accent-[var(--color-error)] rounded cursor-pointer"
                         />
                         <div className="flex-1 flex items-center justify-between min-w-0">
-                          <span className="font-mono font-medium text-slate-800">
+                          <span className="font-mono font-medium text-[var(--color-text-primary)]">
                             {r.OrderNumber || (r.__rowId ?? r.id)}
                           </span>
-                          <span className="text-[11px] text-slate-500">
+                          <span className="text-[11px] text-[var(--color-text-muted)]">
                             {r.Product || r.Category || ''}
                           </span>
                         </div>
@@ -225,33 +225,33 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
           {/* Option B: Delete entire dataset */}
           {deleteMode === 'full' && (
             <div className="space-y-3.5">
-              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 space-y-1.5">
+              <div className="p-3.5 rounded-[var(--radius-element)] bg-[var(--color-error-soft)] border border-[var(--color-error-muted)] text-[var(--color-error)] space-y-1.5">
                 <div className="flex items-center gap-2 font-semibold">
-                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <AlertTriangle className="w-4 h-4 text-[var(--color-error)] shrink-0" />
                   <span>Permanent Action Warning</span>
                 </div>
-                <p className="text-[11px] text-rose-800 leading-relaxed">
+                <p className="text-[11px] leading-relaxed">
                   This will permanently delete <strong>{dataset.name}</strong> across all storage layers:
                 </p>
-                <ul className="text-[11px] text-rose-800 list-disc list-inside space-y-0.5 mt-1 font-medium">
+                <ul className="text-[11px] list-disc list-inside space-y-0.5 mt-1 font-medium">
                   <li>Physical column tables in SAP HANA Cloud</li>
-                  <li>Semantic models & analytics in <strong>PLATFORM_METADATA</strong></li>
-                  <li>Catalog entries in <strong>DATASETS_METADATA</strong></li>
-                  <li>High-dimensional embeddings in <strong>VECTOR_TABLE</strong></li>
+                  <li>Semantic models & analytics in PLATFORM_METADATA</li>
+                  <li>Catalog entries in DATASETS_METADATA</li>
+                  <li>High-dimensional embeddings in VECTOR_TABLE</li>
                   <li>Local version files, snapshots, and runtime caches</li>
                 </ul>
               </div>
 
               <div>
-                <label className="block text-slate-700 font-medium mb-1.5">
-                  Type <span className="font-mono font-bold text-slate-900 bg-slate-100 px-1 py-0.5 rounded">{dataset.name}</span> to confirm:
+                <label className="block text-[var(--color-text-secondary)] font-medium mb-1.5">
+                  Type <span className="font-mono font-semibold text-[var(--color-text-primary)] bg-[var(--color-background-subtle)] px-1.5 py-0.5 rounded-[var(--radius-inner)] border border-[var(--color-border)]">{dataset.name}</span> to confirm:
                 </label>
                 <input
                   type="text"
                   value={typedConfirmation}
                   onChange={(e) => setTypedConfirmation(e.target.value)}
                   placeholder={dataset.name}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20 text-xs font-mono"
+                  className="w-full px-3 py-2 rounded-[var(--radius-element)] border border-[var(--color-border)] bg-[var(--color-background-subtle)] focus:border-[var(--color-error)] focus:outline-none text-xs font-mono"
                   autoFocus
                 />
               </div>
@@ -260,12 +260,12 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="p-4 border-t border-slate-200 bg-[#F8FAFC] flex items-center justify-end gap-2">
+        <div className="p-3.5 sm:p-4 border-t border-[var(--color-border)] bg-[var(--color-background-subtle)] flex items-center justify-end gap-2">
           <button
             type="button"
             onClick={onClose}
             disabled={isDeleting}
-            className="px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold cursor-pointer"
+            className="px-3.5 py-1.5 rounded-[var(--radius-element)] border border-[var(--color-border)] bg-[var(--color-background-surface)] hover:bg-[var(--color-background-muted)] text-[var(--color-text-secondary)] text-xs font-medium cursor-pointer"
           >
             Cancel
           </button>
@@ -278,7 +278,7 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
               (deleteMode === 'rows' && selectedRowIds.size === 0) ||
               (deleteMode === 'full' && !isNameConfirmed)
             }
-            className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-xs disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer"
+            className="px-4 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-error)] hover:opacity-90 text-white text-xs font-medium shadow-[var(--shadow-xs)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer"
           >
             {isDeleting ? (
               <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -287,7 +287,7 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
             )}
             <span>
               {isDeleting
-                ? 'Purging from HANA & storage...'
+                ? 'Purging from HANA & storage…'
                 : deleteMode === 'rows'
                   ? `Delete ${selectedRowIds.size} Row(s)`
                   : 'Confirm & Delete Entire Dataset'}

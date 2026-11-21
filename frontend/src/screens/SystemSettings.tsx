@@ -3,9 +3,9 @@ import api, { getApiErrorMessage } from '../services/api';
 import { connectorTypes, listBindings, listConnections, listJobs, SYSTEM_TABS } from '../services/systemService';
 import { getDatasets } from '../services/datasetService';
 
-const inputClass = 'border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-2xs';
-const buttonPrimaryClass = 'inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-xs hover:bg-blue-700 active:scale-[0.98] transition-all shadow-2xs disabled:opacity-50 disabled:pointer-events-none cursor-pointer';
-const buttonSecondaryClass = 'inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-semibold text-xs hover:bg-slate-50 hover:border-slate-300 active:scale-[0.98] transition-all shadow-2xs disabled:opacity-40 disabled:pointer-events-none cursor-pointer';
+const inputClass = 'border border-[var(--color-border)] rounded-[var(--radius-element)] px-3 py-1.5 w-full bg-[var(--color-surface)] text-[var(--color-text-primary)] text-xs focus:outline-none focus:border-[var(--color-primary)] transition-all shadow-[var(--shadow-2xs)]';
+const buttonPrimaryClass = 'inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-primary)] text-white font-medium text-xs hover:bg-[var(--color-primary-hover)] active:scale-[0.98] transition-all shadow-[var(--shadow-2xs)] disabled:opacity-50 disabled:pointer-events-none cursor-pointer';
+const buttonSecondaryClass = 'inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-secondary)] font-medium text-xs hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] hover:border-[var(--color-border-strong)] active:scale-[0.98] transition-all shadow-[var(--shadow-2xs)] disabled:opacity-40 disabled:pointer-events-none cursor-pointer';
 
 const configFields: Record<string, string[]> = {
   rest: ['base_url', 'discovery_path', 'records_path', 'pagination', 'next_link_path', 'page_size'],
@@ -160,17 +160,17 @@ export const SystemSettings: React.FC<{ onNavigate: (path: string) => void; init
   return (
     <div className="space-y-3.5 w-full max-w-[1560px] mx-auto pb-16">
       {/* Sleek, Single-Row Page Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 py-1.5 px-0.5 border-b border-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-1 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[var(--color-text-primary)] flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-[18px]">settings</span>
           </div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-base font-bold text-slate-900 tracking-tight">System Management</h1>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-base font-semibold text-[var(--color-text-primary)] tracking-tight">System Management</h1>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-full)] text-[11px] font-medium bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               Infrastructure
             </span>
-            <span className="text-xs text-slate-400 font-mono hidden sm:inline">
+            <span className="text-xs text-[var(--color-text-muted)] font-mono hidden sm:inline">
               · Enterprise Connectors & Jobs
             </span>
           </div>
@@ -179,9 +179,9 @@ export const SystemSettings: React.FC<{ onNavigate: (path: string) => void; init
         <button
           disabled={busy}
           onClick={() => void run(refresh)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-slate-700 font-semibold text-xs border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] font-medium text-xs border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] transition-all shadow-[var(--shadow-2xs)] disabled:opacity-50 cursor-pointer"
         >
-          <span className={`material-symbols-outlined text-[15px] text-blue-600 ${busy ? 'animate-spin' : ''}`}>
+          <span className={`material-symbols-outlined text-[15px] text-[var(--color-text-secondary)] ${busy ? 'animate-spin' : ''}`}>
             {busy ? 'sync' : 'refresh'}
           </span>
           <span>{busy ? 'Refreshing…' : 'Refresh'}</span>
@@ -189,15 +189,15 @@ export const SystemSettings: React.FC<{ onNavigate: (path: string) => void; init
       </div>
 
       {/* Tabs */}
-      <nav className="flex gap-1 p-0.5 bg-slate-100 rounded-lg border border-slate-200 overflow-x-auto" aria-label="System Management sections">
+      <nav className="flex gap-1 p-1 bg-[var(--color-surface-hover)] rounded-[var(--radius-element)] border border-[var(--color-border)] overflow-x-auto" aria-label="System Management sections">
         {SYSTEM_TABS.map(value => (
           <button
             key={value}
             onClick={() => setTab(value)}
-            className={`px-3 py-1 rounded-md text-xs font-semibold transition-all whitespace-nowrap cursor-pointer ${
+            className={`px-3 py-1 rounded-[var(--radius-inner)] text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
               value === tab
-                ? 'bg-white text-blue-700 shadow-2xs border border-slate-200/80 font-bold'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+                ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-2xs)] border border-[var(--color-border)] font-semibold'
+                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface)]/60'
             }`}
           >
             {value}
@@ -207,23 +207,19 @@ export const SystemSettings: React.FC<{ onNavigate: (path: string) => void; init
 
       {/* Alerts */}
       {error && (
-        <div role="alert" className="flex items-start gap-3 bg-red-50 border border-red-200 text-red-800 p-4 rounded-2xl text-sm shadow-sm">
-          <svg className="w-5 h-5 text-red-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
+        <div role="alert" className="flex items-start gap-3 bg-[var(--color-danger-subtle)] border border-[var(--color-danger-border)] text-[var(--color-danger)] p-4 rounded-[var(--radius-container)] text-xs shadow-[var(--shadow-2xs)]">
+          <span className="material-symbols-outlined text-[var(--color-danger)] text-xl mt-0.5">error</span>
           <div>
-            <p className="font-semibold text-red-900">Operation Error</p>
+            <p className="font-semibold text-[var(--color-danger)]">Operation Error</p>
             <p className="mt-0.5">{error}</p>
           </div>
         </div>
       )}
       {message && (
-        <div role="status" className="flex items-start gap-3 bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-2xl text-sm shadow-sm">
-          <svg className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
+        <div role="status" className="flex items-start gap-3 bg-[var(--color-success-subtle)] border border-[var(--color-success-border)] text-[var(--color-success)] p-4 rounded-[var(--radius-container)] text-xs shadow-[var(--shadow-2xs)]">
+          <span className="material-symbols-outlined text-[var(--color-success)] text-xl mt-0.5">check_circle</span>
           <div>
-            <p className="font-semibold text-emerald-900">Success</p>
+            <p className="font-semibold text-[var(--color-success)]">Success</p>
             <p className="mt-0.5">{message}</p>
           </div>
         </div>

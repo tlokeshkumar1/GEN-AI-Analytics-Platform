@@ -58,8 +58,8 @@ export const resolveIntentDetails = (rawIntent?: string, steps?: ProcessingStep[
       key: 'order_lookup',
       label: 'Record Lookup',
       description: 'Structured entity record lookup and attribute verification',
-      dotColor: 'bg-blue-500',
-      pillClass: 'bg-blue-50/80 text-blue-700 border-blue-200/80',
+      dotColor: 'bg-[var(--color-primary)]',
+      pillClass: 'bg-[var(--color-primary-soft)] text-[var(--color-primary)] border-[var(--color-primary-muted)]',
       icon: Layers,
     };
   }
@@ -76,8 +76,8 @@ export const resolveIntentDetails = (rawIntent?: string, steps?: ProcessingStep[
       key: 'vector_search',
       label: 'Vector Retrieval',
       description: 'SAP HANA Cloud Vector Engine semantic nearest-neighbor search',
-      dotColor: 'bg-emerald-500',
-      pillClass: 'bg-emerald-50/80 text-emerald-700 border-emerald-200/80',
+      dotColor: 'bg-[var(--color-success)]',
+      pillClass: 'bg-[var(--color-success-soft)] text-[var(--color-success)] border-[var(--color-success-muted)]',
       icon: Database,
     };
   }
@@ -96,8 +96,8 @@ export const resolveIntentDetails = (rawIntent?: string, steps?: ProcessingStep[
       key: 'analytics_graph',
       label: 'Analytics & SQL Aggregation',
       description: 'HANA Column Store in-memory SQL execution and measure synthesis',
-      dotColor: 'bg-indigo-500',
-      pillClass: 'bg-indigo-50/80 text-indigo-700 border-indigo-200/80',
+      dotColor: 'bg-[var(--color-indigo)]',
+      pillClass: 'bg-[var(--color-indigo-soft)] text-[var(--color-indigo)] border-[var(--color-indigo)]/20',
       icon: Terminal,
     };
   }
@@ -106,8 +106,8 @@ export const resolveIntentDetails = (rawIntent?: string, steps?: ProcessingStep[
     key: 'conversational_reasoning',
     label: 'Analytical Reasoning',
     description: 'Autonomous multi-hop query deconstruction and enterprise synthesis',
-    dotColor: 'bg-violet-500',
-    pillClass: 'bg-violet-50/80 text-violet-700 border-violet-200/80',
+    dotColor: 'bg-[var(--color-ai)]',
+    pillClass: 'bg-[var(--color-ai-soft)] text-[var(--color-ai)] border-[var(--color-ai-muted)]',
     icon: Brain,
   };
 };
@@ -119,9 +119,9 @@ export const getStageMeta = (stage: string) => {
       name: 'Intent Classification & Query Planning',
       icon: Brain,
       badge: 'Intent Resolution',
-      color: 'text-violet-600',
-      bgColor: 'bg-violet-50',
-      borderColor: 'border-violet-200',
+      color: 'text-[var(--color-ai)]',
+      bgColor: 'bg-[var(--color-ai-soft)]',
+      borderColor: 'border-[var(--color-ai-muted)]',
     };
   }
   if (s.includes('retriev') || s.includes('vector') || s.includes('embed') || s.includes('search')) {
@@ -129,9 +129,9 @@ export const getStageMeta = (stage: string) => {
       name: 'SAP HANA Vector Retrieval',
       icon: Database,
       badge: 'Vector Engine',
-      color: 'text-emerald-600',
-      bgColor: 'bg-emerald-50',
-      borderColor: 'border-emerald-200',
+      color: 'text-[var(--color-success)]',
+      bgColor: 'bg-[var(--color-success-soft)]',
+      borderColor: 'border-[var(--color-success-muted)]',
     };
   }
   if (s.includes('erp') || s.includes('order') || s.includes('s4') || s.includes('lookup')) {
@@ -139,9 +139,9 @@ export const getStageMeta = (stage: string) => {
       name: 'SAP S/4HANA Order Lookup',
       icon: Layers,
       badge: 'Order Record',
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50',
-      borderColor: 'border-blue-200',
+      color: 'text-[var(--color-primary)]',
+      bgColor: 'bg-[var(--color-primary-soft)]',
+      borderColor: 'border-[var(--color-primary-muted)]',
     };
   }
   if (s.includes('calc') || s.includes('sql') || s.includes('exec') || s.includes('query')) {
@@ -149,9 +149,9 @@ export const getStageMeta = (stage: string) => {
       name: 'Deterministic Analytics Engine',
       icon: Terminal,
       badge: 'Column Store',
-      color: 'text-indigo-600',
-      bgColor: 'bg-indigo-50',
-      borderColor: 'border-indigo-200',
+      color: 'text-[var(--color-indigo)]',
+      bgColor: 'bg-[var(--color-indigo-soft)]',
+      borderColor: 'border-[var(--color-indigo)]/20',
     };
   }
   if (s.includes('rerank') || s.includes('filter') || s.includes('cross')) {
@@ -159,9 +159,9 @@ export const getStageMeta = (stage: string) => {
       name: 'Cross-Encoder Re-Ranking & Grounding',
       icon: Sliders,
       badge: 'Re-Ranking',
-      color: 'text-amber-600',
-      bgColor: 'bg-amber-50',
-      borderColor: 'border-amber-200',
+      color: 'text-[var(--color-warning)]',
+      bgColor: 'bg-[var(--color-warning-soft)]',
+      borderColor: 'border-[var(--color-warning-muted)]',
     };
   }
   if (s.includes('error') || s.includes('fail') || s.includes('notice')) {
@@ -169,18 +169,18 @@ export const getStageMeta = (stage: string) => {
       name: 'Execution Notice',
       icon: AlertCircle,
       badge: 'Notice',
-      color: 'text-rose-600',
-      bgColor: 'bg-rose-50',
-      borderColor: 'border-rose-200',
+      color: 'text-[var(--color-error)]',
+      bgColor: 'bg-[var(--color-error-soft)]',
+      borderColor: 'border-[var(--color-error-muted)]',
     };
   }
   return {
     name: 'NVIDIA NIM Synthesis & Model Inference',
     icon: Sparkles,
     badge: 'LLM Synthesis',
-    color: 'text-purple-600',
-    bgColor: 'bg-purple-50',
-    borderColor: 'border-purple-200',
+    color: 'text-[var(--color-ai)]',
+    bgColor: 'bg-[var(--color-ai-soft)]',
+    borderColor: 'border-[var(--color-ai-muted)]',
   };
 };
 
@@ -194,12 +194,10 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
   defaultExpanded,
   className = '',
 }) => {
-  // Controlled expansion state: collapsed by default until user explicitly opens it
   const [isExpanded, setIsExpanded] = useState<boolean>(defaultExpanded ?? false);
   const [copied, setCopied] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
 
-  // Live timer for reasoning elapsed time
   useEffect(() => {
     if (!isStreaming) return;
     const startTime = Date.now();
@@ -210,18 +208,13 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
   }, [isStreaming]);
 
   const intentDetails = resolveIntentDetails(intent, steps);
-  const IntentIcon = intentDetails.icon;
 
-  // Deduplicate steps by stage to eliminate redundant progress boxes
   const stepMap = new Map<string, ProcessingStep>();
   for (const s of (steps || [])) {
     stepMap.set(s.stage, s);
   }
   const uniqueSteps = Array.from(stepMap.values());
   const completedSteps = uniqueSteps.filter(s => s.status === 'completed');
-  const runningStep = uniqueSteps.find(s => s.status === 'running');
-  const activeStep = runningStep || completedSteps[completedSteps.length - 1] || uniqueSteps[0];
-  const activeStepMeta = activeStep ? getStageMeta(activeStep.stage) : null;
 
   const totalStepsCount = Math.max(uniqueSteps.length, 1);
   const completedCount = completedSteps.length;
@@ -249,9 +242,9 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
   if (!steps || steps.length === 0) {
     if (isStreaming) {
       return (
-        <div className={`rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-1.5 text-xs text-slate-600 flex items-center gap-2 animate-pulse ${className}`}>
-          <Brain className="w-3.5 h-3.5 text-violet-600 animate-spin" />
-          <span className="font-medium text-slate-700">Thinking...</span>
+        <div className={`rounded-[var(--radius-element)] border border-[var(--color-border)] bg-[var(--color-background-subtle)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)] flex items-center gap-2 animate-pulse ${className}`}>
+          <Brain className="w-3.5 h-3.5 text-[var(--color-ai)] animate-spin" />
+          <span className="font-medium text-[var(--color-text-primary)]">Thinking…</span>
         </div>
       );
     }
@@ -260,15 +253,15 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
 
   return (
     <div
-      className={`rounded-xl border transition-all duration-200 overflow-hidden font-sans ${
+      className={`rounded-[var(--radius-container)] border transition-all duration-200 overflow-hidden font-sans ${
         isStreaming
-          ? 'bg-slate-50/60 border-violet-200/70 shadow-2xs'
+          ? 'bg-[var(--color-background-subtle)] border-[var(--color-ai-muted)] shadow-[var(--shadow-xs)]'
           : isExpanded
-          ? 'bg-[#F8FAFC] border-slate-300/80 shadow-2xs'
-          : 'bg-[#F8FAFC]/50 border-slate-200/80 hover:border-slate-300'
+          ? 'bg-[var(--color-background-subtle)] border-[var(--color-border-strong)] shadow-[var(--shadow-xs)]'
+          : 'bg-[var(--color-background-subtle)]/70 border-[var(--color-border)] hover:border-[var(--color-border-strong)]'
       } ${className}`}
     >
-      {/* ── Compact Sleek Header Bar ── */}
+      {/* Compact Header Bar */}
       <button
         type="button"
         onClick={() => setIsExpanded(!isExpanded)}
@@ -278,7 +271,7 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
         <div className="flex items-center gap-2 min-w-0">
           <div
             className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 transition-colors ${
-              isStreaming ? 'text-violet-600' : 'text-slate-400 group-hover:text-slate-600'
+              isStreaming ? 'text-[var(--color-ai)]' : 'text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)]'
             }`}
           >
             {isStreaming ? (
@@ -287,47 +280,47 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
               <Sparkles className="w-3.5 h-3.5" />
             )}
           </div>
-          <span className="font-medium text-xs text-slate-700">
+          <span className="font-medium text-xs text-[var(--color-text-primary)]">
             {isStreaming
-              ? `Thinking (${elapsedSeconds.toFixed(1)}s)...`
+              ? `Thinking (${elapsedSeconds.toFixed(1)}s)…`
               : `Thought for ${latency || '0.2s'}`}
           </span>
-          <span className="text-slate-300" aria-hidden="true">·</span>
-          <span className="text-xs text-slate-500 font-medium truncate">{intentDetails.label}</span>
+          <span className="text-[var(--color-border-strong)]" aria-hidden="true">·</span>
+          <span className="text-xs text-[var(--color-text-muted)] font-medium truncate">{intentDetails.label}</span>
         </div>
-        <div className="flex items-center gap-2 shrink-0 text-slate-400 group-hover:text-slate-600">
+        <div className="flex items-center gap-2 shrink-0 text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)]">
           <span className="text-[10px] font-mono hidden sm:inline">{completedCount}/{totalStepsCount} steps</span>
           <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
         </div>
       </button>
 
-      {/* ── Expanded Reasoning Body ── */}
+      {/* Expanded Reasoning Body */}
       {isExpanded && (
-        <div className="px-3.5 sm:px-4 pb-3.5 pt-2 border-t border-slate-200/80 bg-white/90 animate-in fade-in slide-in-from-top-1 space-y-2.5">
+        <div className="px-3.5 sm:px-4 pb-3 pt-2 border-t border-[var(--color-border)] bg-[var(--color-background-surface)] space-y-2.5">
           {/* Quick Trace Header with Copy Action */}
-          <div className="flex items-center justify-between text-xs text-slate-500 pb-1 border-b border-slate-100">
-            <span className="font-mono text-[10px] text-slate-400">Execution Pipeline Trace</span>
+          <div className="flex items-center justify-between text-xs text-[var(--color-text-muted)] pb-1 border-b border-[var(--color-border)]">
+            <span className="font-mono text-[10px]">Execution Pipeline Trace</span>
             <button
               type="button"
               onClick={handleCopyTrace}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-medium transition-all cursor-pointer"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-background-subtle)] hover:bg-[var(--color-background-muted)] text-[var(--color-text-secondary)] text-[10px] font-medium transition-all cursor-pointer"
               title="Copy reasoning trace to clipboard"
             >
               {copied ? (
                 <>
-                  <Check className="w-2.5 h-2.5 text-emerald-600" />
-                  <span className="text-emerald-700 font-semibold">Copied</span>
+                  <Check className="w-2.5 h-2.5 text-[var(--color-success)]" />
+                  <span className="text-[var(--color-success)] font-medium">Copied</span>
                 </>
               ) : (
                 <>
-                  <Copy className="w-2.5 h-2.5 text-slate-400" />
+                  <Copy className="w-2.5 h-2.5 text-[var(--color-text-muted)]" />
                   <span>Copy trace</span>
                 </>
               )}
             </button>
           </div>
 
-          {/* ── Step-by-Step Clean Timeline ── */}
+          {/* Step-by-Step Clean Timeline */}
           <div className="space-y-1.5 text-xs">
             {uniqueSteps.map((step, idx) => {
               const meta = getStageMeta(step.stage);
@@ -337,19 +330,19 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
               const isErr = step.status === 'failed' || step.status === 'error';
 
               return (
-                <div key={idx} className="flex items-center justify-between py-1 px-2 rounded-lg bg-slate-50/70 border border-slate-100 text-[11px]">
+                <div key={idx} className="flex items-center justify-between py-1.5 px-2 rounded-[var(--radius-element)] bg-[var(--color-background-subtle)] border border-[var(--color-border)] text-[11px]">
                   <div className="flex items-center gap-2 min-w-0">
-                    <div className={`p-0.5 rounded ${meta.bgColor} ${meta.color}`}>
+                    <div className={`p-0.5 rounded-[var(--radius-inner)] ${meta.bgColor} ${meta.color}`}>
                       <StageIcon className="w-3 h-3" />
                     </div>
-                    <span className="font-medium text-slate-800">{meta.name}:</span>
-                    <span className="text-slate-600 truncate max-w-[280px] sm:max-w-md">{step.message || 'Executing stage'}</span>
+                    <span className="font-medium text-[var(--color-text-primary)]">{meta.name}:</span>
+                    <span className="text-[var(--color-text-secondary)] truncate max-w-[280px] sm:max-w-md">{step.message || 'Executing stage'}</span>
                   </div>
                   <span
-                    className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-semibold shrink-0 ml-2 ${
-                      isRunning ? 'bg-violet-100 text-violet-700 animate-pulse' :
-                      isDone ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60' :
-                      isErr ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-500'
+                    className={`text-[9px] font-mono px-1.5 py-0.5 rounded-[var(--radius-inner)] font-semibold shrink-0 ml-2 ${
+                      isRunning ? 'bg-[var(--color-ai-soft)] text-[var(--color-ai)] animate-pulse' :
+                      isDone ? 'bg-[var(--color-success-soft)] text-[var(--color-success)] border border-[var(--color-success-muted)]' :
+                      isErr ? 'bg-[var(--color-error-soft)] text-[var(--color-error)]' : 'bg-[var(--color-background-muted)] text-[var(--color-text-muted)]'
                     }`}
                   >
                     {isRunning ? 'Running' : isDone ? 'Done' : step.status}
@@ -359,23 +352,23 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
             })}
           </div>
 
-          {/* ── Footer Metadata Banner (ChatGPT / Claude Technical Audit) ── */}
-          <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-slate-500">
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="flex items-center gap-1 text-slate-600">
-                <Cpu className="w-3 h-3 text-violet-600" />
+          {/* Footer Metadata Banner */}
+          <div className="pt-2 border-t border-[var(--color-border)] flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-[var(--color-text-muted)]">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <span className="flex items-center gap-1 text-[var(--color-text-secondary)]">
+                <Cpu className="w-3 h-3 text-[var(--color-ai)]" />
                 <span>{model || 'Not reported'}</span>
               </span>
               <span>·</span>
-              <span className="flex items-center gap-1 text-slate-600">
-                <Database className="w-3 h-3 text-emerald-600" />
+              <span className="flex items-center gap-1 text-[var(--color-text-secondary)]">
+                <Database className="w-3 h-3 text-[var(--color-success)]" />
                 <span>SAP HANA Cloud Vector Engine</span>
               </span>
               {similarity && similarity !== 'Not available' && (
                 <>
                   <span>·</span>
-                  <span className="flex items-center gap-1 text-emerald-700 font-semibold">
-                    <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                  <span className="flex items-center gap-1 text-[var(--color-success)] font-medium">
+                    <ShieldCheck className="w-3 h-3 text-[var(--color-success)]" />
                     <span>Cosine Similarity: {similarity}</span>
                   </span>
                 </>
@@ -385,9 +378,9 @@ export const ThinkingProcess: React.FC<ThinkingProcessProps> = ({
             <button
               type="button"
               onClick={() => setIsExpanded(false)}
-              className="text-slate-500 hover:text-slate-800 flex items-center gap-0.5 hover:underline cursor-pointer"
+              className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] flex items-center gap-0.5 hover:underline cursor-pointer"
             >
-              <span>Collapse thought</span>
+              <span>Collapse</span>
               <ChevronDown className="w-3 h-3 rotate-180" />
             </button>
           </div>

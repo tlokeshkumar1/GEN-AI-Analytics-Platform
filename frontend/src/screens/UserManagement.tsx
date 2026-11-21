@@ -74,17 +74,17 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onNavigate }) =>
   return (
     <div className="flex flex-col w-full max-w-[1560px] mx-auto space-y-3.5 pb-16">
       {/* Sleek, Single-Row Page Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 py-1.5 px-0.5 border-b border-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-1 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[var(--color-text-primary)] flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-[18px]">group</span>
           </div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-base font-bold text-slate-900 tracking-tight">User Management & RBAC Roles</h1>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-base font-semibold text-[var(--color-text-primary)] tracking-tight">User Management & RBAC Roles</h1>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-full)] text-[11px] font-medium bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               SAP BTP XSUAA
             </span>
-            <span className="text-xs text-slate-400 font-mono hidden sm:inline">
+            <span className="text-xs text-[var(--color-text-muted)] font-mono hidden sm:inline">
               · {users.length} accounts ({users.filter(u => u.status === 'Active').length} active)
             </span>
           </div>
@@ -94,9 +94,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onNavigate }) =>
           <button
             onClick={() => void refreshUsers(true)}
             disabled={loading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-slate-700 font-semibold text-xs border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] font-medium text-xs border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] transition-all shadow-[var(--shadow-2xs)] disabled:opacity-50 cursor-pointer"
           >
-            <span className={`material-symbols-outlined text-[15px] text-blue-600 ${loading ? 'animate-spin' : ''}`}>
+            <span className={`material-symbols-outlined text-[15px] text-[var(--color-text-secondary)] ${loading ? 'animate-spin' : ''}`}>
               {loading ? 'sync' : 'refresh'}
             </span>
             <span>{loading ? 'Refreshing...' : 'Refresh Users'}</span>
@@ -105,16 +105,16 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onNavigate }) =>
       </div>
 
       {error && (
-        <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 text-sm text-amber-900 flex flex-col gap-2">
+        <div role="alert" className="rounded-[var(--radius-container)] border border-[var(--color-warning-border)] bg-[var(--color-warning-subtle)] p-4 text-xs text-[var(--color-warning)] flex flex-col gap-2">
           <div className="flex items-start gap-2.5">
-            <span className="material-symbols-outlined text-amber-600 text-[20px] shrink-0 mt-0.5">admin_panel_settings</span>
+            <span className="material-symbols-outlined text-[var(--color-warning)] text-[20px] shrink-0 mt-0.5">admin_panel_settings</span>
             <div className="flex-1">
-              <div className="font-semibold text-amber-950">SAP BTP Directory Access Notice</div>
-              <div className="text-amber-800 text-xs mt-0.5 leading-relaxed">{error}</div>
+              <div className="font-semibold text-[var(--color-text-primary)]">SAP BTP Directory Access Notice</div>
+              <div className="text-[var(--color-text-secondary)] text-xs mt-0.5 leading-relaxed">{error}</div>
               {error.toLowerCase().includes('user management') && (
-                <div className="mt-2.5 p-3 rounded-lg bg-white/90 border border-amber-200 text-xs text-slate-700 space-y-1.5">
-                  <div className="font-semibold text-slate-900">How to assign directory permissions in SAP BTP Cockpit:</div>
-                  <ol className="list-decimal list-inside space-y-1 text-slate-600 pl-1">
+                <div className="mt-2.5 p-3 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] space-y-1.5">
+                  <div className="font-semibold text-[var(--color-text-primary)]">How to assign directory permissions in SAP BTP Cockpit:</div>
+                  <ol className="list-decimal list-inside space-y-1 text-[var(--color-text-secondary)] pl-1">
                     <li>Go to <strong>SAP BTP Cockpit</strong> &rarr; Your Subaccount &rarr; <strong>Security &rarr; Users</strong>.</li>
                     <li>Select your user account (e.g. your corporate email).</li>
                     <li>Click <strong>Assign Role Collection</strong>.</li>
@@ -128,37 +128,37 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onNavigate }) =>
         </div>
       )}
 
-      <div className="bg-white rounded-xl shadow-2xs border border-[#E2E8F0] overflow-hidden" aria-busy={loading}>
-        <div className="px-4 py-2.5 border-b border-[#E2E8F0] flex items-center justify-between">
+      <div className="bg-[var(--color-surface)] rounded-[var(--radius-container)] shadow-[var(--shadow-2xs)] border border-[var(--color-border)] overflow-hidden" aria-busy={loading}>
+        <div className="px-4 py-2.5 border-b border-[var(--color-border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-[#0F172A]">GEN-AI Project Accounts</span>
-            <span className="px-2.5 py-0.5 rounded-full bg-[#F1F5F9] text-xs font-mono text-[#475569] border border-[#E2E8F0]">
+            <span className="text-xs font-semibold text-[var(--color-text-primary)]">GEN-AI Project Accounts</span>
+            <span className="px-2 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-surface-active)] text-xs font-mono text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               {updatedAt
                 ? `${users.length} Accounts / ${users.filter(user => user.status === 'Active').length} Active`
                 : loading ? 'Loading accounts...' : 'Accounts unavailable'}
             </span>
           </div>
-          <span className="text-xs text-[#64748B]">SAP XSUAA · Refreshes every 30s{updatedAt && ` · Updated ${new Date(updatedAt).toLocaleTimeString()}`}</span>
+          <span className="text-xs text-[var(--color-text-muted)]">SAP XSUAA · Refreshes every 30s{updatedAt && ` · Updated ${new Date(updatedAt).toLocaleTimeString()}`}</span>
         </div>
 
         <div className="overflow-x-auto scroll-touch">
-          <table className="w-full text-left font-body-sm text-body-sm min-w-[580px]">
+          <table className="w-full text-left text-xs min-w-[580px]">
             <thead>
-              <tr className="bg-[#F8FAFC] text-[#475569] text-xs font-semibold border-b border-[#E2E8F0]">
-                <th className="py-2 px-4 font-semibold text-xs">User / Identity</th>
-                <th className="py-2 px-4 font-semibold text-xs">Role Descriptor</th>
-                <th className="py-2 px-4 font-semibold text-xs">Security Tier</th>
-                <th className="py-2 px-4 font-semibold text-xs">Status</th>
-                <th className="py-3 px-6 font-semibold text-right">Last Login</th>
+              <tr className="bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] text-[11px] font-semibold uppercase tracking-wider border-b border-[var(--color-border)]">
+                <th className="py-2.5 px-4">User / Identity</th>
+                <th className="py-2.5 px-4">Role Descriptor</th>
+                <th className="py-2.5 px-4">Security Tier</th>
+                <th className="py-2.5 px-4">Status</th>
+                <th className="py-2.5 px-6 text-right">Last Login</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#E2E8F0]">
+            <tbody className="divide-y divide-[var(--color-border)]">
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-8 px-6 text-center text-[#64748B]">
+                  <td colSpan={5} className="py-8 px-6 text-center text-[var(--color-text-muted)]">
                     {loading ? (
                       <div className="flex items-center justify-center gap-2">
-                        <span className="material-symbols-outlined text-[18px] text-blue-600 animate-spin">sync</span>
+                        <span className="material-symbols-outlined text-[18px] text-[var(--color-primary)] animate-spin">sync</span>
                         <span>Loading project XSUAA accounts from SAP BTP...</span>
                       </div>
                     ) : error ? (
@@ -170,35 +170,35 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onNavigate }) =>
                 </tr>
               )}
               {users.map(u => (
-                <tr key={u.id} className="hover:bg-[#F8FAFC] transition-colors">
+                <tr key={u.id} className="hover:bg-[var(--color-surface-hover)] transition-colors">
                   <td className="py-2.5 px-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-[#EFF6FF] text-[#1D4ED8] flex items-center justify-center font-semibold text-xs border border-[#BFDBFE]">
+                      <div className="w-7 h-7 rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] flex items-center justify-center font-semibold text-xs border border-[var(--color-border)]">
                         {u.name.slice(0, 2).toUpperCase()}
                       </div>
                       <div>
-                        <div className="font-semibold text-[#0F172A]">{u.name}</div>
-                        <div className="text-xs text-[#64748B]">{u.email || 'Email unavailable'}</div>
-                        {u.origin && <div className="text-xs text-[#64748B]">{u.origin}</div>}
+                        <div className="font-medium text-[var(--color-text-primary)]">{u.name}</div>
+                        <div className="text-[11px] text-[var(--color-text-muted)]">{u.email || 'Email unavailable'}</div>
+                        {u.origin && <div className="text-[11px] text-[var(--color-text-muted)]">{u.origin}</div>}
                       </div>
                     </div>
                   </td>
-                  <td className="py-4 px-6 text-[#0F172A] font-medium">{u.role}</td>
+                  <td className="py-2.5 px-4 text-[var(--color-text-primary)] font-medium">{u.role}</td>
                   <td className="py-2.5 px-4">
-                    <span className="px-2.5 py-0.5 rounded-md bg-[#F1F5F9] text-xs font-mono text-[#334155] border border-[#E2E8F0] font-medium">
+                    <span className="px-2 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-surface-hover)] text-[11px] font-mono text-[var(--color-text-secondary)] border border-[var(--color-border)] font-medium">
                       {u.tier}
                     </span>
                   </td>
                   <td className="py-2.5 px-4">
-                    <span className={`px-2.5 py-0.5 rounded-full border text-xs font-medium ${u.status === 'Active' ? 'bg-[#DCFCE7] text-[#15803D] border-[#BBF7D0]' : 'bg-[#F1F5F9] text-[#475569] border-[#E2E8F0]'}`}>
+                    <span className={`px-2 py-0.5 rounded-[var(--radius-full)] border text-[10px] font-medium ${u.status === 'Active' ? 'bg-[var(--color-success-subtle)] text-[var(--color-success)] border-[var(--color-success-border)]' : 'bg-[var(--color-surface-active)] text-[var(--color-text-muted)] border-[var(--color-border)]'}`}>
                       {u.status}
                     </span>
                   </td>
-                  <td className="py-4 px-6 text-right font-mono text-[#64748B]">
+                  <td className="py-2.5 px-6 text-right font-mono text-[var(--color-text-muted)]">
                     {u.last_login ? (
                       new Date(u.last_login).toLocaleString()
                     ) : (
-                      <span className="text-slate-400 font-sans italic">Never</span>
+                      <span className="text-[var(--color-text-muted)] font-sans italic">Never</span>
                     )}
                   </td>
                 </tr>
@@ -207,7 +207,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onNavigate }) =>
           </table>
         </div>
       </div>
-      <p className="text-xs text-[#64748B]">Only users directly assigned to {projectCollections.length ? projectCollections.join(' or ') : 'GEN-AI Analytics Platform Administrator (dev) or GEN-AI Analytics Platform Member (dev)'} are listed. Access through identity-provider group mappings may not appear as a direct assignment. Status shows whether the user is Active (has logged into this project) or Inactive (never signed in). Last Login reflects the latest sign-in recorded specifically for this project (GEN-AI Analytics Platform).</p>
+      <p className="text-[11px] text-[var(--color-text-muted)]">Only users directly assigned to {projectCollections.length ? projectCollections.join(' or ') : 'GEN-AI Analytics Platform Administrator (dev) or GEN-AI Analytics Platform Member (dev)'} are listed. Access through identity-provider group mappings may not appear as a direct assignment. Status shows whether the user is Active (has logged into this project) or Inactive (never signed in). Last Login reflects the latest sign-in recorded specifically for this project (GEN-AI Analytics Platform).</p>
     </div>
   );
 };

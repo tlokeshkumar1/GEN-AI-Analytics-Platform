@@ -298,6 +298,8 @@ def get_dashboard(refresh: bool = False):
 
             default_recs = [r for r in recs if r.get("selected_by_default")]
 
+            ds_name = selection.entry.get("displayName") or selection.entry.get("name") or selection.entry.get("folder") or context.dataset_id
+
             def _execute_auto_widget(r):
                 res = analytics_engine.execute(r["query_plan"])
                 definition = {
@@ -308,7 +310,9 @@ def get_dashboard(refresh: bool = False):
                     "semantic_revision": context.semantic_revision,
                     "query_plan": r["query_plan"],
                     "explanation": r["explanation"],
-                    "status": "approved"
+                    "status": "approved",
+                    "dataset_id": context.dataset_id,
+                    "dataset_name": ds_name,
                 }
                 return {"definition": definition, "result": res.to_dict()}
 

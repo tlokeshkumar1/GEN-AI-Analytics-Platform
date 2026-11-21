@@ -23,27 +23,27 @@ const markedInstance = new Marked({
   breaks: true,
 });
 
-// Custom code block renderer with language banner & copy button
+// Custom code block renderer with Astryx styling, language banner & copy button
 markedInstance.use({
   renderer: {
     code({ text, lang }) {
       const language = (lang || 'code').trim();
       const encodedCode = encodeURIComponent(text);
       return `
-        <div class="my-3 rounded-xl bg-[#0F172A] text-slate-100 overflow-hidden shadow-sm border border-slate-700/80">
-          <div class="flex items-center justify-between px-3.5 py-1.5 bg-slate-900 border-b border-slate-700/80 text-[11px] text-slate-300 font-mono">
-            <span class="uppercase font-semibold tracking-wider text-violet-400">${language}</span>
+        <div class="my-2.5 rounded-[var(--radius-element)] bg-[#18181B] text-zinc-100 overflow-hidden shadow-[var(--shadow-xs)] border border-zinc-800">
+          <div class="flex items-center justify-between px-3 py-1.5 bg-[#09090B] border-b border-zinc-800 text-[11px] text-zinc-400 font-mono">
+            <span class="uppercase font-semibold tracking-wider text-[var(--color-ai)]">${language}</span>
             <button
               type="button"
               data-copy-code="${encodedCode}"
-              class="hover:text-white flex items-center gap-1.5 px-2 py-0.5 rounded hover:bg-slate-800 transition-colors text-slate-300 text-xs cursor-pointer"
+              class="hover:text-white flex items-center gap-1.5 px-2 py-0.5 rounded-[var(--radius-inner)] hover:bg-zinc-800 transition-colors text-zinc-300 text-xs cursor-pointer"
               title="Copy snippet"
             >
               <span class="material-symbols-outlined text-[13px]">content_copy</span>
               <span>Copy</span>
             </button>
           </div>
-          <pre class="p-3.5 text-xs font-mono overflow-x-auto text-slate-200 leading-relaxed whitespace-pre"><code>${escapeHtml(text)}</code></pre>
+          <pre class="p-3 text-xs font-mono overflow-x-auto text-zinc-200 leading-relaxed whitespace-pre"><code>${escapeHtml(text)}</code></pre>
         </div>
       `;
     },

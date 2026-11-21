@@ -62,52 +62,54 @@ export const AlertsNotifications: React.FC<AlertsNotificationsProps> = ({ onNavi
   };
 
   return (
-    <div className="flex flex-col w-full max-w-[1560px] mx-auto space-y-6 pb-28">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-space-md">
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB]"></span>
-            <span className="font-label-sm uppercase tracking-widest text-[#64748B] font-semibold">
+    <div className="flex flex-col w-full max-w-[1560px] mx-auto space-y-3.5 pb-16">
+      {/* Sleek Single-Row Page Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-1 border-b border-[var(--color-border)]">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[var(--color-text-primary)] flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined text-[18px]">notifications</span>
+          </div>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-base font-semibold text-[var(--color-text-primary)] tracking-tight">Alerts & Notifications</h1>
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[var(--radius-full)] text-[11px] font-medium bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
               Real-Time Monitoring · SAP HANA Health
             </span>
+            <span className="text-xs text-[var(--color-text-muted)] font-mono hidden sm:inline">
+              · {filteredAlerts.length} events
+            </span>
           </div>
-          <h1 className="font-headline-xl text-[#0F172A] font-semibold tracking-tight">
-            Alerts & Notifications
-          </h1>
-          <p className="font-body-md text-[#475569] mt-1">
-            Real-time threshold breaches, automated margin anomaly warnings, and vector indexing triggers.
-          </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0 self-start md:self-end mt-2 md:mt-0">
+        <div className="flex items-center gap-2 shrink-0">
           <button 
             onClick={() => setAlerts(prev => prev.map(a => ({ ...a, status: 'Resolved' })))}
-            className="inline-flex items-center justify-center gap-1.5 h-9 px-4 rounded-full bg-white text-[#475569] hover:text-[#0F172A] font-label-md text-label-md hover:bg-[#F1F5F9] transition-colors shadow-2xs border border-[#CBD5E1] whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] font-medium text-xs border border-[var(--color-border)] transition-colors shadow-[var(--shadow-2xs)] cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[16px] text-[#64748B]">done_all</span>
+            <span className="material-symbols-outlined text-[15px] text-[var(--color-text-muted)]">done_all</span>
             <span>Mark All Resolved</span>
           </button>
         </div>
       </div>
 
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-[#E2E8F0] flex flex-col gap-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E2E8F0] pb-4">
+      <div className="bg-[var(--color-surface)] p-4 rounded-[var(--radius-container)] shadow-[var(--shadow-2xs)] border border-[var(--color-border)] flex flex-col gap-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--color-border)] pb-3">
           <div className="flex items-center gap-2">
-            <span className="font-headline-sm font-semibold text-[#0F172A]">System Notification Stream</span>
-            <span className="px-2 py-0.5 rounded-full bg-[#F1F5F9] text-[#475569] text-xs font-mono font-medium border border-[#E2E8F0]">
+            <span className="text-sm font-semibold text-[var(--color-text-primary)]">System Notification Stream</span>
+            <span className="px-2 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] text-[10px] font-mono font-medium border border-[var(--color-border)]">
               {filteredAlerts.length} Events
             </span>
           </div>
 
-          <div className="flex items-center gap-1.5 p-1 rounded-full bg-[#F1F5F9] border border-[#E2E8F0] shadow-2xs self-start sm:self-auto">
+          <div className="flex items-center gap-1 p-1 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] border border-[var(--color-border)] self-start sm:self-auto">
             {(['All', 'Active', 'Resolved'] as const).map(tab => (
               <button
                 key={tab}
                 onClick={() => setFilter(tab)}
-                className={`h-8 px-4 rounded-full text-xs font-medium transition-colors flex items-center justify-center whitespace-nowrap ${
+                className={`h-7 px-3 rounded-[var(--radius-inner)] text-xs font-medium transition-colors flex items-center justify-center cursor-pointer ${
                   filter === tab
-                    ? 'bg-[#2563EB] text-white font-semibold shadow-xs'
-                    : 'bg-transparent text-[#64748B] hover:text-[#0F172A] hover:bg-white/60'
+                    ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] font-semibold shadow-[var(--shadow-2xs)] border border-[var(--color-border)]'
+                    : 'bg-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
                 }`}
               >
                 {tab}
@@ -116,42 +118,42 @@ export const AlertsNotifications: React.FC<AlertsNotificationsProps> = ({ onNavi
           </div>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-2">
           {filteredAlerts.map(alert => (
             <div 
               key={alert.id}
-              className="p-4 rounded-xl bg-[#F8FAFC] hover:bg-[#F1F5F9] transition-colors flex flex-col md:flex-row md:items-center justify-between gap-3 border border-[#E2E8F0]"
+              className="p-3.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] transition-colors flex flex-col md:flex-row md:items-center justify-between gap-3 border border-[var(--color-border)]"
             >
               <div className="flex items-start gap-3">
-                <span className={`w-2.5 h-2.5 rounded-full ${
-                  alert.severity === 'Critical' ? 'bg-[#DC2626]' :
-                  alert.severity === 'Warning' ? 'bg-[#D97706]' :
-                  'bg-[#2563EB]'
+                <span className={`w-2 h-2 rounded-full ${
+                  alert.severity === 'Critical' ? 'bg-[var(--color-danger)]' :
+                  alert.severity === 'Warning' ? 'bg-[var(--color-warning)]' :
+                  'bg-[var(--color-primary)]'
                 } mt-1.5 shrink-0`}></span>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-label-md font-semibold text-[#0F172A]">{alert.title}</span>
-                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-white text-[#64748B] border border-[#E2E8F0] font-semibold">
+                    <span className="text-xs sm:text-sm font-semibold text-[var(--color-text-primary)]">{alert.title}</span>
+                    <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded-[var(--radius-inner)] bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] border border-[var(--color-border)] font-medium">
                       {alert.severity}
                     </span>
-                    <span className="text-xs text-[#64748B]">{alert.time}</span>
+                    <span className="text-xs text-[var(--color-text-muted)]">{alert.time}</span>
                   </div>
-                  <p className="font-body-sm text-[#475569] mt-1 max-w-2xl">{alert.desc}</p>
+                  <p className="text-xs text-[var(--color-text-secondary)] mt-1 max-w-2xl leading-relaxed">{alert.desc}</p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
-                <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                  alert.status === 'Active' ? 'bg-[#FEE2E2] text-[#DC2626] border border-[#FECACA]' :
-                  alert.status === 'Acknowledged' ? 'bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]' :
-                  'bg-[#DCFCE7] text-[#166534] border border-[#BBF7D0]'
+                <span className={`text-[10px] px-2 py-0.5 rounded-[var(--radius-full)] font-medium border ${
+                  alert.status === 'Active' ? 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)] border-[var(--color-danger-border)]' :
+                  alert.status === 'Acknowledged' ? 'bg-[var(--color-warning-subtle)] text-[var(--color-warning)] border-[var(--color-warning-border)]' :
+                  'bg-[var(--color-success-subtle)] text-[var(--color-success)] border-[var(--color-success-border)]'
                 }`}>
                   {alert.status}
                 </span>
                 {alert.status !== 'Resolved' && (
                   <button 
                     onClick={() => toggleAcknowledge(alert.id)}
-                    className="px-3.5 py-1 rounded-full bg-white hover:bg-[#F1F5F9] text-[#0F172A] text-xs font-medium border border-[#CBD5E1] transition-colors shadow-2xs"
+                    className="px-2.5 py-1 rounded-[var(--radius-element)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] text-[var(--color-text-primary)] text-xs font-medium border border-[var(--color-border)] transition-colors shadow-[var(--shadow-2xs)] cursor-pointer"
                   >
                     {alert.status === 'Active' ? 'Acknowledge' : 'Resolve'}
                   </button>

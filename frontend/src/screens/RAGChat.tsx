@@ -879,46 +879,46 @@ export const RAGChat: React.FC<RAGChatProps> = ({
   const groups: ('Today' | 'Yesterday' | 'Previous 7 Days' | 'Older')[] = ['Today', 'Yesterday', 'Previous 7 Days', 'Older'];
 
   return (
-    <div className="flex w-full h-full overflow-hidden rounded-2xl bg-white border border-slate-200/80 shadow-sm relative select-auto font-sans">
+    <div className="flex w-full h-full overflow-hidden rounded-[var(--radius-page)] bg-[var(--color-surface)] border border-[var(--color-border)] shadow-[var(--shadow-sm)] relative select-auto font-sans">
       {/* Toast Alert */}
       {toastMessage && (
-        <div className="fixed top-20 right-4 sm:right-8 z-50 bg-slate-900/95 backdrop-blur-md text-white px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2.5 font-label-md text-label-md animate-in fade-in slide-in-from-top-2 border border-slate-700/60">
-          <span className="material-symbols-outlined text-[17px] text-emerald-400">check_circle</span>
+        <div className="fixed top-20 right-4 sm:right-8 z-50 bg-[var(--color-text-primary)] text-white px-4 py-2.5 rounded-[var(--radius-element)] shadow-[var(--shadow-xl)] flex items-center gap-2.5 text-xs animate-in fade-in slide-in-from-top-2 border border-[var(--color-border)]">
+          <span className="material-symbols-outlined text-[17px] text-[var(--color-success)]">check_circle</span>
           <span>{toastMessage}</span>
         </div>
       )}
 
       {/* Delete Confirmation Modal */}
       {threadToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in">
           <div
-            className="w-full max-w-md bg-white rounded-2xl p-6 shadow-2xl border border-slate-200 animate-in zoom-in-95 duration-150"
+            className="w-full max-w-md bg-[var(--color-surface)] rounded-[var(--radius-page)] p-6 shadow-[var(--shadow-xl)] border border-[var(--color-border)] animate-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start gap-3.5 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200/70">
+              <div className="w-10 h-10 rounded-[var(--radius-element)] bg-[var(--color-danger-subtle)] text-[var(--color-danger)] flex items-center justify-center shrink-0 border border-[var(--color-danger-border)]">
                 <span className="material-symbols-outlined text-[22px]">delete_forever</span>
               </div>
               <div className="flex flex-col">
-                <h3 className="font-headline-sm text-slate-900 font-semibold">Delete Conversation?</h3>
-                <p className="text-body-sm text-slate-600 mt-1 leading-relaxed">
-                  Are you sure you want to permanently delete <strong className="text-slate-900">"{threadToDelete.title}"</strong>? This will remove all prompt history, retrieved vectors, and charts in this session.
+                <h3 className="text-base text-[var(--color-text-primary)] font-semibold">Delete Conversation?</h3>
+                <p className="text-xs text-[var(--color-text-secondary)] mt-1 leading-relaxed">
+                  Are you sure you want to permanently delete <strong className="text-[var(--color-text-primary)]">"{threadToDelete.title}"</strong>? This will remove all prompt history, retrieved vectors, and charts in this session.
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[var(--color-border)]">
               <button
                 type="button"
                 onClick={() => setThreadToDelete(null)}
-                className="px-4 py-2 rounded-xl text-body-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="px-4 py-2 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleDeleteThreadConfirmed}
-                className="px-4 py-2 rounded-xl text-body-sm font-medium bg-rose-600 hover:bg-rose-700 text-white shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer active:scale-95"
+                className="px-4 py-2 rounded-[var(--radius-element)] text-xs font-medium bg-[var(--color-danger)] hover:opacity-90 text-white shadow-[var(--shadow-2xs)] transition-colors flex items-center gap-1.5 cursor-pointer active:scale-95"
               >
                 <span className="material-symbols-outlined text-[16px]">delete</span>
                 <span>Delete Chat</span>
@@ -1246,11 +1246,11 @@ export const RAGChat: React.FC<RAGChatProps> = ({
       {/* ============================================================ */}
       {/* 2. MAIN CHAT APPLICATION CONTAINER (Full Width, Never Shrinks) */}
       {/* ============================================================ */}
-      <div className="flex-1 w-full flex flex-col h-full min-w-0 bg-white overflow-hidden">
+      <div className="flex-1 w-full flex flex-col h-full min-w-0 bg-[var(--color-surface)] overflow-hidden">
         {/* ============================================================ */}
         {/* CHAT HEADER: Persistent, Stable Top Control Bar */}
         {/* ============================================================ */}
-        <header className="h-[56px] sm:h-[60px] border-b border-slate-200/80 px-3 sm:px-5 flex items-center justify-between bg-white/95 backdrop-blur-md shrink-0 z-10 gap-2 sm:gap-3 w-full">
+        <header className="h-[56px] border-b border-[var(--color-border)] px-3 sm:px-5 flex items-center justify-between bg-[var(--color-surface)]/95 backdrop-blur-md shrink-0 z-10 gap-2 sm:gap-3 w-full">
           {/* Left: Sidebar Toggle Button + Auto-truncating Active Session Title with Dots */}
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 overflow-hidden mr-2">
             {/* Sidebar Toggle Button */}
@@ -1258,10 +1258,10 @@ export const RAGChat: React.FC<RAGChatProps> = ({
               type="button"
               onClick={() => setIsSidebarOpen(prev => !prev)}
               title={isSidebarOpen ? "Collapse chat history" : "Open chat history"}
-              className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors border border-slate-200/80 bg-white shrink-0 shadow-2xs cursor-pointer active:scale-95"
+              className="w-8 h-8 rounded-[var(--radius-element)] flex items-center justify-center text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors border border-[var(--color-border)] bg-[var(--color-surface)] shrink-0 shadow-[var(--shadow-2xs)] cursor-pointer active:scale-95"
               aria-label="Toggle chat history sidebar"
             >
-              <span className="material-symbols-outlined text-[19px]">
+              <span className="material-symbols-outlined text-[18px]">
                 {isSidebarOpen ? 'left_panel_close' : 'dock_to_left'}
               </span>
             </button>
@@ -1271,20 +1271,20 @@ export const RAGChat: React.FC<RAGChatProps> = ({
               <div className="flex items-center gap-2 min-w-0 overflow-hidden">
                 <h2
                   title={activeThread?.title || 'Conversational Analytics'}
-                  className="font-headline-sm text-xs sm:text-sm text-slate-900 font-semibold truncate block leading-tight min-w-0 max-w-[140px] xs:max-w-[180px] sm:max-w-xs md:max-w-md"
+                  className="text-xs sm:text-sm text-[var(--color-text-primary)] font-semibold truncate block leading-tight min-w-0 max-w-[140px] xs:max-w-[180px] sm:max-w-xs md:max-w-md"
                 >
                   {activeThread?.title || 'Conversational Analytics'}
                 </h2>
-                <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-medium border border-emerald-200/80 shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-success-subtle)] text-[var(--color-success)] text-[10px] font-medium border border-[var(--color-success-border)] shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
                   <span>HANA Vector Synced</span>
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-slate-500 truncate leading-tight mt-0.5 min-w-0">
-                <span className="font-mono text-slate-600">us10-prod</span>
-                <span aria-hidden="true" className="text-slate-300">·</span>
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-[var(--color-text-muted)] truncate leading-tight mt-0.5 min-w-0">
+                <span className="font-mono text-[var(--color-text-secondary)]">us10-prod</span>
+                <span aria-hidden="true" className="text-[var(--color-border-strong)]">·</span>
                 <span>{messages.length} msgs</span>
-                <span aria-hidden="true" className="text-slate-300 hidden sm:inline">·</span>
+                <span aria-hidden="true" className="text-[var(--color-border-strong)] hidden sm:inline">·</span>
                 <span className="hidden sm:inline">{activeThread?.timestamp || 'Active'}</span>
               </div>
             </div>
@@ -1297,9 +1297,9 @@ export const RAGChat: React.FC<RAGChatProps> = ({
               <button
                 onClick={() => handleExportMarkdown(activeThread)}
                 title="Export thread as Markdown transcript"
-                className="h-8.5 px-3 rounded-xl bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 border border-slate-200/90 text-xs font-medium inline-flex items-center gap-1.5 transition-all shadow-2xs hover:shadow-xs shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
+                className="h-8 px-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs font-medium inline-flex items-center gap-1.5 transition-all shadow-[var(--shadow-2xs)] shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[15px] text-slate-500">download</span>
+                <span className="material-symbols-outlined text-[15px] text-[var(--color-text-muted)]">download</span>
                 <span>Export</span>
               </button>
             )}
@@ -1315,9 +1315,9 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                 }
               }}
               title="Clear all messages in active session"
-              className="h-8.5 px-3 rounded-xl bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 border border-slate-200/90 text-xs font-medium inline-flex items-center gap-1.5 transition-all shadow-2xs hover:shadow-xs shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
+              className="h-8 px-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs font-medium inline-flex items-center gap-1.5 transition-all shadow-[var(--shadow-2xs)] shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[15px] text-slate-500">restart_alt</span>
+              <span className="material-symbols-outlined text-[15px] text-[var(--color-text-muted)]">restart_alt</span>
               <span>Clear</span>
             </button>
 
@@ -1326,10 +1326,10 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                 type="button"
                 onClick={onToggleMaximize}
                 title={isMaximized ? "Restore window" : "Maximize chat window"}
-                className="w-8.5 h-8.5 rounded-xl bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 border border-slate-200/90 inline-flex items-center justify-center transition-all shadow-2xs hover:shadow-xs shrink-0 active:scale-95 cursor-pointer"
+                className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] inline-flex items-center justify-center transition-all shadow-[var(--shadow-2xs)] shrink-0 active:scale-95 cursor-pointer"
                 aria-label={isMaximized ? "Restore window" : "Maximize chat window"}
               >
-                <span className="material-symbols-outlined text-[17px]">
+                <span className="material-symbols-outlined text-[16px]">
                   {isMaximized ? 'collapse_content' : 'open_in_full'}
                 </span>
               </button>
@@ -1340,10 +1340,10 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                 type="button"
                 onClick={onClose}
                 title="Close chat"
-                className="w-8.5 h-8.5 rounded-xl bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200/90 hover:border-rose-200 inline-flex items-center justify-center transition-all shadow-2xs hover:shadow-xs shrink-0 active:scale-95 cursor-pointer"
+                className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface)] hover:bg-[var(--color-danger-subtle)] text-[var(--color-text-secondary)] hover:text-[var(--color-danger)] border border-[var(--color-border)] hover:border-[var(--color-danger-border)] inline-flex items-center justify-center transition-all shadow-[var(--shadow-2xs)] shrink-0 active:scale-95 cursor-pointer"
                 aria-label="Close chat"
               >
-                <span className="material-symbols-outlined text-[18px]">close</span>
+                <span className="material-symbols-outlined text-[17px]">close</span>
               </button>
             )}
           </div>
@@ -1352,9 +1352,9 @@ export const RAGChat: React.FC<RAGChatProps> = ({
         {/* ============================================================ */}
         {/* CHAT CONVERSATION AREA: The Primary Scrollable Region */}
         {/* ============================================================ */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 scroll-touch min-h-0 bg-gradient-to-b from-slate-50/40 via-white to-slate-50/30 relative">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 scroll-touch min-h-0 bg-[var(--color-bg-base)] relative">
           {sessionLoadError ? (
-            <div role="alert" className="py-8 text-center text-sm text-rose-600 font-medium">
+            <div role="alert" className="py-8 text-center text-xs text-[var(--color-danger)] font-medium">
               {sessionLoadError}{' '}
               <button onClick={() => void handleSelectThread(activeThreadId)} className="underline ml-1 font-semibold cursor-pointer">
                 Retry
@@ -1365,15 +1365,15 @@ export const RAGChat: React.FC<RAGChatProps> = ({
             /* Session Loading State: Visible while selected session loads  */
             /* ============================================================ */
             <div className="h-full min-h-[340px] flex flex-col items-center justify-center max-w-sm mx-auto text-center px-4 py-16 animate-in fade-in duration-150">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-violet-50 to-indigo-50 border border-violet-200/70 flex items-center justify-center text-indigo-600 shadow-sm mb-4">
-                <span className="material-symbols-outlined text-[28px] animate-spin text-indigo-600">
+              <div className="w-12 h-12 rounded-[var(--radius-container)] bg-[var(--color-surface-active)] border border-[var(--color-border)] flex items-center justify-center text-[var(--color-text-primary)] shadow-[var(--shadow-2xs)] mb-4">
+                <span className="material-symbols-outlined text-[24px] animate-spin text-[var(--color-text-secondary)]">
                   progress_activity
                 </span>
               </div>
-              <h3 className="font-headline-sm text-base text-slate-900 font-semibold">
+              <h3 className="text-sm text-[var(--color-text-primary)] font-semibold">
                 Loading Conversation History...
               </h3>
-              <p className="text-body-sm text-xs text-slate-500 mt-1.5 max-w-xs leading-relaxed">
+              <p className="text-xs text-[var(--color-text-muted)] mt-1.5 max-w-xs leading-relaxed">
                 Retrieving session messages and vector grounding records
               </p>
             </div>
@@ -1382,24 +1382,22 @@ export const RAGChat: React.FC<RAGChatProps> = ({
             /* Empty State: Modern Enterprise AI Welcome & Prompt Starters  */
             /* ============================================================ */
             <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto text-center px-4 py-8">
-              {/* AI Squircle Emblem with glowing ambient ring */}
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-violet-600 via-indigo-600 to-sky-500 text-white flex items-center justify-center shadow-lg shadow-indigo-500/25 ring-8 ring-indigo-50/70 mb-4 animate-in zoom-in-90 duration-300">
-                <span className="material-symbols-outlined text-[28px]">auto_awesome</span>
+              {/* AI Squircle Emblem with subtle Astryx border */}
+              <div className="w-12 h-12 rounded-[var(--radius-container)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[var(--color-text-primary)] flex items-center justify-center shadow-[var(--shadow-2xs)] mb-4">
+                <span className="material-symbols-outlined text-[24px]">auto_awesome</span>
               </div>
 
               {/* Dynamic Greeting Title */}
-              <div className="space-y-1.5 mb-2">
-                <h3 className="font-headline-md text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
-                  <span className="bg-gradient-to-r from-violet-700 via-indigo-700 to-slate-900 bg-clip-text text-transparent">
-                    {getTimeGreeting()}, {displayName}
-                  </span>
+              <div className="space-y-1 mb-2">
+                <h3 className="text-lg sm:text-xl font-semibold tracking-tight text-[var(--color-text-primary)]">
+                  {getTimeGreeting()}, {displayName}
                 </h3>
-                <p className="text-base sm:text-lg font-medium text-slate-700">
+                <p className="text-sm font-medium text-[var(--color-text-secondary)]">
                   How can I assist your enterprise analytics today?
                 </p>
               </div>
 
-              <p className="text-body-sm text-xs sm:text-sm text-slate-500 mt-1 mb-6 max-w-lg leading-relaxed">
+              <p className="text-xs sm:text-sm text-[var(--color-text-muted)] mt-1 mb-6 max-w-lg leading-relaxed">
                 Ask natural language questions about approved field definitions, calculate metrics with in-memory SQL, or synthesize visual charts grounded in SAP HANA Cloud.
               </p>
 
@@ -1410,30 +1408,30 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                     key={idx}
                     type="button"
                     onClick={() => handleSuggestedPrompt(card.query)}
-                    className="group relative p-3.5 sm:p-4 rounded-2xl bg-white hover:bg-gradient-to-br hover:from-white hover:to-indigo-50/30 border border-slate-200/90 hover:border-indigo-300 shadow-2xs hover:shadow-md transition-all duration-200 text-left flex flex-col justify-between cursor-pointer"
+                    className="group relative p-3.5 sm:p-4 rounded-[var(--radius-container)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] border border-[var(--color-border)] hover:border-[var(--color-border-strong)] shadow-[var(--shadow-2xs)] hover:shadow-[var(--shadow-xs)] transition-all duration-200 text-left flex flex-col justify-between cursor-pointer"
                   >
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-xl bg-indigo-50/80 text-indigo-600 flex items-center justify-center group-hover:scale-105 group-hover:bg-indigo-100/90 transition-all">
-                          <span className={`material-symbols-outlined text-[18px] ${card.color || 'text-indigo-600'}`}>
+                        <div className="w-7 h-7 rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] flex items-center justify-center border border-[var(--color-border)]">
+                          <span className={`material-symbols-outlined text-[16px]`}>
                             {card.icon}
                           </span>
                         </div>
-                        <span className="font-semibold text-xs text-slate-900 group-hover:text-indigo-700 transition-colors">
+                        <span className="font-semibold text-xs text-[var(--color-text-primary)]">
                           {card.title}
                         </span>
                       </div>
                       {card.badge && (
-                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200/80 group-hover:bg-indigo-50 group-hover:text-indigo-600 group-hover:border-indigo-200 transition-colors">
+                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-surface-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)]">
                           {card.badge}
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center justify-between text-[11px] text-slate-500 group-hover:text-slate-700">
+                    <div className="flex items-center justify-between text-[11px] text-[var(--color-text-secondary)]">
                       <span className="line-clamp-2 leading-relaxed pr-2">
                         {card.query}
                       </span>
-                      <span className="material-symbols-outlined text-[16px] text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all shrink-0">
+                      <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)] transition-all shrink-0">
                         arrow_forward
                       </span>
                     </div>
@@ -1451,16 +1449,16 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                   /* User Message Bubble (Right-aligned) */
                   <div key={msg.id} className="flex justify-end items-start gap-2.5 sm:gap-3 max-w-2xl ml-auto animate-in fade-in duration-150">
                     <div className="flex flex-col items-end">
-                      <div className="flex items-center gap-2 mb-1.5 text-[11px] text-slate-500">
+                      <div className="flex items-center gap-2 mb-1.5 text-[11px] text-[var(--color-text-muted)]">
                         <span>{msg.userRole || `You · ${displayName}`}</span>
                         <span aria-hidden="true">·</span>
                         <span>{msg.timestamp}</span>
                       </div>
-                      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-white px-4.5 py-3 rounded-2xl rounded-tr-xs shadow-sm border border-slate-800/80 font-body-md text-sm leading-relaxed break-words font-normal">
+                      <div className="bg-[var(--color-text-primary)] text-[var(--color-surface)] px-4 py-2.5 rounded-[var(--radius-container)] rounded-tr-[var(--radius-inner)] shadow-[var(--shadow-2xs)] text-xs sm:text-sm leading-relaxed break-words font-normal">
                         {msg.text}
                       </div>
                     </div>
-                    <div className="w-8.5 h-8.5 rounded-xl bg-gradient-to-br from-slate-700 to-slate-900 text-white flex items-center justify-center text-xs font-semibold shrink-0 mt-3.5 shadow-2xs border border-slate-700/60" title={displayName}>
+                    <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] border border-[var(--color-border)] flex items-center justify-center text-xs font-semibold shrink-0 mt-3.5 shadow-[var(--shadow-2xs)]" title={displayName}>
                       {userInitials}
                     </div>
                   </div>
@@ -1474,22 +1472,22 @@ export const RAGChat: React.FC<RAGChatProps> = ({
 
               return (
                 <div key={msg.id} className="flex items-start gap-3 sm:gap-3.5 max-w-4xl mr-auto animate-in fade-in duration-200">
-                  {/* Assistant Avatar: Multi-color gradient squircle */}
-                  <div className="w-8.5 h-8.5 rounded-xl bg-gradient-to-tr from-violet-600 via-indigo-600 to-sky-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-md shadow-indigo-500/20 ring-1 ring-white/60">
-                    <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
+                  {/* Assistant Avatar: Subtle Astryx icon */}
+                  <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] border border-[var(--color-border)] flex items-center justify-center shrink-0 mt-0.5 shadow-[var(--shadow-2xs)]">
+                    <span className="material-symbols-outlined text-[17px]">auto_awesome</span>
                   </div>
 
-                  <div className="flex-1 flex flex-col space-y-2.5 min-w-0">
+                  <div className="flex-1 flex flex-col space-y-2 min-w-0">
                     {/* Assistant Header */}
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-slate-900">
+                        <span className="text-xs font-semibold text-[var(--color-text-primary)]">
                           NEOVATIC Assistant
                         </span>
                         {msg.agentMeta?.latency && msg.agentMeta.latency !== 'Streaming...' && (
                           <>
-                            <span aria-hidden="true" className="text-slate-300">·</span>
-                            <span className="text-[11px] text-slate-500 font-mono">
+                            <span aria-hidden="true" className="text-[var(--color-border-strong)]">·</span>
+                            <span className="text-[11px] text-[var(--color-text-muted)] font-mono">
                               {msg.agentMeta.latency}
                             </span>
                           </>
@@ -1498,15 +1496,15 @@ export const RAGChat: React.FC<RAGChatProps> = ({
 
                       {/* Grounding Confidence Score (Only shown when valid score exists) */}
                       {msg.agentMeta?.cosineSim && !['Not available', 'undefined', 'null', 'N/A'].includes(msg.agentMeta.cosineSim) && (
-                        <div className="flex items-center gap-1.5 text-[11px] text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200/80 font-medium">
-                          <span className="material-symbols-outlined text-[13px] text-emerald-600">verified</span>
+                        <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-success)] bg-[var(--color-success-subtle)] px-2.5 py-0.5 rounded-[var(--radius-full)] border border-[var(--color-success-border)] font-medium">
+                          <span className="material-symbols-outlined text-[13px] text-[var(--color-success)]">verified</span>
                           <span>HANA Match {msg.agentMeta.cosineSim}</span>
                         </div>
                       )}
                     </div>
 
                     {/* Assistant Response Content Card */}
-                    <div className="bg-white/95 backdrop-blur-xs border border-slate-200/90 rounded-2xl rounded-tl-xs p-4 sm:p-5 text-slate-900 text-sm leading-relaxed shadow-[0_2px_12px_rgba(15,23,42,0.04)] space-y-4">
+                    <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] rounded-tl-[var(--radius-inner)] p-4 sm:p-5 text-[var(--color-text-primary)] text-xs sm:text-sm leading-relaxed shadow-[var(--shadow-2xs)] space-y-3.5">
                       {/* Step-wise Intent & Thinking Process */}
                       {msg.processing && msg.processing.length > 0 && (
                         <ThinkingProcess
@@ -1521,8 +1519,8 @@ export const RAGChat: React.FC<RAGChatProps> = ({
 
                       {/* Live streaming token generation placeholder */}
                       {msg.isStreaming && !msg.text && (
-                        <div className="flex items-center gap-2 py-2 text-xs text-slate-500 font-mono">
-                          <span className="w-2 h-2 rounded-full bg-violet-600 animate-pulse" />
+                        <div className="flex items-center gap-2 py-2 text-xs text-[var(--color-text-muted)] font-mono">
+                          <span className="w-2 h-2 rounded-full bg-[var(--color-primary)] animate-pulse" />
                           <span>Synthesizing response via NVIDIA NIM...</span>
                         </div>
                       )}
@@ -1535,7 +1533,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                             onCodeCopy={() => showToast('Snippet copied to clipboard')}
                           />
                           {msg.isStreaming && (
-                            <span className="inline-block w-1.5 h-4 ml-1 bg-violet-600 animate-pulse align-middle" />
+                            <span className="inline-block w-1.5 h-4 ml-1 bg-[var(--color-primary)] animate-pulse align-middle" />
                           )}
                         </div>
                       )}
@@ -1755,8 +1753,8 @@ export const RAGChat: React.FC<RAGChatProps> = ({
         {/* ============================================================ */}
         {/* CHAT INPUT AREA: Modern Enterprise Floating Dock (Claude 3.5 & Gemini Inspired) */}
         {/* ============================================================ */}
-        <div className="p-3 sm:pb-4 sm:px-6 bg-gradient-to-t from-white via-white/95 to-transparent shrink-0 z-20">
-          <div className="max-w-4xl mx-auto rounded-2xl bg-white border border-slate-200/90 shadow-[0_4px_24px_rgba(15,23,42,0.08)] hover:shadow-[0_6px_30px_rgba(15,23,42,0.12)] focus-within:shadow-[0_6px_32px_rgba(99,102,241,0.16)] focus-within:border-indigo-400/90 focus-within:ring-2 focus-within:ring-indigo-400/20 transition-all p-2.5 sm:p-3">
+        <div className="p-3 sm:pb-4 sm:px-6 bg-[var(--color-bg-base)] shrink-0 z-20">
+          <div className="max-w-4xl mx-auto rounded-[var(--radius-container)] bg-[var(--color-surface)] border border-[var(--color-border)] shadow-[var(--shadow-md)] hover:border-[var(--color-border-strong)] focus-within:border-[var(--color-primary)] focus-within:ring-1 focus-within:ring-[var(--color-primary)] transition-all p-2.5 sm:p-3">
             {/* Input row */}
             <div className="flex items-center gap-2 sm:gap-3 px-1">
               <input
@@ -1772,32 +1770,32 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                   }
                 }}
                 placeholder="Ask anything about your data, calculate a metric, or request a chart..."
-                className="flex-1 min-w-0 bg-transparent text-sm sm:text-base text-slate-900 placeholder:text-slate-400 focus:outline-none py-1.5"
+                className="flex-1 min-w-0 bg-transparent text-xs sm:text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none py-1"
               />
 
-              {/* Modern Gradient Send Button */}
+              {/* Modern Astryx Send Button */}
               <button
                 type="button"
                 onClick={handleSendMessage}
                 disabled={isSubmitting || Boolean(loadingSessionId || sessionLoadError) || !inputText.trim()}
                 aria-label="Send message"
-                className="w-9 h-9 rounded-xl bg-gradient-to-tr from-violet-600 via-indigo-600 to-indigo-700 hover:from-violet-700 hover:to-indigo-800 disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-400 text-white flex items-center justify-center transition-all disabled:opacity-60 disabled:cursor-not-allowed shrink-0 shadow-sm shadow-indigo-500/25 active:scale-95 cursor-pointer"
+                className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:bg-[var(--color-surface-active)] disabled:text-[var(--color-text-muted)] text-white flex items-center justify-center transition-all disabled:opacity-60 disabled:cursor-not-allowed shrink-0 shadow-[var(--shadow-2xs)] active:scale-95 cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[19px]">arrow_upward</span>
+                <span className="material-symbols-outlined text-[17px]">arrow_upward</span>
               </button>
             </div>
 
             {/* Metadata & Controls Bottom Row */}
-            <div className="flex items-center justify-between pt-2 mt-1 border-t border-slate-100 px-1 text-[11px] text-slate-400">
+            <div className="flex items-center justify-between pt-2 mt-1 border-t border-[var(--color-border)] px-1 text-[11px] text-[var(--color-text-muted)]">
               <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 text-slate-500 font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span className="inline-flex items-center gap-1.5 text-[var(--color-text-secondary)] font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
                   <span>NVIDIA NIM · Grounded in SAP HANA Cloud</span>
                 </span>
               </div>
-              <div className="hidden sm:flex items-center gap-2 text-slate-400">
+              <div className="hidden sm:flex items-center gap-2 text-[var(--color-text-muted)]">
                 <span>Press</span>
-                <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-600 shadow-2xs">Enter ↵</kbd>
+                <kbd className="px-1.5 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-secondary)] shadow-[var(--shadow-2xs)]">Enter ↵</kbd>
                 <span>to send</span>
               </div>
             </div>

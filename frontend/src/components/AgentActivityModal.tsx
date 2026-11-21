@@ -47,21 +47,21 @@ export const AgentActivityModal: React.FC<AgentActivityModalProps> = ({
 
   if (!currentActivity) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-        <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full border border-slate-200 text-center space-y-4">
-          <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center mx-auto text-slate-500">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+        <div className="bg-[var(--color-background-surface)] rounded-[var(--radius-container)] shadow-[var(--shadow-xl)] p-6 max-w-md w-full border border-[var(--color-border)] text-center space-y-4">
+          <div className="w-12 h-12 rounded-[var(--radius-container)] bg-[var(--color-background-subtle)] flex items-center justify-center mx-auto text-[var(--color-text-muted)] border border-[var(--color-border)]">
             <span className="material-symbols-outlined text-2xl">smart_toy</span>
           </div>
           <div>
-            <h3 className="text-base font-bold text-slate-900">No Agent Activity Recorded Yet</h3>
-            <p className="text-xs text-slate-500 mt-1">
+            <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">No Agent Activity Recorded Yet</h3>
+            <p className="text-xs text-[var(--color-text-secondary)] mt-1.5 leading-relaxed">
               Upload an Excel or CSV file in Upload Files to trigger the Preprocessing, Domain Classification, and Recommendation agents.
             </p>
           </div>
           <button
             type="button"
             onClick={() => agentActivityStore.closeModal()}
-            className="w-full py-2 bg-slate-900 hover:bg-black text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+            className="w-full py-2 bg-[var(--color-text-primary)] hover:bg-black text-white text-xs font-medium rounded-[var(--radius-element)] transition-colors cursor-pointer shadow-[var(--shadow-xs)]"
           >
             Close
           </button>

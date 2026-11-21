@@ -1,4 +1,6 @@
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+import json
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 from api.services.intent_engine import intent_engine
@@ -139,5 +141,78 @@ def generate_python_graph_agent(req: PythonGraphAgentRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Custom graph generation failed: {str(e)}")
+
+
+class GenAIDashboardRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    dataset_id: Optional[str] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None
+
+
+class GenAIWidgetExecutionRequest(BaseModel):
+    widget: Dict[str, Any]
+    dataset_id: Optional[str] = None
+
+
+@router.post("/genai-dashboard/generate")
+def generate_genai_dashboard(req: GenAIDashboardRequest):
+    """
+    Executes the 10-step Analysis-First Gen AI Dashboard workflow:
+    Understand -> Explore -> Identify -> Relate -> Generate & Execute -> Validate -> Analyze -> Recommend -> Render -> Visualize.
+    """
+    from api.services.genai_dashboard_service import genai_dashboard_service
+
+    if not req.prompt.strip():
+        raise HTTPException(status_code=400, detail="Dashboard prompt cannot be empty.")
+
+    try:
+        return genai_dashboard_service.generate_dashboard(
+            prompt=req.prompt,
+            target_dataset_id=req.dataset_id,
+            conversation_history=req.conversation_history
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Generative AI Dashboard generation failed: {str(e)}")
+
+
+@router.post("/genai-dashboard/generate-stream")
+def generate_genai_dashboard_stream(req: GenAIDashboardRequest):
+    """
+    Real-time SSE Streaming endpoint for 10-step Analysis-First Gen AI Dashboard workflow.
+    Streams progress events step-by-step as each stage executes, followed by final result.
+    """
+    from api.services.genai_dashboard_service import genai_dashboard_service
+
+    if not req.prompt.strip():
+        raise HTTPException(status_code=400, detail="Dashboard prompt cannot be empty.")
+
+    def event_stream():
+        try:
+            for chunk in genai_dashboard_service.generate_dashboard_stream(
+                prompt=req.prompt,
+                target_dataset_id=req.dataset_id,
+                conversation_history=req.conversation_history
+            ):
+                yield f"data: {json.dumps(chunk)}\n\n"
+        except Exception as exc:
+            err_payload = {"type": "error", "message": str(exc)}
+            yield f"data: {json.dumps(err_payload)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/genai-dashboard/execute-widget")
+def execute_genai_widget(req: GenAIWidgetExecutionRequest):
+    """Calculates data for an accepted proactive recommendation or customized widget."""
+    from api.services.genai_dashboard_service import genai_dashboard_service
+
+    try:
+        return genai_dashboard_service.execute_single_widget(
+            widget_spec=req.widget,
+            target_dataset_id=req.dataset_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Widget execution failed: {str(e)}")
+
 
 

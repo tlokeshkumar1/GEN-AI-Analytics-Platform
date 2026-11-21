@@ -144,8 +144,8 @@ export function formatNumber(value: unknown, isCurrency = false): string {
 }
 
 export const CHART_PALETTE = [
-  '#2563EB', '#0D9488', '#7C3AED', '#EA580C', '#0284C7',
-  '#D97706', '#4F46E5', '#059669', '#DB2777', '#6366F1',
-  '#0891B2', '#475569'
+  '#3B82F6', '#14B8A6', '#8B5CF6', '#F59E0B', '#06B6D4',
+  '#6366F1', '#22C55E', '#F43F5E', '#0284C7', '#4F46E5',
+  '#0D9488', '#64748B'
 ];
 

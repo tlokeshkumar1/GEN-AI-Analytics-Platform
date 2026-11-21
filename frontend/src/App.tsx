@@ -13,6 +13,7 @@ import type { UserContext } from './screens/EnterpriseSignIn';
 import { clearLocalIdentity, getTokenExpiry, refreshAuthSession, sapRouterRoute, SIGNED_OUT_KEY } from './services/authNavigation';
 import { selectedContext, ensureDefaultContext } from './services/executionContext';
 import api from './services/api';
+import { DataExplorerSkeleton } from './components/dashboard/DataExplorerSkeleton';
 
 const loadExecutiveDashboard = () => import('./screens/ExecutiveDashboard').then(m => ({ default: m.ExecutiveDashboard }));
 const loadGraphStudio = () => import('./screens/GraphStudio').then(m => ({ default: m.GraphStudio }));
@@ -43,9 +44,9 @@ const EnterpriseSignIn = lazy(loadEnterpriseSignIn);
 const HanaAdmin = lazy(loadHanaAdmin);
 
 const ScreenFallback = () => (
-  <div className="flex items-center justify-center min-h-[300px] p-12 text-slate-500">
-    <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mr-3" />
-    Loading view…
+  <div className="flex items-center justify-center min-h-[300px] p-12 text-[var(--color-text-muted)]">
+    <div className="w-5 h-5 border-2 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin mr-3" />
+    Loading…
   </div>
 );
 
@@ -86,6 +87,35 @@ export default function App() {
   });
   const [hasOpenedChat, setHasOpenedChat] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleToggleSidebarCollapse = () => {
+    setIsSidebarCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('sidebar_collapsed', String(next));
+      } catch { }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault();
+        handleToggleSidebarCollapse();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [systemTab, setSystemTab] = useState('Connections');
   const [datasetScope, setDatasetScope] = useState(() => formatScopeKey(selectedContext()));
@@ -347,7 +377,7 @@ export default function App() {
 
   if (isCheckingSession) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC] text-[#0F172A]" role="status" aria-live="polite">
+      <div className="min-h-screen flex items-center justify-center bg-[var(--color-background-body)] text-[var(--color-text-primary)]" role="status" aria-live="polite">
         Signing in with SAP Universal ID / BTP IAS…
       </div>
     );
@@ -370,32 +400,44 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen min-h-dvh bg-[#F8FAFC] text-[#0F172A] font-body-md antialiased select-auto w-full overflow-x-hidden flex flex-col">
+    <div className="min-h-screen min-h-dvh bg-[var(--color-background-body)] text-[var(--color-text-primary)] font-body-md antialiased select-auto w-full overflow-x-hidden flex flex-col">
       {/* Global Responsive Header */}
       <Header
         activePath={activePath}
         onNavigate={handleNavigate}
-        onToggleSidebar={() => setSidebarOpen(prev => !prev)}
+        onToggleSidebar={() => {
+          if (typeof window !== 'undefined' && window.innerWidth < 768) {
+            setSidebarOpen(prev => !prev);
+          } else {
+            handleToggleSidebarCollapse();
+          }
+        }}
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         onLogout={handleLogout}
         user={currentUser}
       />
 
-      {/* Global Sidebar Navigation (Drawer on mobile/tablet/foldable, Fixed 260px on desktop) */}
+      {/* Global Sidebar Navigation (Drawer on mobile, Compact on tablet, Expandable on desktop) */}
       <Sidebar
         activePath={activePath}
         onNavigate={handleNavigate}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={handleToggleSidebarCollapse}
         user={currentUser}
         onLogout={handleLogout}
       />
 
-      {/* Main Content Area - Fluidly & Automatically Determined for Every Screen & Aspect Ratio */}
-      <div className="pl-0 lg:pl-[260px] w-full flex-1 transition-all duration-300">
-        <main className="w-full pt-16 bg-[#F8FAFC] min-h-screen min-h-dvh pb-32 lg:pb-36">
+      {/* Main Content Area - dynamically adjusts to sidebar width without content overlap */}
+      <div
+        style={{ '--sidebar-width': isSidebarCollapsed ? '72px' : '256px' } as React.CSSProperties}
+        className={`w-full flex-1 transition-all duration-200 ease-in-out ${isSidebarCollapsed ? 'pl-0 md:pl-[72px] lg:pl-[72px]' : 'pl-0 md:pl-[72px] lg:pl-[256px]'
+          }`}
+      >
+        <main className="w-full pt-14 bg-[var(--color-background-body)] min-h-screen min-h-dvh pb-28 lg:pb-32">
           <Suspense fallback={<ScreenFallback />}>
-            <div key={datasetScope} className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div key={datasetScope} className="w-full max-w-[var(--content-max-width)] mx-auto px-4 sm:px-5 lg:px-8 py-5">
               {activePath === 'executive-dashboard' && (
                 <ExecutiveDashboard onNavigate={handleNavigate} />
               )}
@@ -404,6 +446,7 @@ export default function App() {
                 <GraphStudio
                   onNavigate={handleNavigate}
                   user={currentUser}
+                  initialMode="prompt"
                 />
               )}
 
@@ -416,7 +459,9 @@ export default function App() {
               )}
 
               {activePath === 'data-explorer' && (
-                <DataExplorer onNavigate={handleNavigate} />
+                <Suspense fallback={<DataExplorerSkeleton />}>
+                  <DataExplorer onNavigate={handleNavigate} />
+                </Suspense>
               )}
 
               {activePath === 'alerts-notifications' && (
@@ -447,23 +492,23 @@ export default function App() {
         </main>
       </div>
 
-      {/* Floating RAG Chat Circular Trigger Button (Bottom Right) - Only visible when chat is closed */}
+      {/* Floating RAG Chat Trigger Button — Astryx-refined */}
       {!isChatOpen && (
-        <div className="fixed bottom-20 lg:bottom-6 right-4 sm:right-6 z-50 flex items-center gap-3 select-none animate-in fade-in duration-200">
-          {/* Helper pill indicator visible when chat is closed */}
+        <div className="fixed bottom-20 lg:bottom-5 right-4 sm:right-5 z-50 flex items-center gap-2.5 select-none">
+          {/* Helper pill */}
           <button
             type="button"
             onClick={() => {
               setHasOpenedChat(true);
               setIsChatOpen(true);
             }}
-            className="hidden sm:inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/95 backdrop-blur-md border border-purple-200 text-[#0F172A] shadow-md hover:shadow-lg hover:border-purple-400 transition-all duration-200 text-xs font-medium cursor-pointer group animate-in fade-in slide-in-from-right-3"
+            className="hidden sm:inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--color-background-surface)]/95 backdrop-blur-md border border-[var(--color-border)] text-[var(--color-text-primary)] shadow-[var(--shadow-sm)] hover:shadow-[var(--shadow-md)] hover:border-[var(--color-ai-muted)] transition-all duration-200 text-xs font-medium cursor-pointer group"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="font-semibold bg-gradient-to-r from-purple-700 via-indigo-700 to-blue-700 bg-clip-text text-transparent">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse" />
+            <span className="font-semibold text-[var(--color-ai)]">
               NEO Copilot
             </span>
-            <span className="text-slate-400 font-mono text-[10px]">Ask HANA</span>
+            <span className="text-[var(--color-text-muted)] font-mono text-[10px]">Ask HANA</span>
           </button>
 
           {/* Circular Action Button */}
@@ -475,20 +520,16 @@ export default function App() {
             }}
             aria-label="Open NEO Copilot"
             title="Open NEO Copilot"
-            className="relative w-12 h-12 sm:w-13 sm:h-13 rounded-full flex items-center justify-center text-white shadow-xl transition-all duration-300 cursor-pointer active:scale-95 group focus:outline-none focus:ring-4 focus:ring-purple-400/40 bg-gradient-to-tr from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:to-indigo-500 hover:scale-105 border-2 border-white/40 shadow-purple-500/25"
+            className="relative w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-white shadow-[var(--shadow-lg)] transition-all duration-200 cursor-pointer active:scale-95 group focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ai)] focus-visible:ring-offset-2 bg-[var(--color-ai)] hover:bg-[var(--color-ai-hover)]"
           >
-            {/* Animated glow on hover */}
-            <span className="absolute inset-0 rounded-full bg-gradient-to-tr from-purple-500 to-blue-500 opacity-0 group-hover:opacity-40 blur-md transition-opacity duration-300" />
-
-            {/* Chat Symbol Icon */}
-            <span className="material-symbols-outlined text-[22px] sm:text-[24px] relative z-10 transition-transform duration-200">
+            <span className="material-symbols-outlined text-[22px] relative z-10">
               chat
             </span>
 
-            {/* Active Status Pulse Indicator */}
-            <span className="absolute top-0 right-0 flex h-3.5 w-3.5 -mt-0.5 -mr-0.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border-2 border-white shadow-xs" />
+            {/* Status dot */}
+            <span className="absolute -top-0.5 -right-0.5 flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-success)] opacity-75" />
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-[var(--color-success)] border-2 border-white" />
             </span>
           </button>
         </div>
@@ -496,12 +537,12 @@ export default function App() {
 
       {/* Floating Chat Modal / Drawer */}
       <div
-        className={`fixed z-50 transition-all duration-300 ease-out bg-white rounded-2xl shadow-2xl border border-slate-200/90 overflow-hidden flex flex-col ${isChatOpen
-            ? 'opacity-100 scale-100 pointer-events-auto translate-y-0'
-            : 'opacity-0 scale-95 pointer-events-none translate-y-6'
+        className={`fixed z-50 transition-all duration-200 ease-out bg-[var(--color-background-surface)] rounded-[var(--radius-page)] shadow-[var(--shadow-xl)] border border-[var(--color-border)] overflow-hidden flex flex-col ${isChatOpen
+          ? 'opacity-100 scale-100 pointer-events-auto translate-y-0'
+          : 'opacity-0 scale-95 pointer-events-none translate-y-4'
           } ${isChatMaximized
             ? 'inset-2 sm:inset-6'
-            : 'bottom-20 lg:bottom-6 right-2 sm:right-6 w-[calc(100vw-16px)] sm:w-[500px] xl:w-[560px] h-[calc(100vh-100px)] sm:h-[720px] max-h-[calc(100vh-100px)] lg:max-h-[calc(100vh-48px)]'
+            : 'bottom-20 lg:bottom-5 right-2 sm:right-5 w-[calc(100vw-16px)] sm:w-[480px] xl:w-[520px] h-[calc(100vh-100px)] sm:h-[680px] max-h-[calc(100vh-100px)] lg:max-h-[calc(100vh-48px)]'
           }`}
       >
         {hasOpenedChat && (
