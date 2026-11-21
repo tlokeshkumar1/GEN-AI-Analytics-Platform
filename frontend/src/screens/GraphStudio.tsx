@@ -129,14 +129,36 @@ export function GraphStudio({
   const [selectedDatasetId, setSelectedDatasetId] = useState<string>(cachedStudioState?.selectedDatasetId ?? '');
 
   // Active Creation Tab ('prompt' = 1. Generative AI Dashboards, 'dashboards' = 2. Build Your Dashboards)
-  const [activeTab, setActiveTab] = useState<'prompt' | 'dashboards'>(
-    initialMode === 'prompt' ? 'prompt' : 'dashboards'
-  );
+  const [activeTab, setActiveTabState] = useState<'prompt' | 'dashboards'>(() => {
+    try {
+      const saved = sessionStorage.getItem('graph_studio_active_tab');
+      if (saved === 'prompt' || saved === 'dashboards') return saved;
+    } catch { }
+    return initialMode === 'prompt' ? 'prompt' : 'dashboards';
+  });
   // Dashboard Sub-Mode inside "Build Your Dashboards": 'manual' (Build Manually) or 'drag_drop' (Select Drag and Drop)
-  const [dashboardMode, setDashboardMode] = useState<'manual' | 'drag_drop'>(
-    initialMode === 'data_options' ? 'drag_drop' : 'manual'
-  );
+  const [dashboardMode, setDashboardModeState] = useState<'manual' | 'drag_drop'>(() => {
+    try {
+      const saved = sessionStorage.getItem('graph_studio_dashboard_mode');
+      if (saved === 'manual' || saved === 'drag_drop') return saved;
+    } catch { }
+    return initialMode === 'data_options' ? 'drag_drop' : 'manual';
+  });
   const [isModeDropdownOpen, setIsModeDropdownOpen] = useState(false);
+
+  const setActiveTab = (tab: 'prompt' | 'dashboards') => {
+    try {
+      sessionStorage.setItem('graph_studio_active_tab', tab);
+    } catch { }
+    setActiveTabState(tab);
+  };
+
+  const setDashboardMode = (mode: 'manual' | 'drag_drop') => {
+    try {
+      sessionStorage.setItem('graph_studio_dashboard_mode', mode);
+    } catch { }
+    setDashboardModeState(mode);
+  };
 
   // Backward-compatible activeMode derived state
   const activeMode: CreationMode = activeTab === 'prompt' ? 'prompt' : (dashboardMode === 'manual' ? 'visual' : 'data_options');
@@ -153,6 +175,10 @@ export function GraphStudio({
   };
 
   useEffect(() => {
+    try {
+      const savedTab = sessionStorage.getItem('graph_studio_active_tab');
+      if (savedTab) return; // Retain active tab on dataset changes/re-renders
+    } catch { }
     if (initialMode === 'prompt') {
       setActiveTab('prompt');
     } else if (initialMode === 'data_options') {

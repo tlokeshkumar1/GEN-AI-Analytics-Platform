@@ -437,7 +437,7 @@ export default function App() {
       >
         <main className="w-full pt-14 bg-[var(--color-background-body)] min-h-screen min-h-dvh pb-28 lg:pb-32">
           <Suspense fallback={<ScreenFallback />}>
-            <div key={datasetScope} className="w-full max-w-[var(--content-max-width)] mx-auto px-4 sm:px-5 lg:px-8 py-5">
+            <div className="w-full max-w-[var(--content-max-width)] mx-auto px-4 sm:px-5 lg:px-8 py-5">
               {activePath === 'executive-dashboard' && (
                 <ExecutiveDashboard onNavigate={handleNavigate} />
               )}

@@ -16,7 +16,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-const MOCK_DATASET = {
+const MOCK_DATASET_1 = {
   id: 'ds_finance',
   name: 'Financial Ledger',
   tableName: 'Financial_Ledger',
@@ -35,7 +35,25 @@ const MOCK_DATASET = {
   ],
 };
 
-const MOCK_MODEL = {
+const MOCK_DATASET_2 = {
+  id: 'ds_projects',
+  name: 'Project Portfolio',
+  tableName: 'Project_Portfolio',
+  rowCount: 450,
+  columnCount: 3,
+  lastUpdated: new Date().toISOString(),
+  format: 'csv' as const,
+  source: 'upload',
+  status: 'Ready' as const,
+  currentVersion: 1,
+  isActive: false,
+  columns: [
+    { name: 'Delayed_days', type: 'decimal' as const, role: 'measure' },
+    { name: 'Project_ID', type: 'string' as const, role: 'dimension' },
+  ],
+};
+
+const MOCK_MODEL_1 = {
   revision: 1,
   status: 'approved',
   fields: [
@@ -47,13 +65,26 @@ const MOCK_MODEL = {
   derived_metrics: [],
 };
 
+const MOCK_MODEL_2 = {
+  revision: 1,
+  status: 'approved',
+  fields: [
+    { name: 'Delayed_days', semantic_name: 'Delayed Days', role: 'measure', type: 'decimal' },
+    { name: 'Project_ID', semantic_name: 'Project ID', role: 'dimension', type: 'string' },
+  ],
+  relationships: [],
+  derived_metrics: [],
+};
+
 describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and Drop)', () => {
-  it('combines Visual KPI Builder and Drag-and-Drop into "Build Your Dashboards" tab with dropdown switcher', async () => {
+  it('combines Visual KPI Builder and Drag-and-Drop with step-by-step creation and preserves tab on dataset switch', async () => {
     vi.mocked(api.get).mockImplementation((url: string) => {
-      if (url === '/datasets') return Promise.resolve({ data: [MOCK_DATASET] });
-      if (url.includes('semantics')) return Promise.resolve({ data: [MOCK_MODEL] });
+      if (url === '/datasets') return Promise.resolve({ data: [MOCK_DATASET_1, MOCK_DATASET_2] });
+      if (url.includes('ds_finance') && url.includes('semantics')) return Promise.resolve({ data: [MOCK_MODEL_1] });
+      if (url.includes('ds_projects') && url.includes('semantics')) return Promise.resolve({ data: [MOCK_MODEL_2] });
+      if (url.includes('semantics')) return Promise.resolve({ data: [MOCK_MODEL_1] });
       if (url.includes('/recommendations')) return Promise.resolve({ data: [] });
-      if (url.includes('/insights/dashboard')) return Promise.resolve({ data: { title: '', items: [] } });
+      if (url.includes('/insights/dashboard')) return Promise.resolve({ data: { title: 'Executive Analytics Dashboard', items: [{ id: 'existing_kpi_1', revision: 1 }] } });
       return Promise.resolve({ data: [] });
     });
 
@@ -71,6 +102,9 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
           },
         });
       }
+      if (url === '/insights/dashboard') {
+        return Promise.resolve({ data: { status: 'published' } });
+      }
       return Promise.resolve({ data: {} });
     });
 
@@ -84,7 +118,7 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
     expect(screen.getByText('Dashboard Creation Experience')).toBeTruthy();
     expect(screen.getByText('Build Manually')).toBeTruthy();
 
-    // 3. In default "Build Manually" mode, the Visual KPI Builder is rendered
+    // 3. In default "Build Manually" mode, Visual KPI Builder is rendered
     expect(screen.getByText('Build a Business KPI or Chart')).toBeTruthy();
     expect(screen.getByPlaceholderText(/e.g. Net Revenue by Region/i)).toBeTruthy();
 
@@ -95,10 +129,14 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
     const dragDropOption = await screen.findByRole('button', { name: /Select Drag and Drop/i });
     fireEvent.click(dragDropOption);
 
-    // 5. Verify Drag and Drop Studio is rendered
-    expect(await screen.findByText('Data Fields Palette')).toBeTruthy();
-    expect(screen.getByText('Chart Types Library')).toBeTruthy();
-    expect(screen.getByDisplayValue('My Custom Interactive Dashboard')).toBeTruthy();
+    // 5. Verify 3-column layout rendered:
+    // Left: Chart Types Library
+    expect((await screen.findAllByText('Chart Types Library')).length).toBeGreaterThan(0);
+    // Middle: Your Dashboard Canvas in initial Empty State
+    expect(screen.getByText('Your Dashboard Canvas')).toBeTruthy();
+    expect(screen.getByText('Your Dashboard Canvas is Empty')).toBeTruthy();
+    // Right: Data Fields Palette
+    expect(screen.getByText('Data Fields Palette')).toBeTruthy();
 
     // Verify palettes show measures and dimensions
     expect(screen.getAllByText(/Revenue \(USD\)/i).length).toBeGreaterThan(0);
@@ -109,17 +147,63 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
     expect(screen.getAllByText('Line Trend').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Donut Chart').length).toBeGreaterThan(0);
 
-    // 6. Test adding a new widget to the workspace
-    const addWidgetBtn = screen.getByRole('button', { name: /Add Widget/i });
-    fireEvent.click(addWidgetBtn);
+    // 6. Step 1: Select Chart Type (Bar Chart)
+    const barChartItem = screen.getAllByText('Bar Chart')[0];
+    fireEvent.click(barChartItem);
 
-    // Verify widget card added to canvas with live execution
+    // Canvas transitions to Configuration Card with empty dropzones
+    expect(await screen.findByText('Bar Chart Configuration')).toBeTruthy();
+    expect(screen.getAllByText(/X-Axis \/ Category Dimension/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Y-Axis \/ Metric Measure/i).length).toBeGreaterThan(0);
+
+    // Verify Create Widget is disabled because 2 fields are required
+    const createBtn = screen.getByRole('button', { name: /Create Widget/i });
+    expect(createBtn).toHaveProperty('disabled', true);
+
+    // 7. Step 2: Assign required data fields from Data Fields Palette
+    // Click '+' on Business Department
+    const plusButtons = screen.getAllByTitle('Place into canvas');
+    expect(plusButtons.length).toBeGreaterThan(0);
+    // Assign field 1
+    fireEvent.click(plusButtons[0]);
+    // Assign field 2
+    fireEvent.click(plusButtons[1]);
+
+    // Validation confirms complete and Create Widget button becomes enabled
     await waitFor(() => {
-      expect(screen.getAllByText(/Target Measure/i).length).toBeGreaterThan(0);
-      expect(screen.getAllByText(/Group Dimension/i).length).toBeGreaterThan(0);
+      expect(screen.getByText(/Configuration complete/i)).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Create Widget/i })).toHaveProperty('disabled', false);
     });
 
-    // 7. Can switch back to "Build Manually" seamlessly
+    // 8. Step 4: Click Create Widget to generate widget
+    fireEvent.click(screen.getByRole('button', { name: /Create Widget/i }));
+
+    // Verify widget preview rendered
+    await waitFor(() => {
+      expect(screen.getByText(/Widget Generated Successfully/i)).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Publish to Executive Dashboard/i })).toBeTruthy();
+    });
+
+    // 9. Step 5: Publish widget appends to Executive Dashboard (preserves existing widgets)
+    const publishBtn = screen.getByRole('button', { name: /Publish to Executive Dashboard/i });
+    fireEvent.click(publishBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Successfully published/i)).toBeTruthy();
+      expect(screen.getByText(/Added alongside 1 existing published widget/i)).toBeTruthy();
+    });
+
+    // 10. Switch Active Dataset Source: verify user stays in "Select Drag and Drop" tab
+    const datasetSelect = screen.getByRole('combobox', { name: /Active Dataset Source/i });
+    fireEvent.change(datasetSelect, { target: { value: 'ds_projects' } });
+
+    // The user must remain in Build Your Dashboards tab and Select Drag and Drop mode
+    await waitFor(() => {
+      expect(screen.getByText('Select Drag and Drop Dashboard Builder')).toBeTruthy();
+      expect(screen.getAllByText('Chart Types Library').length).toBeGreaterThan(0);
+    });
+
+    // 11. Can switch back to "Build Manually" seamlessly
     const currentModeBtn = screen.getByRole('button', { name: /Select Drag and Drop/i });
     fireEvent.click(currentModeBtn);
     const buildManuallyOption = await screen.findByRole('button', { name: /Build Manually/i });
