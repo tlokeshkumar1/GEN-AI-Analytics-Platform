@@ -26,8 +26,6 @@ def advanced_graph(req: AdvancedGraphRequest):
     if selection is None:
         raise HTTPException(409, "Select a dataset version first.")
     require_dataset_access(selection.entry, write=True)
-    if not os.getenv("PLATFORM_CHART_IMAGE"):
-        raise HTTPException(503, "Configure an isolated chart worker image before requesting advanced charts.")
     return job_service.enqueue("custom_chart", {"dataset_id": selection.context.dataset_id,
                                "context": selection.context.model_dump(), "query_plan": req.query_plan.model_dump(exclude_none=True, by_alias=True),
                                "prompt": req.prompt}, req.idempotency_key)

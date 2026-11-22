@@ -59,7 +59,7 @@ Prepare configuration and run migrations in a separate reviewed deployment. This
 | `PLATFORM_AZURE_ACCOUNT_URL` | Azure application artifact account URL when Azure is selected. |
 | `PLATFORM_CREDENTIAL_KEY` | Stable Fernet encryption key from a secret manager. |
 | `CONNECTOR_ALLOWED_HOSTS` | Comma-separated exact host allowlist for HTTP/SOAP endpoints. Required in Cloud Foundry. |
-| `PLATFORM_CHART_IMAGE` | Optional prebuilt isolated Python chart image available to the separate worker runtime. |
+| `PLATFORM_CHART_IMAGE` | Legacy setting; template chart generation does not require a container image. |
 
 Application artifact SDKs use the runtime's managed credentials: AWS credential chain, Google application default credentials, or Azure DefaultAzureCredential. Connection-specific source credentials are encrypted separately. Source connection storage and application artifact storage are independent configurations.
 

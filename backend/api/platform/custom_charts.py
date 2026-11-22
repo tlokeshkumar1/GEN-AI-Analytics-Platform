@@ -81,9 +81,6 @@ def generate_custom_chart(payload, datasets, progress):
     from api.services.analytics_engine import analytics_engine
     from api.services.ai_core_service import ai_core_service
     from api.platform.storage import ArtifactStore
-    image = os.getenv("PLATFORM_CHART_IMAGE")
-    if not image:
-        raise HTTPException(503, "Configure an isolated chart worker image before using custom Python charts.")
     entry = datasets._entry(datasets._catalog(), payload["dataset_id"])
     context = ExecutionContext(**payload["context"])
     if context.user_id != current_identity.get()["user_id"]:
@@ -95,20 +92,22 @@ def generate_custom_chart(payload, datasets, progress):
         result = analytics_engine.execute(payload["query_plan"])
         if not result.success or not result.data:
             raise HTTPException(422, result.error or "There are no matching values to chart.")
-        progress("code_generation")
-        prompt = ("Return only Python code to render a chart using matplotlib Agg, pandas, and seaborn. "
-                  "Read the precomputed results from /work/data.json. Preserve their labels and values. Do not fetch data, read other files, "
-                  "recalculate business totals, or invent values. Save the PNG only to /output/chart.png. "
-                  "Request: " + payload["prompt"] + "\nComputed result fields: " + json.dumps(list(result.data[0])))
-        raw = ai_core_service.generate_aicore_completion(prompt)
-        if not raw:
-            raise HTTPException(503, "SAP AI Core code generation is unavailable. Check its deployment and credentials.")
-        code = re.sub(r"```(?:python)?\s*|```", "", raw, flags=re.I).strip()
-        progress("isolated_execution")
-        png = execute_isolated(code, result.data, image)
+        progress("template_rendering")
+        from api.platform.chart_templates import render_frame
+        import pandas as pd
+        frame = pd.DataFrame(result.data)
+        plan = dict(payload["query_plan"])
+        numeric = list(frame.select_dtypes(include="number").columns)
+        if not numeric:
+            raise HTTPException(422, "The computed result contains no numeric chart values.")
+        plan["metric"] = "value" if "value" in numeric else numeric[-1]
+        plan["aggregation"] = "SUM"  # Values are already aggregated by the analytics engine.
+        data_uri = render_frame(frame, plan.get("chart_type") or "bar", plan, payload["prompt"])
+        import base64
+        png = base64.b64decode(data_uri.split(",", 1)[1])
         objects = datasets.repository.objects if datasets.repository else ArtifactStore()
         return {"image_key": objects.put(png), "context": context.model_dump(), "query_plan": payload["query_plan"],
-                "execution_backend": "isolated_python", "code_generation_provider": "SAP AI Core",
+                "execution_backend": "matplotlib_templates",
                 "records_matched": result.records_matched}
     finally:
         current_selection.reset(token)

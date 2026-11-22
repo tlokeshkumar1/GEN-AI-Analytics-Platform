@@ -1125,254 +1125,32 @@ for bar in bars:
 
     # ── Step 3–10: Main entry point ───────────────────────────────────────────
 
-    def generate_custom_graph(self, prompt: str, query_plan: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Full 10-step Custom Graph Generation workflow.
-        Accepts an optional query_plan from IntentEngine for validated column/chart resolution.
-        Returns a dict with: status, prompt, image_base64, chart_type, insights, message,
-                             records_matched, records_in_source, data_as_of, verified.
-        """
-        request_start = time.time()
-        logger.info(f"[Graph Agent] Received request: '{prompt}'")
-
-        self._ensure_temp_dir()
-        script_id       = uuid.uuid4().hex[:10]
-        temp_script     = self.temp_dir / f"temp_graph_{script_id}.py"
-        temp_image      = self.temp_dir / f"temp_graph_{script_id}.png"
-        from api.platform.custom_charts import execute_isolated
-        from fastapi import HTTPException
-        image = os.getenv("PLATFORM_CHART_IMAGE")
-        if not image:
-            raise HTTPException(503, "Configure PLATFORM_CHART_IMAGE and an isolated chart worker before generating Python charts.")
-
-        # Intent inference: prefer query_plan from IntentEngine, fallback to keyword heuristics
-        if query_plan:
-            chart_type = query_plan.get("chart_type") or self._infer_chart_type(prompt)
-            dim        = query_plan.get("dimension") or self._infer_dim(prompt)
-            measure    = query_plan.get("metric") or self._infer_measure(prompt)
-            aggregation = query_plan.get("aggregation") or "SUM"
-            filters    = query_plan.get("filters") or []
-            date_filter = query_plan.get("date_filter")
-            limit      = query_plan.get("limit")
-            sort_info  = query_plan.get("sort")
-            sort_dir   = sort_info.get("direction", "DESC") if sort_info else "DESC"
-            logger.info(f"[Graph Agent] Using query plan: chart={chart_type}, dim={dim}, measure={measure}")
-        else:
-            chart_type = self._infer_chart_type(prompt)
-            dim        = self._infer_dim(prompt)
-            measure    = self._infer_measure(prompt)
-            aggregation = "SUM"
-            filters    = []
-            date_filter = None
-            limit      = None
-            sort_dir   = "DESC"
-            logger.info(f"[Graph Agent] Heuristic inference: chart={chart_type}, dim={dim}, measure={measure}")
-
-        # Validate columns exist in dataset & get freshness metadata
-        verified = True
-        data_as_of = None
-        records_in_source = 0
-        records_matched = 0
-        df_agg = None
-
-        try:
-            joins = query_plan.get("joins") if query_plan else None
-            left_ds = (query_plan.get("left_dataset_id") or query_plan.get("dataset_id")) if query_plan else None
-            df = None
-            if joins and left_ds:
-                try:
-                    from api.platform.join_service import join_service
-                    for j in joins:
-                        r_id = j.get("right_dataset_id") if isinstance(j, dict) else getattr(j, "right_dataset_id", None)
-                        l_k = j.get("left_key") if isinstance(j, dict) else getattr(j, "left_key", None)
-                        r_k = j.get("right_key") if isinstance(j, dict) else getattr(j, "right_key", None)
-                        if r_id:
-                            if not l_k or not r_k:
-                                res = join_service.resolve_join(left_ds, r_id)
-                                if res.get("joinable"):
-                                    l_k = res["left_key"]
-                                    r_k = res["right_key"]
-                            if l_k and r_k:
-                                df = join_service.load_joined_dataframe(left_ds, r_id, l_k, r_k, how="left")
-                                logger.info(f"[Graph Agent] Successfully merged tables {left_ds} and {r_id} on {l_k}={r_k}")
-                                break
-                except Exception as join_exc:
-                    logger.warning(f"[Graph Agent] Failed to load joined DataFrame: {join_exc}")
-
-            if df is None:
-                df = excel_dataset_service.get_df()
-            data_as_of = excel_dataset_service.get_data_as_of()
-            records_in_source = len(df)
-
-            # Build case-insensitive and clean-column lookup for dataset columns
-            col_lookup = {str(c).lower(): c for c in df.columns}
-            col_clean_lookup = {str(c).lower().replace("_", ""): c for c in df.columns}
-
-            def resolve_col(requested_col: str) -> Optional[str]:
-                if not requested_col or not isinstance(requested_col, str):
-                    return None
-                if requested_col in df.columns:
-                    return requested_col
-                low = requested_col.lower()
-                if low in col_lookup:
-                    return col_lookup[low]
-                clean = low.replace("_", "")
-                if clean in col_clean_lookup:
-                    return col_clean_lookup[clean]
-                for c_low, actual in col_lookup.items():
-                    if c_low in low or low in c_low:
-                        return actual
-                return None
-
-            resolved_m = resolve_col(measure)
-            if resolved_m:
-                measure = resolved_m
-            elif measure not in df.columns:
-                nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                fallback_meas = nums[0] if nums else (df.columns[0] if len(df.columns) > 0 else "")
-                logger.warning(f"[Graph Agent] Metric '{measure}' not found. Falling back to {fallback_meas}.")
-                measure = fallback_meas
-
-            # Validate dimension — support composite dimensions like "Year, Quarter"
-            if ", " in str(dim):
-                dim_parts = [d.strip() for d in dim.split(",")]
-                resolved_parts = []
-                for part in dim_parts:
-                    rp = resolve_col(part)
-                    if rp:
-                        resolved_parts.append(rp)
-                    else:
-                        cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                        fallback_dim = cats[0] if cats else (df.columns[0] if len(df.columns) > 0 else "")
-                        resolved_parts.append(fallback_dim)
-                dim = ", ".join([p for p in resolved_parts if p])
-            else:
-                resolved_d = resolve_col(dim)
-                if resolved_d:
-                    dim = resolved_d
-                elif dim not in df.columns:
-                    cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                    fallback_dim = cats[0] if cats else (df.columns[0] if len(df.columns) > 0 else "")
-                    logger.warning(f"[Graph Agent] Dimension '{dim}' not found. Falling back to {fallback_dim}.")
-                    dim = fallback_dim
-
-            # ── Filter application & record matching count ───────────────────
-            filtered_df = self._apply_filters(df, filters, date_filter)
-            records_matched = len(filtered_df)
-
-            # ── NEW: Deterministic pre-computation ────────────────────────────
-            df_agg = self._compute_graph_dataset(
-                chart_type=chart_type, dim=dim, measure=measure,
-                aggregation=aggregation, filters=filters,
-                date_filter=date_filter, limit=limit, sort_dir=sort_dir, df=df,
-            )
-            logger.info(f"[Graph Agent] Pre-computed dataset: {df_agg.shape}, records_matched={records_matched}")
-
-            # ── NEW: Dual-path reconciliation ─────────────────────────────────
-            recon = self._reconcile_graph_dataset(
-                df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure,
-                aggregation=aggregation, filters=filters, date_filter=date_filter, df=df,
-            )
-            verified = recon["verified"]
-            if not verified:
-                logger.warning(f"[Graph Agent] Reconciliation FAILED: {recon['discrepancy']}")
-
-        except Exception as exc:
-            logger.error(f"[Graph Agent] Pre-computation error: {exc}")
-            records_matched = 0
-            verified = False
-
-        try:
-            # ── Step 6a: AI-first code generation (with pre-computed data) ────
-            if df_agg is None or df is None or df.empty:
-                raise ValueError("No complete dataset is available to render this chart")
-            from api.services.analytics_engine import json_value
-            rows = [{name: json_value(value) for name, value in row.items()} for row in df.to_dict(orient="records")]
-            py_code = self._generate_python_code(
-                prompt, "/output/chart.png", fallback_mode=(not verified),
-                df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure, df=df,
-            )
-            try:
-                png = execute_isolated(py_code, rows, image)
-            except HTTPException:
-                logger.warning("[Graph Agent] Isolated rendering failed; retrying the deterministic template")
-                fallback_code = self._generate_python_code(
-                    prompt, "/output/chart.png", fallback_mode=True,
-                    df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure, df=df,
-                )
-                png = execute_isolated(fallback_code, rows, image)
-            img_b64 = base64.b64encode(png).decode("ascii")
-
-            data_uri = f"data:image/png;base64,{img_b64}"
-            active_ds_name = None
-            try:
-                from api.models.execution_context import current_selection
-                sel = current_selection.get()
-                if sel and sel.entry:
-                    active_ds_name = sel.entry.get("displayName") or sel.entry.get("name")
-            except Exception:
-                pass
-            insights = self._build_insights(prompt, chart_type, dim, measure, temp_script.name, verified=verified, dataset_name=active_ds_name)
-
-            elapsed_ms = int((time.time() - request_start) * 1000)
-            logger.info(
-                f"[Graph Agent] ✅ Request completed | "
-                f"chart={chart_type} dim={dim} measure={measure} agg={aggregation} | "
-                f"records_matched={records_matched} records_in_source={records_in_source} | "
-                f"data_as_of={data_as_of} verified={verified} | "
-                f"elapsed={elapsed_ms}ms"
-            )
-
-            return {
-                "status":           "success",
-                "prompt":           prompt,
-                "image_base64":     data_uri,
-                "chart_type":       chart_type,
-                "insights":         insights,
-                "message":          f"Successfully generated {chart_type.replace('_', ' ')} chart for '{prompt}'.",
-                "records_matched":  records_matched,
-                "records_in_source": records_in_source,
-                "data_as_of":       data_as_of,
-                "verified":         verified,
-            }
-
-        except subprocess.TimeoutExpired:
-            logger.error("[Graph Agent] Script execution timed out (>60 s).")
-            return {
-                "status": "error",
-                "prompt": prompt,
-                "image_base64": "",
-                "chart_type": chart_type,
-                "insights": "",
-                "message": "Graph generation timed out. Try a simpler request.",
-                "records_matched": records_matched,
-                "records_in_source": records_in_source,
-                "data_as_of": data_as_of,
-                "verified": False,
-            }
-        except Exception as exc:
-            logger.error(f"[Graph Agent] Pipeline error: {exc}")
-            return {
-                "status": "error",
-                "prompt": prompt,
-                "image_base64": "",
-                "chart_type": chart_type,
-                "insights": "",
-                "message": f"Dynamic graph error: {exc}",
-                "records_matched": records_matched,
-                "records_in_source": records_in_source,
-                "data_as_of": data_as_of,
-                "verified": False,
-            }
-        finally:
-            # ── Step 9: Auto-delete temp script & temp image ──────────────────
-            for fpath in (temp_script, temp_image):
-                if fpath.exists():
-                    try:
-                        os.remove(fpath)
-                        logger.info(f"[Cleanup] Deleted: {fpath.name}")
-                    except Exception as ex:
-                        logger.warning(f"[Cleanup] Could not delete {fpath.name}: {ex}")
+    def generate_custom_graph(self, prompt: str, query_plan: Optional[Dict[str, Any]] = None,
+                              prepared_frame=None) -> Dict[str, Any]:
+        """Render validated specifications with application-owned Matplotlib/Seaborn templates."""
+        from api.platform.chart_templates import render_frame
+        from api.services.intent_engine import intent_engine
+        plan = dict(query_plan or intent_engine.classify(prompt))
+        kind = plan.get("chart_type") or self._infer_chart_type(prompt)
+        if plan.get("joins") and prepared_frame is None:
+            raise ValueError("Generate joined charts through the dashboard so the joined data can be validated first.")
+        frame = prepared_frame if prepared_frame is not None else excel_dataset_service.get_df()
+        if frame is None or frame.empty:
+            raise ValueError("There are no matching records to chart.")
+        # Apply the same validated filters as routine analytics; never replace an empty
+        # filtered result with the unfiltered source.
+        from api.models.query_plan import Filter
+        filters = [Filter.model_validate(f).model_dump(by_alias=True) for f in plan.get("filters", [])]
+        filtered = frame
+        if filters or plan.get("date_filter"):
+            from api.services.analytics_engine import analytics_engine
+            filtered = analytics_engine._apply_filters(frame, {"filters": filters, "date_filter": plan.get("date_filter")})
+        data_uri = render_frame(filtered, kind, plan, prompt)
+        return {"status": "success", "prompt": prompt, "image_base64": data_uri,
+                "chart_type": kind, "insights": "Rendered from validated data using Matplotlib and Seaborn templates.",
+                "message": "Chart rendered successfully.", "records_matched": len(filtered),
+                "records_in_source": len(frame), "verified": True,
+                "execution_backend": "matplotlib_seaborn_templates"}
 
 
 python_graph_agent = PythonGraphAgent()

@@ -59,9 +59,7 @@ Greetings and available-data questions read the authorized dataset catalog direc
 
 ## Chart execution
 
-Routine charts render validated results using application-owned code. Both custom-Python graph paths use the isolated container executor in `platform/custom_charts.py`. Generated code receives approved data through a read-only mount; the container has no application credentials, no network, limited CPU/memory/processes, a bounded output and a timeout. The API host does not execute generated scripts.
-
-Python chart generation requires `PLATFORM_CHART_IMAGE` on a Docker-capable runtime. Configuring an image name on a Cloud Foundry Python buildpack does not supply Docker. Deploy a compatible chart runtime before using these paths.
+Routine and Python-requested charts render validated data using application-owned Matplotlib and Seaborn templates. The API renders synchronous charts, and the existing queue worker processes advanced chart jobs. Generated Python code is never executed. Docker and `PLATFORM_CHART_IMAGE` are not required. Templates reject unsupported fields, empty filtered results, and oversized charts; rendering is serialized per process because plotting libraries share state. Use multiple worker processes/instances for additional throughput.
 
 ## Workers and deployment
 

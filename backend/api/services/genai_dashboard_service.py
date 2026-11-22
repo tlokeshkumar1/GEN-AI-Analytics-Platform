@@ -1062,7 +1062,12 @@ JSON:"""
         py_visual = None
         if re.search(r'\b(python|matplotlib|seaborn)\b', prompt, re.I):
             from api.services.python_graph_agent import python_graph_agent
-            py_visual = python_graph_agent.generate_custom_graph(prompt)
+            charts = exec_results.get("charts") or []
+            if not charts:
+                raise ValueError("No validated chart specification was produced.")
+            chart_plan = dict(charts[0]["query_plan"])
+            chart_plan["chart_type"] = python_graph_agent._infer_chart_type(prompt)
+            py_visual = python_graph_agent.generate_custom_graph(prompt, chart_plan, prepared_frame=df)
             if py_visual.get('status') == 'error' or not py_visual.get('image_base64'):
                 raise ValueError(py_visual.get('message') or 'Python chart execution did not produce an image')
         yield step_event(10, "Visualize", "Rendered validated widgets." + (" Executed Python visualization." if py_visual else ""))

@@ -302,31 +302,43 @@ class GraphIsolation(unittest.TestCase):
         self.assertEqual(result["prompt"], prompt)
         host_run.assert_not_called()
 
-    def test_python_chart_requires_isolated_runtime(self):
-        from api.services.python_graph_agent import PythonGraphAgent
-        with patch.dict(os.environ, {"PLATFORM_CHART_IMAGE": ""}):
-            with self.assertRaises(HTTPException) as error:
-                PythonGraphAgent().generate_custom_graph("Show amount")
-        self.assertEqual(error.exception.status_code, 503)
-
-    def test_generated_chart_executes_only_in_isolated_worker(self):
+    def test_python_chart_renders_without_docker_or_generated_code(self):
         from api.services.python_graph_agent import PythonGraphAgent
         frame = pd.DataFrame({"Region": ["East", "West"], "Amount": [10, 20]})
         agent = PythonGraphAgent()
-        with patch.dict(os.environ, {"PLATFORM_CHART_IMAGE": "analytics-chart:test"}), \
-             patch("api.services.python_graph_agent.excel_dataset_service.get_df", return_value=frame), \
-             patch("api.services.python_graph_agent.excel_dataset_service.get_records_in_source", return_value=2), \
-             patch("api.services.python_graph_agent.excel_dataset_service.get_data_as_of", return_value=None), \
-             patch.object(agent, "_compute_graph_dataset", return_value=frame), \
-             patch.object(agent, "_reconcile_graph_dataset", return_value={"verified": True}), \
-             patch.object(agent, "_generate_python_code", return_value="generated chart code") as code, \
-             patch("api.platform.custom_charts.execute_isolated", return_value=b"\x89PNG\r\n\x1a\n") as isolated, \
-             patch("subprocess.run") as host_run:
-            result = agent.generate_custom_graph("Chart amount by region", dict(metric="Amount", dimension="Region", chart_type="bar"))
-        self.assertEqual(result["status"], "success", result)
-        self.assertEqual(code.call_args.args[1], "/output/chart.png")
-        isolated.assert_called_once()
-        host_run.assert_not_called()
+        with patch.dict(os.environ, {"PLATFORM_CHART_IMAGE": ""}), \
+             patch.object(agent, "_generate_python_code") as code, \
+             patch("subprocess.Popen") as process:
+            result = agent.generate_custom_graph("Chart amount by region", dict(metric="Amount", dimension="Region", chart_type="bar"), prepared_frame=frame)
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["image_base64"].startswith("data:image/png;base64,"))
+        code.assert_not_called()
+        process.assert_not_called()
+
+    def test_template_chart_preserves_empty_filters(self):
+        from api.services.python_graph_agent import PythonGraphAgent
+        frame = pd.DataFrame({"Region": ["East"], "Amount": [10]})
+        with self.assertRaises(HTTPException) as error:
+            PythonGraphAgent().generate_custom_graph("Amount by Region", dict(metric="Amount", dimension="Region", chart_type="bar", filters=[dict(column="Region", operator="=", value="missing")]), prepared_frame=frame)
+        self.assertEqual(error.exception.status_code, 422)
+
+    def test_seaborn_categorical_heatmap_and_numeric_distribution(self):
+        from api.platform.chart_templates import render_frame
+        frame = pd.DataFrame({"PROJECT_MANAGER": ["A", "A", "B"], "PROJECT_ID": ["P1", "P2", "P2"], "Amount": [1, 2, 3]})
+        for kind, plan in [("heatmap", dict(dimensions=["PROJECT_MANAGER", "PROJECT_ID"], metric="*", aggregation="COUNT")),
+                           ("box", dict(dimension="PROJECT_MANAGER", metric="Amount")),
+                           ("violin", dict(dimension="PROJECT_MANAGER", metric="Amount"))]:
+            image = render_frame(frame, kind, plan, "User title'); __import__('os') #")
+            import base64
+            self.assertTrue(base64.b64decode(image.split(",", 1)[1]).startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_templates_reject_unknown_fields_and_large_matrices(self):
+        from api.platform.chart_templates import render_frame
+        with self.assertRaises(HTTPException):
+            render_frame(pd.DataFrame({"x": [1]}), "bar", dict(dimension="missing", metric="x"))
+        frame = pd.DataFrame({"x": range(51), "y": ["A"] * 51})
+        with self.assertRaises(HTTPException):
+            render_frame(frame, "heatmap", dict(dimensions=["x", "y"], metric="*", aggregation="COUNT"))
 
 
 class UploadLifecycle(unittest.TestCase):

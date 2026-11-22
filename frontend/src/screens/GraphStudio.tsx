@@ -194,6 +194,7 @@ export function GraphStudio({
   const [genAiPrompt, setGenAiPrompt] = useState('');
   const [genAiRunning, setGenAiRunning] = useState(false);
   const [genAiStep, setGenAiStep] = useState<number>(0);
+  const [genAiFailed, setGenAiFailed] = useState(false);
   const [genAiStepDetail, setGenAiStepDetail] = useState<string>('');
   const [genAiDashboard, setGenAiDashboard] = useState<GenAIDashboardResponse | null>(null);
   const [executedGenAi, setExecutedGenAi] = useState<Record<string, boolean>>({});
@@ -640,6 +641,7 @@ export function GraphStudio({
     const text = (customPrompt || genAiPrompt || promptInput).trim();
     if (!text) return;
     setGenAiRunning(true);
+    setGenAiFailed(false);
     setError('');
     setMessage('');
     setGenAiStep(1);
@@ -678,6 +680,8 @@ export function GraphStudio({
       setFollowUpPrompt('');
       setMessage(`Successfully generated Gen AI Dashboard (${res.kpi_cards?.length || 0} KPIs, ${res.charts?.length || 0} charts) in ${res.execution_time_ms}ms.`);
     } catch (err) {
+      setGenAiFailed(true);
+      setGenAiStepDetail('Dashboard generation failed before all stages completed.');
       setError(getApiErrorMessage(err, 'Failed to generate Generative AI Dashboard.'));
     } finally {
       setGenAiRunning(false);
@@ -1499,17 +1503,17 @@ export function GraphStudio({
             <div className="p-3.5 bg-[var(--color-surface-hover)] border border-[var(--color-border)] rounded-[var(--radius-container)] space-y-2.5 animate-in fade-in">
               <div className="flex items-center justify-between text-xs font-semibold text-[var(--color-text-primary)]">
                 <span className="flex items-center gap-2">
-                  <span className={`inline-block w-2.5 h-2.5 rounded-full ${genAiRunning ? 'bg-[var(--color-primary)] animate-ping' : 'bg-[var(--color-success)]'}`} />
+                  <span className={`inline-block w-2.5 h-2.5 rounded-full ${genAiRunning ? 'bg-[var(--color-primary)] animate-ping' : genAiFailed ? 'bg-red-500' : 'bg-[var(--color-success)]'}`} />
                   <span>Mandatory 10-Step Analysis-First Execution Pipeline</span>
                 </span>
                 <span className="text-[11px] font-mono text-[var(--color-text-secondary)]">
-                  {genAiRunning ? `Stage ${genAiStep} of 10` : 'All 10 Stages Completed'}
+                  {genAiRunning ? `Stage ${genAiStep} of 10` : genAiFailed ? 'Generation failed' : 'All 10 Stages Completed'}
                 </span>
               </div>
               {genAiStepDetail && (
                 <div className="text-[11px] font-mono text-[var(--color-primary)] flex items-center gap-1.5 px-2.5 py-1 rounded bg-[var(--color-surface)] border border-[var(--color-border)]">
                   <span className={`material-symbols-outlined text-[14px] ${genAiRunning ? 'animate-spin' : 'text-[var(--color-success)]'}`}>
-                    {genAiRunning ? 'progress_activity' : 'verified'}
+                    {genAiRunning ? 'progress_activity' : genAiFailed ? 'error' : 'verified'}
                   </span>
                   <span>{genAiStepDetail}</span>
                 </div>

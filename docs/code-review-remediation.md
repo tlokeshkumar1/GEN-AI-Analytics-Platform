@@ -37,15 +37,7 @@ No stricter business policy is enabled automatically. Explicit source parsing se
 
 ## Runtime and deployment
 
-Custom Python chart generation needs `PLATFORM_CHART_IMAGE` and a Docker-capable runtime. Build the existing image:
-
-```powershell
-docker build -t analytics-chart:reviewed backend/chart-worker
-```
-
-Configure `PLATFORM_CHART_IMAGE=analytics-chart:reviewed` on the API for its synchronous Python graph route and on any worker processing advanced-chart jobs. The container receives only approved data through a read-only mount, with no application credentials or network, and has CPU, memory, process, time and output-size limits.
-
-A Cloud Foundry Python buildpack does not provide a Docker daemon. Its connector/index worker is included in the main MTA; custom Python jobs must run where the isolated runtime is available. An image name alone does not complete that infrastructure requirement. No deployment or service configuration was changed by this task.
+Python-requested charts now use controlled Matplotlib and Seaborn templates on the API and existing queue worker. No Docker image, Docker daemon, or `PLATFORM_CHART_IMAGE` setting is needed. AI supplies chart specifications rather than executable code. Only validated fields, aggregations, and filters are used; empty filtered data fails explicitly. Source frames are limited to 100,000 rows, categorical matrices to 50 categories per axis, and standard charts to 200 groups. Unsupported chart types fail explicitly.
 
 Run the queue worker locally with the backend on the Python path:
 
