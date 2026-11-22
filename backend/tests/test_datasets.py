@@ -4,6 +4,7 @@ import json
 import sys
 import types
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -52,6 +53,12 @@ class DatasetTests(unittest.TestCase):
         self.addCleanup(p.stop)
         p = patch.object(self.service, "_sync_hana", return_value="Error")
         self.sync = p.start()
+        self.addCleanup(p.stop)
+        # These tests exercise successful relational ingestion; vector failures are
+        # controlled separately through _sync_hana above.
+        p = patch("api.services.upload_service.hana_table_service.persist_dataframe",
+                  side_effect=lambda df, table_name, action: {"success": True, "table_name": table_name})
+        p.start()
         self.addCleanup(p.stop)
         app = FastAPI()
         app.include_router(routes.router)
@@ -217,7 +224,9 @@ class DatasetTests(unittest.TestCase):
         response = self.client.post("/api/upload", files={"file": ("bad.txt", b"abc")})
         self.assertEqual(response.status_code, 400)
         item = self.upload("../../Safe.csv")
-        self.assertEqual(item["name"], "Safe.csv")
+        self.assertNotIn("/", item["name"])
+        self.assertNotIn("\\", item["name"])
+        self.assertEqual(item["name"], "Safe")
         self.assertTrue((Path(self.temp.name) / "Safe" / "Safe.csv").exists())
 
     def test_changing_upload_extension_retains_readable_versions(self):
@@ -245,11 +254,23 @@ class DatasetTests(unittest.TestCase):
 
     def test_async_upload_returns_pending_and_completes_in_background(self):
         self.service.default_async_index = True
-        res = self.client.post("/api/upload", files={"file": ("AsyncSales.csv", b"OrderNumber,NetRevenueUSD,Region\nA,10,East\nB,20,West\n")})
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        dataset_id = data["dataset"]["id"]
-        self.assertEqual(data["dataset"]["embeddingStatus"], "Pending")
+        release = threading.Event()
+        self.addCleanup(release.set)
+        original_index = self.service._index
+        def wait_for_release(*args):
+            if not release.wait(10):
+                raise TimeoutError("The asynchronous test did not release indexing")
+            return original_index(*args)
+        with patch.object(self.service, "_index", side_effect=wait_for_release):
+            try:
+                res = self.client.post("/api/upload", files={"file": ("AsyncSales.csv", b"OrderNumber,NetRevenueUSD,Region\nA,10,East\nB,20,West\n")})
+                self.assertEqual(res.status_code, 200)
+                data = res.json()
+                dataset_id = data["dataset"]["id"]
+                self.assertIn(data["dataset"]["embeddingStatus"], ("Pending", "Indexing"))
+            finally:
+                release.set()
+            self.service.wait_for_idle(timeout=5)
         self.service.wait_for_idle(timeout=5)
         status_res = self.client.get(f"/api/datasets/{dataset_id}/status")
         self.assertEqual(status_res.status_code, 200)
@@ -312,8 +333,8 @@ class HANAVersionTests(unittest.TestCase):
         from api.database.vector_client import hana_client
         with patch.object(hana_client, "execute_query", return_value=[]) as query:
             self.client.search_dataset_version("ds-real", 1, [1.0], 5)
-        self.assertIn("WHERE ID LIKE ?", query.call_args.args[0])
-        self.assertEqual(query.call_args.args[1], ("[1.0]", "ds-real:v1:%"))
+        self.assertIn("WHERE (ID LIKE ?", query.call_args.args[0])
+        self.assertEqual(query.call_args.args[1], ("[1.0]", "ds-real:v1:%", "%:ds-real:%:v1:%"))
 
 
 class EmbeddingBatchTests(unittest.TestCase):

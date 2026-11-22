@@ -26,13 +26,18 @@ const markedInstance = new Marked({
 // Custom code block renderer with Astryx styling, language banner & copy button
 markedInstance.use({
   renderer: {
+    table(token) {
+      const header = token.header.map(cell => `<th scope="col">${this.parser.parseInline(cell.tokens)}</th>`).join('');
+      const rows = token.rows.map(row => `<tr>${row.map(cell => `<td>${this.parser.parseInline(cell.tokens)}</td>`).join('')}</tr>`).join('');
+      return `<div class="markdown-table-scroll" role="region" aria-label="Response table" tabindex="0"><table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    },
     code({ text, lang }) {
       const language = (lang || 'code').trim();
       const encodedCode = encodeURIComponent(text);
       return `
         <div class="my-2.5 rounded-[var(--radius-element)] bg-[#18181B] text-zinc-100 overflow-hidden shadow-[var(--shadow-xs)] border border-zinc-800">
           <div class="flex items-center justify-between px-3 py-1.5 bg-[#09090B] border-b border-zinc-800 text-[11px] text-zinc-400 font-mono">
-            <span class="uppercase font-semibold tracking-wider text-[var(--color-ai)]">${language}</span>
+            <span class="uppercase font-semibold tracking-wider text-[var(--color-ai)]">${escapeHtml(language)}</span>
             <button
               type="button"
               data-copy-code="${encodedCode}"

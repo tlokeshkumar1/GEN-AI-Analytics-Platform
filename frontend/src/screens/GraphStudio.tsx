@@ -196,6 +196,8 @@ export function GraphStudio({
   const [genAiStep, setGenAiStep] = useState<number>(0);
   const [genAiStepDetail, setGenAiStepDetail] = useState<string>('');
   const [genAiDashboard, setGenAiDashboard] = useState<GenAIDashboardResponse | null>(null);
+  const [executedGenAi, setExecutedGenAi] = useState<Record<string, boolean>>({});
+  const [executingGenAi, setExecutingGenAi] = useState(false);
   const [conversationHistory, setConversationHistory] = useState<Array<{ role: string; content: string }>>([]);
   const [activeRecommendations, setActiveRecommendations] = useState<GenAIRecommendation[]>([]);
   const [showSqlInspector, setShowSqlInspector] = useState(false);
@@ -658,11 +660,13 @@ export function GraphStudio({
       setGenAiStep(10);
       setGenAiStepDetail('All 10 stages completed successfully.');
       setGenAiDashboard(res);
+      setPublishedSuccess(false);
 
-      // Default all newly synthesized widgets to Approved
+      // Approval follows a successful live execution and user review.
       const initialStatuses: Record<string, 'approved' | 'rejected' | 'pending'> = {};
-      res.kpi_cards?.forEach(k => { initialStatuses[k.id] = 'approved'; });
-      res.charts?.forEach(c => { initialStatuses[c.id] = 'approved'; });
+      res.kpi_cards?.forEach(k => { initialStatuses[k.id] = 'pending'; });
+      res.charts?.forEach(c => { initialStatuses[c.id] = 'pending'; });
+      setExecutedGenAi({});
       setWidgetStatuses(initialStatuses);
 
       setActiveRecommendations(res.recommendations || []);
@@ -680,30 +684,49 @@ export function GraphStudio({
     }
   };
 
+  const executeGenAiPreview = async (widget: any) => {
+    if (executingGenAi) return;
+    setExecutingGenAi(true);
+    setError('');
+    try {
+      const result = await executeGenAiWidget({ widget, context: genAiDashboard?.context,
+        dataset_id: genAiDashboard?.context?.dataset_id || (selectedDatasetId === 'all' ? undefined : selectedDatasetId || undefined) });
+      if (!result.widget || result.widget.error) throw new Error(result.widget?.error || 'Widget execution returned no output.');
+      setPreviewWidget({ ...widget, ...result.widget, kind: result.kind });
+      setExecutedGenAi(previous => ({ ...previous, [widget.id]: true }));
+    } catch (err) {
+      setExecutedGenAi(previous => ({ ...previous, [widget.id]: false }));
+      setError(getApiErrorMessage(err, 'Unable to execute widget preview.'));
+    } finally {
+      setExecutingGenAi(false);
+    }
+  };
+
   const handleAcceptRecommendation = async (rec: GenAIRecommendation) => {
     setIsAddingRecommendation(prev => ({ ...prev, [rec.id]: true }));
     try {
       const res = await executeGenAiWidget({
         widget: rec,
+        context: genAiDashboard?.context,
         dataset_id: selectedDatasetId === 'all' ? undefined : selectedDatasetId || undefined,
       });
       if (res.kind === 'kpi' && res.widget) {
         const w = res.widget;
-        setWidgetStatuses(prev => ({ ...prev, [w.id]: 'approved' }));
+        setWidgetStatuses(prev => ({ ...prev, [w.id]: 'pending' }));
         setGenAiDashboard(prev => prev ? {
           ...prev,
           kpi_cards: [...prev.kpi_cards, w],
         } : prev);
       } else if (res.widget) {
         const w = res.widget;
-        setWidgetStatuses(prev => ({ ...prev, [w.id]: 'approved' }));
+        setWidgetStatuses(prev => ({ ...prev, [w.id]: 'pending' }));
         setGenAiDashboard(prev => prev ? {
           ...prev,
           charts: [...prev.charts, w],
         } : prev);
       }
       setActiveRecommendations(prev => prev.filter(r => r.id !== rec.id));
-      setMessage(`Added recommended widget "${rec.title}" directly to active dashboard!`);
+      setMessage(`Executed "${rec.title}". Preview and approve it before publishing.`);
     } catch (err) {
       setError(getApiErrorMessage(err, `Failed to add recommendation "${rec.title}".`));
     } finally {
@@ -717,8 +740,8 @@ export function GraphStudio({
 
   const handlePublishGenAiDashboard = async () => {
     if (!genAiDashboard) return;
-    const approvedKpis = (genAiDashboard.kpi_cards || []).filter(k => widgetStatuses[k.id] !== 'rejected');
-    const approvedCharts = (genAiDashboard.charts || []).filter(c => widgetStatuses[c.id] !== 'rejected');
+    const approvedKpis = (genAiDashboard.kpi_cards || []).filter(k => widgetStatuses[k.id] === 'approved' && executedGenAi[k.id]);
+    const approvedCharts = (genAiDashboard.charts || []).filter(c => widgetStatuses[c.id] === 'approved' && executedGenAi[c.id]);
 
     if (approvedKpis.length === 0 && approvedCharts.length === 0) {
       setError('No approved widgets to publish. Please approve at least one KPI card or chart.');
@@ -727,58 +750,30 @@ export function GraphStudio({
 
     setIsPublishingGenAi(true);
     try {
-      const targetDataset = datasets.find(d => d.id === selectedDatasetId) || datasets[0];
-      const modelRev = model?.revision || 1;
-      const savePromises = [];
-
-      for (const kpi of approvedKpis) {
-        const item: AnalyticsDefinition = {
-          id: `genai_kpi_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          title: kpi.title,
-          kind: 'kpi',
-          revision: 1,
-          semantic_revision: modelRev,
-          dataset_id: targetDataset?.id,
-          dataset_name: targetDataset?.name,
-          source_file: targetDataset?.name,
-          explanation: `Generated by Gen AI Dashboard for: "${genAiDashboard.prompt}"`,
-          status: 'approved',
-          query_plan: {
-            metric: kpi.metric,
-            aggregation: kpi.aggregation,
-            format: kpi.format,
-          },
-          dependencies: [kpi.metric].filter(Boolean),
-        };
-        savePromises.push(saveDefinition(item));
-      }
-
-      for (const chart of approvedCharts) {
-        const item: AnalyticsDefinition = {
-          id: `genai_chart_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          title: chart.title,
-          kind: chart.kind,
-          revision: 1,
-          semantic_revision: modelRev,
-          dataset_id: targetDataset?.id,
-          dataset_name: targetDataset?.name,
-          source_file: targetDataset?.name,
-          explanation: `Generated by Gen AI Dashboard for: "${genAiDashboard.prompt}"`,
-          status: 'approved',
-          query_plan: {
-            metric: chart.metric,
-            dimension: chart.dimension,
-            aggregation: chart.aggregation,
-            chart_type: chart.kind,
-          },
-          dependencies: [chart.metric, chart.dimension].filter(Boolean),
-        };
-        savePromises.push(saveDefinition(item));
-      }
-
-      await Promise.all(savePromises);
+      const generationContext = genAiDashboard.context;
+      const targetDataset = datasets.find(d => d.id === (generationContext?.dataset_id || selectedDatasetId));
+      if (!targetDataset) throw new Error('Select the dataset used to generate these widgets before publishing.');
+      const items = [
+        ...approvedKpis.map(widget => ({ ...widget, kind: 'kpi' })),
+        ...approvedCharts,
+      ].map(widget => ({
+        id: widget.id,
+        title: widget.title,
+        kind: widget.kind,
+        query_plan: {
+          ...widget.query_plan,
+          metric: widget.metric,
+          aggregation: widget.aggregation,
+          ...('dimension' in widget ? { dimension: widget.dimension } : {}),
+        },
+      }));
+      const response = await api.post('/dashboard/publish-recommended', {
+        title: genAiDashboard.intent_summary || 'Executive Analytics Dashboard', items,
+      }, { headers: { 'X-Dataset-Id': targetDataset.id,
+        'X-Dataset-Version': String(generationContext?.version || targetDataset.currentVersion || 1),
+        'X-Semantic-Revision': String(generationContext?.semantic_revision || model?.revision || 1) } });
       invalidateDashboardCache();
-      setMessage(`Successfully published ${savePromises.length} approved widgets to the Executive Dashboard!`);
+      setMessage(`Successfully published ${response.data.published_count} approved widgets to the Executive Dashboard!`);
       setPublishedSuccess(true);
     } catch (err) {
       setError(getApiErrorMessage(err, 'Failed to publish Gen AI Dashboard widgets.'));
@@ -801,30 +796,22 @@ export function GraphStudio({
     setMessage('');
     setAgentResult(null);
 
-    // Simulate animated step progression through the 10 steps
-    let currentStep = 1;
-    const interval = setInterval(() => {
-      currentStep = Math.min(currentStep + 1, 8);
-      setAgentStep(currentStep);
-    }, 600);
-
+    setAgentStep(1);
     try {
       const context = selectedContext();
       const res = await generatePythonGraphAgent({
         prompt: promptInput,
         dataset_id: selectedDatasetId || context?.datasetId,
       });
-      clearInterval(interval);
-      setAgentStep(10);
       if (res.status === 'error' || !res.image_base64) {
         setError(res.message || 'Custom graph generation failed to create an image.');
         setAgentResult(null);
       } else {
+        setAgentStep(10);
         setAgentResult(res);
         setMessage('Custom graph generated successfully via 10-step Python Agent.');
       }
     } catch (err) {
-      clearInterval(interval);
       setError(getApiErrorMessage(err, 'AI Core custom graph generation failed.'));
     } finally {
       setAgentRunning(false);
@@ -1637,12 +1624,12 @@ export function GraphStudio({
                       <span>Executive KPI Metrics</span>
                     </span>
                     <span className="text-[11px] font-mono text-[var(--color-text-muted)] lowercase">
-                      {genAiDashboard.kpi_cards.filter(k => widgetStatuses[k.id] !== 'rejected').length} of {genAiDashboard.kpi_cards.length} approved
+                      {genAiDashboard.kpi_cards.filter(k => widgetStatuses[k.id] === 'approved' && executedGenAi[k.id]).length} of {genAiDashboard.kpi_cards.length} approved
                     </span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
                     {genAiDashboard.kpi_cards.map(kpi => {
-                      const status = widgetStatuses[kpi.id] || 'approved';
+                      const status = widgetStatuses[kpi.id] || 'pending';
                       return (
                         <div
                           key={kpi.id}
@@ -1673,7 +1660,7 @@ export function GraphStudio({
                           </div>
                           <div className="text-2xl font-bold text-[var(--color-text-primary)] tracking-tight tabular-nums">
                             {kpi.format === 'currency'
-                              ? `$${Number(kpi.value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                              ? `$${Number(kpi.value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                               : kpi.format === 'percent'
                               ? `${kpi.value}%`
                               : Number(kpi.value).toLocaleString()}
@@ -1688,8 +1675,10 @@ export function GraphStudio({
                           <div className="flex items-center gap-1.5 pt-2 border-t border-[var(--color-border)]">
                             <button
                               type="button"
-                              onClick={() => setPreviewWidget({
+                              disabled={executingGenAi}
+                              onClick={() => void executeGenAiPreview({
                                 id: kpi.id,
+                                query_plan: kpi.query_plan,
                                 title: kpi.title,
                                 kind: 'kpi',
                                 metric: kpi.metric,
@@ -1707,6 +1696,7 @@ export function GraphStudio({
                             </button>
                             <button
                               type="button"
+                              disabled={!executedGenAi[kpi.id]}
                               onClick={() => setWidgetStatuses(prev => ({ ...prev, [kpi.id]: 'approved' }))}
                               className={`px-2 py-1 rounded-[var(--radius-element)] text-[10px] font-medium border transition-colors cursor-pointer ${
                                 status === 'approved'
@@ -1746,13 +1736,13 @@ export function GraphStudio({
                       <span>Interactive Analytical Charts</span>
                     </span>
                     <span className="text-[11px] font-mono text-[var(--color-text-muted)] lowercase">
-                      {genAiDashboard.charts.filter(c => widgetStatuses[c.id] !== 'rejected').length} of {genAiDashboard.charts.length} approved
+                      {genAiDashboard.charts.filter(c => widgetStatuses[c.id] === 'approved' && executedGenAi[c.id]).length} of {genAiDashboard.charts.length} approved
                     </span>
                   </div>
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {genAiDashboard.charts.map(chart => {
                       const isTableView = chartViewModes[chart.id] === 'table';
-                      const status = widgetStatuses[chart.id] || 'approved';
+                      const status = widgetStatuses[chart.id] || 'pending';
                       const maxVal = Math.max(...chart.data.map(d => d.value || 0), 1);
                       return (
                         <div
@@ -1865,8 +1855,10 @@ export function GraphStudio({
                           <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--color-border)]">
                             <button
                               type="button"
-                              onClick={() => setPreviewWidget({
+                              disabled={executingGenAi}
+                              onClick={() => void executeGenAiPreview({
                                 id: chart.id,
+                                query_plan: chart.query_plan,
                                 title: chart.title,
                                 kind: chart.kind,
                                 metric: chart.metric,
@@ -1885,6 +1877,7 @@ export function GraphStudio({
                             <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
+                                disabled={!executedGenAi[chart.id]}
                                 onClick={() => setWidgetStatuses(prev => ({ ...prev, [chart.id]: 'approved' }))}
                                 className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-element)] text-[11px] font-medium border transition-colors cursor-pointer ${
                                   status === 'approved'
@@ -2058,7 +2051,7 @@ export function GraphStudio({
                 </div>
                 <button
                   type="button"
-                  disabled={isPublishingGenAi || ((genAiDashboard.kpi_cards?.filter(k => widgetStatuses[k.id] !== 'rejected').length || 0) + (genAiDashboard.charts?.filter(c => widgetStatuses[c.id] !== 'rejected').length || 0) === 0)}
+                  disabled={isPublishingGenAi || ((genAiDashboard.kpi_cards?.filter(k => widgetStatuses[k.id] === 'approved' && executedGenAi[k.id]).length || 0) + (genAiDashboard.charts?.filter(c => widgetStatuses[c.id] === 'approved' && executedGenAi[c.id]).length || 0) === 0)}
                   onClick={() => void handlePublishGenAiDashboard()}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[var(--radius-element)] bg-[var(--color-success)] hover:opacity-90 text-white font-medium text-xs shadow-[var(--shadow-2xs)] active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer"
                 >
@@ -2069,8 +2062,8 @@ export function GraphStudio({
                     {isPublishingGenAi
                       ? 'Publishing Dashboard…'
                       : `Publish ${
-                          (genAiDashboard.kpi_cards?.filter(k => widgetStatuses[k.id] !== 'rejected').length || 0) +
-                          (genAiDashboard.charts?.filter(c => widgetStatuses[c.id] !== 'rejected').length || 0)
+                          (genAiDashboard.kpi_cards?.filter(k => widgetStatuses[k.id] === 'approved' && executedGenAi[k.id]).length || 0) +
+                          (genAiDashboard.charts?.filter(c => widgetStatuses[c.id] === 'approved' && executedGenAi[c.id]).length || 0)
                         } Approved Widgets to Executive Dashboard`}
                   </span>
                 </button>
@@ -2097,7 +2090,7 @@ export function GraphStudio({
                         <span>Live Preview &amp; Verification Mode</span>
                         <span>•</span>
                         <span className={widgetStatuses[previewWidget.id] === 'rejected' ? 'text-[var(--color-danger)] font-bold' : 'text-[var(--color-success)] font-bold'}>
-                          Status: {widgetStatuses[previewWidget.id] === 'rejected' ? 'Rejected' : 'Approved'}
+                          Status: {widgetStatuses[previewWidget.id] || 'pending'}
                         </span>
                       </div>
                     </div>
@@ -2120,7 +2113,7 @@ export function GraphStudio({
                       </span>
                       <div className="text-4xl font-extrabold text-[var(--color-text-primary)] tracking-tight tabular-nums">
                         {previewWidget.format === 'currency'
-                          ? `$${Number(previewWidget.value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                          ? `$${Number(previewWidget.value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                           : previewWidget.format === 'percent'
                           ? `${previewWidget.value}%`
                           : Number(previewWidget.value).toLocaleString()}
@@ -2179,7 +2172,7 @@ export function GraphStudio({
                   <div className="p-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] border border-[var(--color-border)]">
                     <div className="text-[10px] text-[var(--color-text-muted)] font-mono uppercase">Status</div>
                     <div className={`font-semibold ${widgetStatuses[previewWidget.id] === 'rejected' ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}`}>
-                      {widgetStatuses[previewWidget.id] === 'rejected' ? 'Rejected' : 'Approved'}
+                      {widgetStatuses[previewWidget.id] || 'pending'}
                     </div>
                   </div>
                 </div>

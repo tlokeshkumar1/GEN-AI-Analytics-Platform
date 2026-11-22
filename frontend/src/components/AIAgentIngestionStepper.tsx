@@ -40,6 +40,9 @@ export interface RecommendedChartItem {
 }
 
 export interface IngestionResult {
+  status?: string;
+  ready_for_publication?: boolean;
+  warnings?: string[];
   filename: string;
   rows_processed?: number;
   domain?: string;
@@ -191,6 +194,8 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   if (!isOpen) return null;
 
   const getStageStatus = (stageNum: number): IngestionStageStatus => {
+    if (stageStatuses?.[stageNum] === 'failed') return 'failed';
+    if (stageNum === 3 && result?.cloud_table?.success === false) return 'failed';
     if (result) return 'completed';
     if (stageStatuses && stageStatuses[stageNum]) {
       return stageStatuses[stageNum];
@@ -267,6 +272,10 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
 
   const handlePublish = async () => {
     if (!result?.recommendations) return;
+    if (result.ready_for_publication === false) {
+      setPublishError(result.warnings?.join(' ') || 'Complete ingestion and semantic review before publishing.');
+      return;
+    }
     const approvedItems = result.recommendations.filter(r => selectedChartIds[r.id]);
     if (approvedItems.length === 0) {
       onClose();
@@ -580,11 +589,13 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
     {
       id: 'step-3',
       title: 'Stage 3: SAP HANA Cloud Storage & Vector Ingestion',
-      status: stage3Status === 'completed' ? 'success' : stage3Status === 'running' ? 'active' : 'pending',
+      status: stage3Status === 'failed' ? 'error' : stage3Status === 'completed' ? 'success' : stage3Status === 'running' ? 'active' : 'pending',
       statusBadge: stage3Status === 'completed' ? (
         <span className="text-[11px] font-mono font-bold text-slate-800 bg-slate-100 px-2.5 py-0.5 rounded border border-slate-300">
           {cloudTable || 'Synced'}
         </span>
+      ) : stage3Status === 'failed' ? (
+        <span className="text-[11px] font-semibold text-red-600">Storage synchronization failed</span>
       ) : stage3Status === 'running' ? (
         <span className="text-[11px] font-semibold text-emerald-600 animate-pulse flex items-center gap-1">
           <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -896,6 +907,11 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
 
         {/* Scrollable Pipeline Telemetry Body: Clean Subtle Slate Surface */}
         <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs font-sans bg-slate-50/50">
+          {result?.ready_for_publication === false && !error && (
+            <div role="alert" className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-900 text-xs">
+              {result.warnings?.join(' ') || 'Dataset saved. Complete ingestion and semantic review before publishing.'}
+            </div>
+          )}
           {error && (
             <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-900 flex items-start gap-3">
               <AlertTriangle className="text-red-600 w-5 h-5 shrink-0 mt-0.5" />
@@ -1042,7 +1058,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
             {result?.recommendations && (
               <button
                 type="button"
-                disabled={isPublishing || selectedCount === 0}
+                disabled={isPublishing || selectedCount === 0 || result.ready_for_publication === false}
                 onClick={handlePublish}
                 className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold rounded-lg bg-slate-900 hover:bg-black text-white disabled:opacity-40 transition-all cursor-pointer shadow-xs"
               >

@@ -574,7 +574,9 @@ class PythonGraphAgent:
     ) -> str:
         schema = self._get_schema_summary()
         read_stmt = (
-            f'pd.read_pickle(r"{clean_ds}")'
+            f'pd.read_json(r"{clean_ds}", dtype=False, convert_dates=False)'
+            if clean_ds.endswith(".json")
+            else f'pd.read_pickle(r"{clean_ds}")'
             if clean_ds.endswith(".pkl")
             else f'pd.read_csv(r"{clean_ds}")' if clean_ds.lower().endswith(".csv")
             else f'pd.read_excel(r"{clean_ds}")'
@@ -721,11 +723,12 @@ Generate complete Python code only. No explanation."""
         AI-first: calls AI Core LLM. On failure: deterministic template fallback.
         The LLM receives pre-computed data (df_agg) and must NOT re-aggregate.
         """
-        ds_path  = self._get_dataset_path()
-        clean_ds = str(ds_path).replace("\\", "/")
+        clean_ds = "/work/data.json"
         clean_out = str(output_img_path).replace("\\", "/")
         read_stmt = (
-            f'df = pd.read_pickle(r"{clean_ds}")'
+            f'df = pd.read_json(r"{clean_ds}", dtype=False, convert_dates=False)'
+            if clean_ds.endswith(".json")
+            else f'df = pd.read_pickle(r"{clean_ds}")'
             if clean_ds.endswith(".pkl")
             else f'df = pd.read_csv(r"{clean_ds}")' if clean_ds.lower().endswith(".csv")
             else f'df = pd.read_excel(r"{clean_ds}")'
@@ -1136,7 +1139,11 @@ for bar in bars:
         script_id       = uuid.uuid4().hex[:10]
         temp_script     = self.temp_dir / f"temp_graph_{script_id}.py"
         temp_image      = self.temp_dir / f"temp_graph_{script_id}.png"
-        python_exe      = self._get_python_executable()
+        from api.platform.custom_charts import execute_isolated
+        from fastapi import HTTPException
+        image = os.getenv("PLATFORM_CHART_IMAGE")
+        if not image:
+            raise HTTPException(503, "Configure PLATFORM_CHART_IMAGE and an isolated chart worker before generating Python charts.")
 
         # Intent inference: prefer query_plan from IntentEngine, fallback to keyword heuristics
         if query_plan:
@@ -1277,78 +1284,24 @@ for bar in bars:
 
         try:
             # ── Step 6a: AI-first code generation (with pre-computed data) ────
+            if df_agg is None or df is None or df.empty:
+                raise ValueError("No complete dataset is available to render this chart")
+            from api.services.analytics_engine import json_value
+            rows = [{name: json_value(value) for name, value in row.items()} for row in df.to_dict(orient="records")]
             py_code = self._generate_python_code(
-                prompt, str(temp_image), fallback_mode=(not verified),
-                df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure,
-                df=locals().get("df"),
+                prompt, "/output/chart.png", fallback_mode=(not verified),
+                df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure, df=df,
             )
-
-            temp_script.parent.mkdir(parents=True, exist_ok=True)
-            with open(temp_script, "w", encoding="utf-8") as fh:
-                fh.write(py_code)
-            logger.info(f"[Graph Agent] Temp script written: {temp_script.name}")
-
-            # ── Step 7a: Execute ───────────────────────────────────────────────
-            proc = subprocess.run(
-                [python_exe, str(temp_script)],
-                capture_output=True, text=True, timeout=60,
-            )
-
-            # ── Step 6b / 7b: Deterministic fallback on execution failure ──────
-            if proc.returncode != 0:
-                logger.warning(
-                    f"[Graph Agent] Attempt 1 failed (rc={proc.returncode}). "
-                    f"Error snippet: {proc.stderr[-500:]}"
-                )
+            try:
+                png = execute_isolated(py_code, rows, image)
+            except HTTPException:
+                logger.warning("[Graph Agent] Isolated rendering failed; retrying the deterministic template")
                 fallback_code = self._generate_python_code(
-                    prompt, str(temp_image), fallback_mode=True,
-                    df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure,
-                    df=locals().get("df"),
+                    prompt, "/output/chart.png", fallback_mode=True,
+                    df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure, df=df,
                 )
-                temp_script.parent.mkdir(parents=True, exist_ok=True)
-                with open(temp_script, "w", encoding="utf-8") as fh:
-                    fh.write(fallback_code)
-
-                proc = subprocess.run(
-                    [python_exe, str(temp_script)],
-                    capture_output=True, text=True, timeout=60,
-                )
-
-            # ── Execution error after both attempts ───────────────────────────
-            if proc.returncode != 0:
-                logger.error(f"[Graph Agent] Both attempts failed.\nSTDERR:\n{proc.stderr}")
-                return {
-                    "status": "error",
-                    "prompt": prompt,
-                    "image_base64": "",
-                    "chart_type": chart_type,
-                    "insights": "",
-                    "message": f"Graph execution failed after retry: {proc.stderr[:300]}",
-                    "records_matched": records_matched,
-                    "records_in_source": records_in_source,
-                    "data_as_of": data_as_of,
-                    "verified": False,
-                }
-
-            # ── Step 8: Verify image was produced ────────────────────────────
-            if not temp_image.exists():
-                logger.error("[Graph Agent] Execution succeeded but no image was produced.")
-                return {
-                    "status": "error",
-                    "prompt": prompt,
-                    "image_base64": "",
-                    "chart_type": chart_type,
-                    "insights": "",
-                    "message": "Graph image was not created by the script.",
-                    "records_matched": records_matched,
-                    "records_in_source": records_in_source,
-                    "data_as_of": data_as_of,
-                    "verified": False,
-                }
-
-            # ── Step 8: Encode to base64 data-URI ────────────────────────────
-            with open(temp_image, "rb") as img_fh:
-                img_b64 = base64.b64encode(img_fh.read()).decode("utf-8")
+                png = execute_isolated(fallback_code, rows, image)
+            img_b64 = base64.b64encode(png).decode("ascii")
 
             data_uri = f"data:image/png;base64,{img_b64}"
             active_ds_name = None

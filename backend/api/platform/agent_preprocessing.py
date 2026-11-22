@@ -7,10 +7,11 @@ without hardcoded column names or assumptions.
 """
 
 import re
-import math
+import copy
+import os
+from decimal import Decimal, localcontext
 from typing import Dict, Any, Tuple, List
 import pandas as pd
-import numpy as np
 
 from api.utils.logger import get_logger
 
@@ -23,7 +24,7 @@ class PreprocessingAgent:
     normalizes headers, and coerces types conservatively.
     """
 
-    def clean(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    def clean(self, df: pd.DataFrame, parsing_options=None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """
         Run the complete cleaning pipeline.
         Returns:
@@ -39,6 +40,7 @@ class PreprocessingAgent:
                 "message": "Empty or null DataFrame provided."
             }
 
+        df = df.copy(deep=True)
         rows_before = len(df)
         cols_before = len(df.columns)
         nulls_cleaned_count = 0
@@ -49,10 +51,13 @@ class PreprocessingAgent:
         # Step 2: Remove completely empty rows and columns
         df = df.dropna(how="all")
         df = df.dropna(axis=1, how="all")
+        if df.attrs.get("columns"):
+            df.attrs["columns"] = [c for c in df.attrs["columns"] if c["name"] in df.columns]
 
         # Step 3: Remove duplicate rows
         duplicates_before = len(df)
-        df = df.drop_duplicates()
+        if parsing_options is None or parsing_options.duplicate_policy == "drop":
+            df = df.drop_duplicates()
         exact_duplicates_removed = duplicates_before - len(df)
 
         # Step 4: Detect and Clean String-Encoded Numbers / Currencies
@@ -89,6 +94,7 @@ class PreprocessingAgent:
         """Sanitize column headers to valid, unique identifiers."""
         new_cols = []
         seen = {}
+        used = set()
         for col in df.columns:
             name = str(col).strip()
             # Replace spaces and punctuation with underscores
@@ -105,56 +111,70 @@ class PreprocessingAgent:
             else:
                 seen[clean_name] = 0
                 unique_name = clean_name
+            while unique_name in used:
+                seen[clean_name] += 1
+                unique_name = f"{clean_name}_{seen[clean_name]}"
+            used.add(unique_name)
             new_cols.append(unique_name)
 
+        renamed = dict(zip(df.columns, new_cols))
+        df.attrs["source_column_names"] = {new: old for old, new in renamed.items()}
         df.columns = new_cols
+        if df.attrs.get("columns"):
+            columns = copy.deepcopy(df.attrs["columns"])
+            for column in columns:
+                column["name"] = renamed.get(column["name"], column["name"])
+            df.attrs["columns"] = columns
         return df
 
     def _normalize_formatted_numbers(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
         """Convert string numbers formatted with currency symbols, commas, or percent signs to numeric."""
         cleaned_cells = 0
-        currency_regex = re.compile(r'^[\$\€\£\¥\₹]?\s*[-+]?[\d,]+(?:\.\d+)?%?$')
-
+        declared = {c["name"]: c["type"] for c in df.attrs.get("columns", [])}
+        explicit = df.attrs.get("transformation_plan", {}).get("parsing", {}).get("column_types", {})
+        # Commas are thousands separators only when their grouping is unambiguous.
+        pattern = re.compile(r"^[\$\u20ac\u00a3\u00a5\u20b9]?\s*[-+]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?%?$")
         for col in df.columns:
-            if df[col].dtype == object or pd.api.types.is_string_dtype(df[col]):
-                # Sample non-null values
-                series = df[col].dropna()
-                if series.empty:
-                    continue
-
-                sample = series.head(50).astype(str).str.strip()
-                matches = sample.apply(lambda s: bool(currency_regex.match(s)))
-
-                # If >= 80% of samples match formatted numeric pattern
-                if matches.mean() >= 0.8:
-                    try:
-                        def parse_val(v):
-                            if pd.isna(v) or v is None:
-                                return np.nan
-                            s = str(v).strip().replace(',', '').replace('$', '').replace('€', '').replace('£', '').replace('¥', '').replace('₹', '')
-                            is_pct = s.endswith('%')
-                            if is_pct:
-                                s = s[:-1].strip()
-                            try:
-                                val = float(s)
-                                return val / 100.0 if is_pct else val
-                            except ValueError:
-                                return np.nan
-
-                        cleaned_series = df[col].apply(parse_val)
-                        if cleaned_series.notna().mean() >= 0.7:
-                            df[col] = cleaned_series
-                            cleaned_cells += len(series)
-                    except Exception as exc:
-                        logger.debug(f"Could not convert column {col} to numeric: {exc}")
-
+            source_name = df.attrs.get("source_column_names", {}).get(col, col)
+            if declared.get(col) in ("identifier", "date", "boolean", "decimal") or explicit.get(source_name) in ("string", "identifier"):
+                continue
+            if not (df[col].dtype == object or pd.api.types.is_string_dtype(df[col])):
+                continue
+            values = df[col].dropna()
+            if values.empty or not values.map(lambda v: isinstance(v, str)).all():
+                continue
+            texts = values.astype(str).str.strip()
+            if texts.str.match(r"^[+-]?0\d+").any():
+                continue  # Leading zeros carry identifier meaning.
+            if not texts.map(lambda v: bool(pattern.fullmatch(v))).all():
+                continue  # Never replace unparseable source values with invented nulls.
+            def parse(value):
+                if pd.isna(value):
+                    return None
+                text = str(value).strip()
+                percent = text.endswith("%")
+                text = re.sub(r"[\$\u20ac\u00a3\u00a5\u20b9,%]", "", text).strip()
+                number = Decimal(text)
+                with localcontext() as context:
+                    context.prec = max(38, len(number.as_tuple().digits))
+                    return number / Decimal(100) if percent else number
+            df[col] = pd.Series([parse(v) for v in df[col]], index=df.index, dtype=object)
+            for column in df.attrs.get("columns", []):
+                if column["name"] == col:
+                    column["type"] = "decimal"
+            cleaned_cells += len(values)
         return df, cleaned_cells
 
     def _remediate_nulls(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int]]:
         """Remediate string/categorical nulls and empty whitespace while preserving true numeric distributions."""
         null_counts = {}
 
+        declared = {c["name"]: c["type"] for c in df.attrs.get("columns", [])}
         for col in df.columns:
+            if declared.get(col) in ("identifier", "decimal", "integer", "number", "date", "boolean"):
+                continue
+            if os.getenv("PLATFORM_CATEGORICAL_NULL_POLICY", "label").lower() == "preserve":
+                continue
             null_count = int(df[col].isna().sum())
 
             # If column is numeric: preserve genuine NULLs/NaNs so SQL AVG/SUM/MIN/MAX calculations
@@ -180,29 +200,10 @@ class PreprocessingAgent:
         return df, null_counts
 
     def _normalize_dates(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Attempt to convert string columns that look like dates to datetime ISO strings without inventing fake dates."""
-        for col in df.columns:
-            if df[col].dtype == object or pd.api.types.is_string_dtype(df[col]):
-                col_lower = col.lower()
-                is_date_hint = any(k in col_lower for k in ["date", "time", "timestamp", "year", "month", "day", "created", "updated"])
-                sample = df[col].dropna().head(20)
-                if sample.empty:
-                    continue
-
-                if is_date_hint:
-                    try:
-                        parsed = pd.to_datetime(sample, errors='coerce')
-                        if parsed.notna().mean() >= 0.8:
-                            # Safely convert entire column to string ISO format
-                            full_parsed = pd.to_datetime(df[col], errors='coerce')
-                            # If conversion was mostly successful, replace non-null with ISO date strings
-                            if full_parsed.notna().mean() >= 0.7:
-                                # Preserve genuine missing values without fabricating fake dates via ffill/bfill
-                                df[col] = full_parsed.dt.strftime('%Y-%m-%d')
-                    except Exception:
-                        pass
+        """Preserve timestamps and ambiguous strings; parsing options own date coercion."""
+        # IngestionService already applies reviewed formats/timezones. Re-inference here
+        # used to discard time components and turn partially parsed values into nulls.
         return df
 
 
 preprocessing_agent = PreprocessingAgent()
-

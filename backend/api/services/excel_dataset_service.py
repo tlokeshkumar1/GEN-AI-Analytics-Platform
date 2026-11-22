@@ -71,10 +71,13 @@ class ExcelDatasetService:
             cnt_rows = hana_client.execute_query(f'SELECT COUNT(*) AS CNT FROM "{target_table}"')
             self._records_count = int(cnt_rows[0].get("CNT") or 0) if cnt_rows else None
 
-            # Bounded sample (e.g. 2000 rows) for schema introspection without OOM on Cloud Foundry
-            rows = hana_client.execute_query(f'SELECT * FROM "{target_table}" LIMIT 2000')
-            if rows:
+            # This frame feeds calculations. Schema-only callers use metadata reflection.
+            from api.platform.data_resolution import quote_identifier
+            rows = hana_client.execute_query(f"SELECT * FROM {quote_identifier(target_table)}", native_types=True)
+            if rows is not None:
                 self._df = pd.DataFrame(rows)
+                if self._records_count is not None and len(self._df) != self._records_count:
+                    raise RuntimeError("HANA data changed while loading. Retry against a stable dataset version.")
                 self._loaded_path = None
                 self._loaded_table = target_table
                 self._loaded_dataset_id = dataset_id
@@ -85,6 +88,8 @@ class ExcelDatasetService:
                 return self._df
         except Exception as e:
             logger.warning(f"Could not load directly from SAP HANA Cloud: {e}")
+            if dataset_id:
+                raise RuntimeError("The complete selected dataset could not be loaded from HANA.") from e
 
         logger.warning("Returning empty DataFrame until active in SAP HANA Cloud.")
         self._df = pd.DataFrame()
@@ -105,16 +110,16 @@ class ExcelDatasetService:
         selection = current_selection.get()
         if selection is not None:
             rows = selection.snapshot.get("rows")
-            if rows:
+            if "rows" in selection.snapshot and selection.snapshot.get("source_backend") != "hana":
                 from api.services.dataset_service import dataset_service
                 return dataset_service._frame(rows, selection.snapshot.get("columns", []))
-            # If snapshot rows are empty (e.g. data stored in HANA column table), load from HANA Cloud for specific table
-            from api.platform.datasets_metadata_repository import datasets_metadata_repo
-            hint = selection.entry.get("physical_table_name") or selection.entry.get("name")
-            target_table = datasets_metadata_repo._resolve_physical_table(hint)
+            from api.platform.data_resolution import current_table
+            target_table = current_table(selection.entry, selection.context.version)
+            if not target_table:
+                raise RuntimeError("The selected version has no complete snapshot or exact live table mapping.")
             dataset_id = selection.entry.get("id")
             if self._needs_reload(target_table, dataset_id):
-                self._load_dataset(target_table, dataset_id)
+                return self._load_dataset(target_table, dataset_id)
             return self._df
         if self._needs_reload():
             self._load_dataset()
@@ -122,13 +127,20 @@ class ExcelDatasetService:
 
     def get_data_as_of(self) -> Optional[str]:
         """Return the ISO 8601 UTC timestamp of the data source's last modification."""
+        from api.models.execution_context import current_selection
+        selection = current_selection.get()
+        if selection and selection.snapshot.get("source_backend") != "hana":
+            return next((v.get("createdAt") for v in selection.entry.get("versions", [])
+                         if v["version"] == selection.context.version), None)
         self.get_df()
         return self._data_as_of.isoformat() if self._data_as_of else None
 
     def get_records_in_source(self) -> int:
         """Return the total number of records in the source dataset."""
-        if self._records_count is not None:
-            return self._records_count
+        from api.models.execution_context import current_selection
+        selection = current_selection.get()
+        if selection and selection.snapshot.get("source_backend") != "hana":
+            return len(selection.snapshot.get("rows", []))
         df = self.get_df()
         return len(df) if df is not None else 0
 

@@ -1,6 +1,8 @@
 """ASGI middleware keeps verified identity and one data snapshot through SSE completion."""
 import copy
+import json
 import os
+from collections import deque
 
 from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
@@ -30,12 +32,46 @@ class DatasetContextMiddleware:
             workspace = os.getenv("PLATFORM_WORKSPACE_ID", "default")
             if headers.get("x-workspace-id", workspace) != workspace:
                 raise HTTPException(403, "This account has no access to the requested workspace.")
-            identity_token = current_identity.set({**identity, "workspace_id": workspace})
+            identity_token = current_identity.set({**identity, "workspace_id": workspace,
+                                                   "request_channel": "chat" if path.startswith("/api/chat") else "dataset"})
             is_chat_session = path.startswith("/api/chat/sessions")
             is_chat = path in ("/api/chat", "/api/chat/stream") or (path.startswith("/api/chat/") and not is_chat_session)
+            catalog_chat = False
+            invalid_chat_body = False
+            if path in ("/api/chat", "/api/chat/stream") and scope.get("method") == "POST":
+                # Inspect small JSON bodies and replay every ASGI message unchanged.
+                # Catalog questions need identity, but no snapshot or approved model.
+                from api.rag.catalog_chat import catalog_intent
+                original_receive = receive
+                buffered = deque()
+                body = bytearray()
+                if headers.get("content-type", "").split(";", 1)[0].strip().lower() == "application/json":
+                    while len(body) <= 65536:
+                        event = await original_receive()
+                        buffered.append(event)
+                        if event["type"] != "http.request":
+                            break
+                        part = event.get("body", b"")
+                        if len(body) + len(part) > 65536:
+                            break
+                        body.extend(part)
+                        if not event.get("more_body", False):
+                            if len(body) <= 65536:
+                                try:
+                                    payload = json.loads(body)
+                                    invalid_chat_body = not isinstance(payload, dict) or not isinstance(payload.get("message"), str)
+                                    catalog_chat = isinstance(payload, dict) and catalog_intent(payload.get("message")) is not None
+                                except (ValueError, UnicodeError):
+                                    invalid_chat_body = True
+                            break
+                async def replay_receive():
+                    if buffered:
+                        return buffered.popleft()
+                    return await original_receive()
+                receive = replay_receive
             is_metadata_only_insight = scope.get("method", "GET") == "GET" and path in ("/api/insights/dashboard", "/api/insights/recommendations")
             needs_dataset = (
-                is_chat
+                (is_chat and not catalog_chat and not invalid_chat_body)
                 or path == "/api/analytics"
                 or path.startswith("/api/dashboard")
                 or path.startswith(("/api/insights", "/api/graph/"))

@@ -156,6 +156,12 @@ def jobs():
     return job_service.list()
 
 
+@router.get("/workers/health")
+def worker_health():
+    identity = require_admin()
+    return job_service.worker_health(identity["workspace_id"])
+
+
 @router.get("/jobs/{job_id}")
 def job_status(job_id: str):
     row = job_service.get(job_id)

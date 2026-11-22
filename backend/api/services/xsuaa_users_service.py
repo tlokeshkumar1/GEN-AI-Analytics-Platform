@@ -4,12 +4,8 @@ import logging
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+import math
 from datetime import datetime, timezone
-try:
-    from unittest.mock import Mock
-except ImportError:
-    Mock = None
 
 import requests
 from fastapi import HTTPException
@@ -95,7 +91,7 @@ def normalize_user(
     for group in user.get("groups", []):
         display = group.get("display")
         val = group.get("value")
-        resolved = display or groups.get(val)
+        resolved = display if display in project_collections else groups.get(val)
         if resolved and resolved in project_collections:
             assigned_groups.add(resolved)
 
@@ -108,12 +104,13 @@ def normalize_user(
     user_id = str(user.get("id", "")).strip()
     clean_email = str(email).strip().lower()
 
-    # Project-specific last login (NOT global SAP website login)
+    # API callers supply project session maps explicitly. Standalone SCIM
+    # normalization must be pure and must not read unrelated process caches.
     project_last_login = None
     if project_logins is not None:
         project_last_login = project_logins.get(user_id) or project_logins.get(clean_email)
     else:
-        project_last_login = get_project_last_login(user_id, clean_email)
+        project_last_login = login_timestamp(user.get("lastLogonTime"))
 
     # Active session check: User is Active in this project ONLY if enabled in BTP AND currently in an active session (not logged out)
     is_currently_active = False
@@ -121,9 +118,11 @@ def normalize_user(
         if active_sessions is not None:
             is_currently_active = bool(user_id in active_sessions or clean_email in active_sessions)
         else:
-            is_currently_active = is_user_active_session(user_id, clean_email)
+            is_currently_active = active is True
 
     project_status = "Active" if is_currently_active else "Inactive"
+    if active_sessions is None and active is None:
+        project_status = "Unknown"
 
     return {
         "id": user_id,
@@ -138,6 +137,29 @@ def normalize_user(
     }
 
 
+def login_timestamp(value) -> str | None:
+    """Normalize SCIM seconds/milliseconds without inventing unknown login times."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str) and not value.replace(".", "", 1).isdigit():
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            timestamp = float(value)
+            if not math.isfinite(timestamp) or timestamp <= 0:
+                return None
+            if timestamp >= 10**11:
+                timestamp /= 1000
+            parsed = datetime.fromtimestamp(timestamp, timezone.utc)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
+
+
 def _resources(session: requests.Session, base_url: str, resource: str) -> list:
     records = []
     start = 1
@@ -147,18 +169,23 @@ def _resources(session: requests.Session, base_url: str, resource: str) -> list:
         )
         response.raise_for_status()
         data = response.json()
-        page = data.get("resources", data.get("Resources", []))
-        if not isinstance(page, list):
-            page = []
+        if not isinstance(data, dict) or not ({"resources", "Resources"} & data.keys()):
+            raise ValueError("Directory response is missing its resources collection")
+        page = data.get("resources", data.get("Resources"))
+        if not isinstance(page, list) or any(not isinstance(record, dict) for record in page):
+            raise ValueError("Directory response contains an invalid resources collection")
         records.extend(page)
         total = int(data.get("totalResults", len(records)))
-        if len(records) >= total or not page:
+        if total < len(records):
+            raise ValueError("Directory response contains an inconsistent totalResults")
+        if len(records) >= total:
             return records
+        if not page:
+            raise ValueError("Directory pagination ended before all records were returned")
         start += len(page)
 
 
 def list_users(authorization: str, force_refresh: bool = False) -> dict:
-    is_test_mock = hasattr(requests.Session, "mock_calls") or (Mock is not None and isinstance(requests.Session, Mock))
     raw_auth = bearer_token(authorization) if "bearer " in (authorization or "").lower() else (authorization or "")
     admin_collections, member_collections, project_collections = get_project_role_collections()
 
@@ -199,7 +226,7 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
         tuple(sorted(project_collections)),
     )
     now = time.time()
-    if not force_refresh and not is_test_mock:
+    if not force_refresh:
         with _USERS_CACHE_LOCK:
             if cache_key in _USERS_CACHE:
                 cached = _USERS_CACHE[cache_key]
@@ -214,22 +241,10 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
         base_url = credentials["apiurl"].rstrip("/")
         auth_header = authorization if (authorization or "").lower().startswith("bearer ") else f"Bearer {authorization}"
 
-        if is_test_mock:
-            with requests.Session() as session:
-                session.headers.update({"Authorization": auth_header, "Accept": "application/json"})
-                raw_users = _resources(session, base_url, "Users")
-                raw_groups = _resources(session, base_url, "Groups")
-        else:
-            def _fetch_resource(resource_name: str) -> list:
-                with requests.Session() as session:
-                    session.headers.update({"Authorization": auth_header, "Accept": "application/json"})
-                    return _resources(session, base_url, resource_name)
-
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                users_future = executor.submit(_fetch_resource, "Users")
-                groups_future = executor.submit(_fetch_resource, "Groups")
-                raw_users = users_future.result()
-                raw_groups = groups_future.result()
+        with requests.Session() as session:
+            session.headers.update({"Authorization": auth_header, "Accept": "application/json"})
+            raw_users = _resources(session, base_url, "Users")
+            raw_groups = _resources(session, base_url, "Groups")
 
         # Map ONLY groups that correspond to the project role collections
         groups = {}
@@ -298,10 +313,11 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
             ) from None
         raise HTTPException(502, f"Could not read project users from XSUAA (HTTP {exc.response.status_code if exc.response is not None else 'error'}).")
     except (requests.RequestException, ValueError, KeyError, TypeError) as err:
-        logger.error("Error reading XSUAA users: %s", err, exc_info=True)
+        logger.error("Error reading XSUAA users (%s)", type(err).__name__)
         raise HTTPException(502, "Could not read project users from the XSUAA application service.")
 
-    display_roles = [PRIMARY_ADMIN_ROLE, PRIMARY_MEMBER_ROLE]
+    display_roles = [os.getenv("XSUAA_ADMIN_ROLE_COLLECTION") or PRIMARY_ADMIN_ROLE,
+                     os.getenv("XSUAA_MEMBER_ROLE_COLLECTION") or PRIMARY_MEMBER_ROLE]
     result = {
         "users": users,
         "total": len(users),
@@ -309,7 +325,6 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
         "project_role_collections": display_roles,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
-    if not is_test_mock:
-        with _USERS_CACHE_LOCK:
-            _USERS_CACHE[cache_key] = {"data": result, "timestamp": now}
+    with _USERS_CACHE_LOCK:
+        _USERS_CACHE[cache_key] = {"data": copy.deepcopy(result), "timestamp": now}
     return result

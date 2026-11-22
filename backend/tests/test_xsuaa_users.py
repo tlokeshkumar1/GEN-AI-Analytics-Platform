@@ -42,6 +42,8 @@ class XsuaaUsersTests(unittest.TestCase):
         }
 
     def setUp(self):
+        service.clear_users_cache()
+        self.addCleanup(service.clear_users_cache)
         self.env = patch.dict("os.environ", {
             "VCAP_SERVICES": json.dumps({"xsuaa": [{"plan": "application", "credentials": self.application}]}),
             "XSUAA_ADMIN_ROLE_COLLECTION": "Platform Administrator (dev)",
@@ -106,6 +108,15 @@ class XsuaaUsersTests(unittest.TestCase):
         for value in [None, -1, 0, "invalid", float("inf")]:
             self.assertIsNone(service.login_timestamp(value))
         self.assertEqual(service.normalize_user({"id": "u1"}, {})["status"], "Unknown")
+
+    def test_directory_api_uses_project_sessions_instead_of_global_scim_login(self):
+        raw = {"id": "u1", "active": True, "lastLogonTime": 1700000000000}
+        user = service.normalize_user(raw, {}, project_logins={}, active_sessions=set())
+        self.assertIsNone(user["last_login"])
+        self.assertEqual(user["status"], "Inactive")
+        user = service.normalize_user(raw, {}, project_logins={"u1": "2026-01-02T03:04:05+00:00"}, active_sessions={"u1"})
+        self.assertEqual(user["last_login"], "2026-01-02T03:04:05+00:00")
+        self.assertEqual(user["status"], "Active")
 
     def test_pagination_reads_every_page(self):
         session = Mock()
@@ -194,6 +205,27 @@ class XsuaaUsersTests(unittest.TestCase):
                 service.list_users("Bearer administrator-token")
         self.assertEqual(error.exception.status_code, 502)
         self.assertNotIn("technical-secret", error.exception.detail)
+
+    def test_directory_cache_returns_copies_and_refresh_fetches_again(self):
+        session = Mock()
+        session.__enter__ = Mock(return_value=session)
+        session.__exit__ = Mock(return_value=False)
+        users = {"resources": [{"id": "u1", "groups": [{"value": "g1"}]}], "totalResults": 1}
+        groups = {"resources": [{"id": "g1", "displayName": "Platform Member (dev)"}], "totalResults": 1}
+        session.get.side_effect = lambda url, **kwargs: self.response(users if url.endswith("/Users") else groups)
+        with patch.object(service, "xsuaa_credentials", return_value={"apiurl": "https://api.example.test"}), \
+             patch.object(requests, "Session", return_value=session) as sessions, \
+             patch.object(service, "get_all_project_logins", return_value={}), \
+             patch.object(service, "get_all_active_sessions", return_value=set()):
+            first = service.list_users("Bearer administrator-token")
+            first["users"][0]["name"] = "Changed by caller"
+            cached = service.list_users("Bearer administrator-token")
+            self.assertNotEqual(cached["users"][0]["name"], "Changed by caller")
+            sessions.assert_called_once()
+            self.assertEqual(session.get.call_count, 2)
+            service.list_users("Bearer administrator-token", force_refresh=True)
+            self.assertEqual(sessions.call_count, 2)
+            self.assertEqual(session.get.call_count, 4)
 
     def test_directory_scopes_alone_and_admin_without_directory_scopes_are_denied(self):
         for scopes in [["xs_user.read", "xs_authorization.read"], ["platform!t1.Admin"],

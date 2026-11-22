@@ -2,6 +2,7 @@
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
+import os
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -41,8 +42,10 @@ def require_dataset_access(entry: dict, *, write: bool = False, for_chat: bool =
     if entry.get("workspaceId") != identity["workspace_id"]:
         # Legacy catalog ownership is assigned by an explicit migration, never a read.
         raise HTTPException(404, "Dataset not found in this workspace. Legacy data requires migration.")
-    if for_chat and not write:
-        # Both Admin and User (Member) roles can access dataset data for RAG chat within their workspace
+    if (for_chat and not write and identity.get("request_channel", "chat") == "chat"
+            and os.getenv("PLATFORM_CHAT_WORKSPACE_ACCESS", "true").lower() == "true"):
+        # Existing product policy: Members may chat across their workspace. Deployments
+        # requiring per-dataset chat grants can disable this explicitly.
         return
     owner = entry.get("ownerId") == identity["user_id"]
     readers = entry.get("readers", [])

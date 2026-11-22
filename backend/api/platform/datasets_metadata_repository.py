@@ -128,6 +128,11 @@ class DatasetsMetadataRepository:
                     "sheet_name": meta.get("sheet_name") or meta.get("sheetName"),
                     "sourceFilename": meta.get("sourceFilename") or meta.get("source_filename") or meta.get("sourceFile"),
                     "sourceFile": meta.get("sourceFile") or meta.get("sourceFilename") or meta.get("source_filename"),
+                    "tableManagedByUpload": meta.get("tableManagedByUpload", False),
+                    "ingestionStatus": meta.get("ingestionStatus"),
+                    "cloudTable": meta.get("cloudTable"),
+                    "preprocessingAudit": meta.get("preprocessingAudit"),
+                    "domain": meta.get("domain"),
                     "versions": versions,
                     "updatedAt": updated_at_str,
                 }
@@ -177,6 +182,11 @@ class DatasetsMetadataRepository:
                     "sheet_name": sheet_name,
                     "sourceFilename": source_file,
                     "sourceFile": source_file,
+                    "tableManagedByUpload": entry.get("tableManagedByUpload", False),
+                    "ingestionStatus": entry.get("ingestionStatus"),
+                    "cloudTable": entry.get("cloudTable"),
+                    "preprocessingAudit": entry.get("preprocessingAudit"),
+                    "domain": entry.get("domain"),
                 }
                 versions_json = json.dumps(entry.get("versions", []), ensure_ascii=False)
                 metadata_json = json.dumps(meta, ensure_ascii=False)
@@ -296,8 +306,6 @@ class DatasetsMetadataRepository:
     def _resolve_physical_table(self, table_name: Optional[str] = None) -> str:
         """Dynamically resolve the existing physical table directly from SAP HANA Cloud catalog."""
         hana_tables = self._list_hana_tables()
-        if not hana_tables and not self._client():
-            return table_name or "DATASET_TABLE"
 
         # 2. Extract potential table name hints from input and current execution selection
         candidates: List[str] = []
@@ -308,10 +316,11 @@ class DatasetsMetadataRepository:
         try:
             from api.models.execution_context import current_selection
             sel = current_selection.get()
-            if sel and getattr(sel, "entry", None):
+            if not table_name and sel and getattr(sel, "entry", None):
                 entry = sel.entry
-                if entry.get("physical_table_name"):
-                    candidates.append(str(entry["physical_table_name"]).upper())
+                for key in ("physical_table_name", "tableName", "table_name"):
+                    if entry.get(key):
+                        candidates.append(str(entry[key]).upper())
                 if entry.get("folder"):
                     candidates.append(str(entry["folder"]).split(".")[0].strip().replace(" ", "_").replace("-", "_").upper())
                 if entry.get("name"):
@@ -331,23 +340,7 @@ class DatasetsMetadataRepository:
             if c_clean in hana_tables:
                 return c_clean
 
-        # Fuzzy token matching before generic fallback
-        import re
-        for c in candidates:
-            c_norm = re.sub(r'[^A-Z0-9]+', '_', c.upper()).strip('_')
-            for h_table in hana_tables:
-                h_norm = re.sub(r'[^A-Z0-9]+', '_', h_table).strip('_')
-                if c_norm == h_norm or (len(c_norm) > 8 and (c_norm in h_norm or h_norm in c_norm)):
-                    return h_table
-
-        # 4. If no candidate match, pick the user table in HANA with the most records
-        if hana_tables:
-            sorted_by_records = sorted(hana_tables.items(), key=lambda x: x[1], reverse=True)
-            if sorted_by_records[0][1] > 0:
-                return sorted_by_records[0][0]
-            return sorted_by_records[0][0]
-
-        return candidates[0] if candidates else "DATASET_TABLE"
+        raise ValueError("No exact HANA table mapping exists for the selected dataset. Reconcile its metadata before use.")
 
     def load_schema_from_hana(self, table_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fast schema lookup from HANA Cloud (under 20ms) without transferring 20,000 rows."""
@@ -360,13 +353,30 @@ class DatasetsMetadataRepository:
             return []
 
         try:
+            physical = client.execute_query(
+                "SELECT COLUMN_NAME, DATA_TYPE_NAME FROM SYS.TABLE_COLUMNS "
+                "WHERE SCHEMA_NAME = CURRENT_SCHEMA AND TABLE_NAME = ? ORDER BY POSITION",
+                (resolved_table,),
+            )
+            if physical and all("COLUMN_NAME" in c and "DATA_TYPE_NAME" in c for c in physical):
+                types = {"TINYINT": "number", "SMALLINT": "number", "INTEGER": "number", "BIGINT": "number",
+                         "DECIMAL": "decimal", "SMALLDECIMAL": "decimal", "REAL": "decimal", "DOUBLE": "decimal",
+                         "DATE": "date", "TIMESTAMP": "date", "SECONDDATE": "date", "BOOLEAN": "boolean"}
+                columns = [{"name": c["COLUMN_NAME"], "type": types.get(c["DATA_TYPE_NAME"].upper(), "string"),
+                            "required": False} for c in physical]
+                self._cached_schema[resolved_table] = columns
+                return columns
             sample = client.execute_query(f'SELECT TOP 1 * FROM "{resolved_table}"')
             if not sample:
                 return []
 
             columns = []
             for col_name, val in sample[0].items():
-                col_type = "number" if isinstance(val, (int, float)) else "string"
+                from decimal import Decimal
+                from datetime import date
+                col_type = ("boolean" if isinstance(val, bool) else "decimal" if isinstance(val, Decimal)
+                            else "date" if isinstance(val, (date, datetime))
+                            else "number" if isinstance(val, (int, float)) else "string")
                 columns.append({"name": col_name, "type": col_type, "required": False})
 
             self._cached_schema[resolved_table] = columns

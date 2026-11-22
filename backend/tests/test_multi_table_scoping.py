@@ -96,7 +96,7 @@ class MultiTableScopingTests(unittest.TestCase):
         ]
         vc.search_dataset_version("ds_a", 1, [0.1] * 10, top_k=5)
         pattern_arg = mock_hana.execute_query.call_args_list[-1][0][1][1]
-        self.assertEqual(pattern_arg, "%ds_a%")
+        self.assertEqual(pattern_arg, "ds_a:v1:%")
 
     @patch("api.database.vector_client.vector_client.search_dataset_version")
     @patch("api.services.embedding_service.embedding_service.get_embedding")
@@ -122,8 +122,8 @@ class MultiTableScopingTests(unittest.TestCase):
     @patch("api.services.analytics_engine.analytics_engine.execute")
     @patch("api.services.intent_engine.intent_engine.classify")
     @patch("api.platform.ai_settings.ai_settings")
-    def test_pipeline_fallback_to_vector_when_structured_fails(self, mock_ai_settings, mock_classify, mock_execute, mock_retrieve, mock_generate):
-        """When intent is structured but analytics_engine returns failure, it must fall through to vector retrieval instead of raising 422."""
+    def test_pipeline_reports_structured_failure_without_chunk_totals(self, mock_ai_settings, mock_classify, mock_execute, mock_retrieve, mock_generate):
+        """Numerical failures must not turn sample records into successful aggregate answers."""
         from api.rag.pipeline import rag_pipeline
         mock_ai_settings.return_value = {"llm_model": "gpt-4"}
         mock_classify.return_value = {
@@ -135,6 +135,7 @@ class MultiTableScopingTests(unittest.TestCase):
         # Simulate structured calculation failure (e.g. column not in active table)
         mock_result = MagicMock()
         mock_result.success = False
+        mock_result.status = "invalid_query"
         mock_result.error = "Column Region not found in active table"
         mock_result.data = None
         mock_execute.return_value = mock_result
@@ -148,10 +149,10 @@ class MultiTableScopingTests(unittest.TestCase):
         # Execute _run_scoped
         res = rag_pipeline._run_scoped("What is the revenue by region?", top_k=4)
 
-        self.assertEqual(res.get("status"), "success")
-        self.assertIn("Region A Revenue is 500k", res.get("reply", ""))
-        # Verify vector retrieval was called as a seamless fallback
-        mock_retrieve.assert_called_once()
+        self.assertEqual(res.get("status"), "invalid_query")
+        self.assertIn("could not calculate", res.get("reply", ""))
+        mock_retrieve.assert_not_called()
+        mock_generate.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -12,6 +12,9 @@ export interface ProcessingStep {
 }
 
 export interface ChatResponse {
+  retrieval?: { mode: string; structured_found: boolean; vector_table_chunks: number; snapshot_chunks: number };
+  warnings?: string[];
+  session_title?: string | null;
   reply: string;
   sources: Array<{ ID?: string; TEXT_CHUNK?: string; SCORE?: number; METADATA?: string }>;
   session_id: string;

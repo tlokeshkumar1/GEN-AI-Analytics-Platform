@@ -27,4 +27,8 @@ def get_current_user(auth: Optional[HTTPAuthorizationCredentials] = Security(sec
 
 def get_user_id_from_request(request: Request, body_user_id: Optional[str] = None) -> str:
     """Only a verified end-user token can establish ownership; ignore client IDs."""
+    from api.models.execution_context import current_identity
+    identity = current_identity.get()
+    if identity is not None:
+        return identity["user_id"]
     return authenticated_profile(request.headers.get("authorization"))["user_id"]

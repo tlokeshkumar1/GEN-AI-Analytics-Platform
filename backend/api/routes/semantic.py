@@ -112,6 +112,7 @@ def get_dashboard_publication(all: bool = False):
 @router.post("/api/insights/dashboard")
 def publish_dashboard(publication: DashboardPublication):
     catalog = dataset_service._catalog()
+    selection = current_selection.get()
     item_map = {}
     for entry in catalog.get("datasets", {}).values():
         try:
@@ -121,6 +122,9 @@ def publish_dashboard(publication: DashboardPublication):
         cur_v = entry.get("currentVersion", 1)
         v_obj = next((v for v in entry.get("versions", []) if v.get("version") == cur_v), {})
         s_rev = _resolve_semantic_rev(entry, v_obj)
+        if selection and selection.context.dataset_id == entry["id"]:
+            cur_v = selection.context.version
+            s_rev = selection.context.semantic_revision
         try:
             for it in semantic_registry.items(entry, cur_v, s_rev):
                 item_map[(it.id, it.revision)] = (entry, cur_v, s_rev, it)
@@ -131,16 +135,6 @@ def publish_dashboard(publication: DashboardPublication):
     for reference in publication.items:
         key = (reference.get("id"), reference.get("revision"))
         if key not in item_map:
-            # Fallback to selected() if item was newly added
-            val = current_selection.get()
-            if val is not None:
-                grouped.setdefault(val.entry["id"], {
-                    "entry": val.entry,
-                    "version": val.context.version,
-                    "semantic_revision": val.context.semantic_revision,
-                    "items": []
-                })["items"].append(reference)
-                continue
             raise HTTPException(404, f"Definition {key[0]} not found.")
         entry, v, s_rev, item = item_map[key]
         if item.status != "approved":
@@ -151,6 +145,12 @@ def publish_dashboard(publication: DashboardPublication):
         grouped[ds_id]["items"].append(reference)
 
     last_res = None
+    for ds_info in grouped.values():
+        entry = ds_info["entry"]
+        state = next((v.get("ingestionStatus", entry.get("ingestionStatus")) for v in entry.get("versions", [])
+                      if v["version"] == ds_info["version"]), entry.get("ingestionStatus"))
+        if state == "partial":
+            raise HTTPException(409, "Complete the failed ingestion stages before publishing this dataset.")
     for ds_info in grouped.values():
         ns = semantic_registry.namespace(ds_info["entry"], ds_info["version"], f"dashboard:{ds_info['semantic_revision']}")
         prev = semantic_registry.store.get(ns, "published")

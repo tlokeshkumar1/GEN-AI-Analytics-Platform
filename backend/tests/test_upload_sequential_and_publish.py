@@ -127,6 +127,23 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
         )
         self.assertEqual(pub_with_headers.status_code, 200, pub_with_headers.text)
         self.assertEqual(pub_with_headers.json()["published_count"], 1)
+        publication_namespace = self.semantic_reg.namespace(
+            self.dataset_svc._catalog()['datasets'][dataset_id], version, 'dashboard:1')
+        published = self.semantic_reg.store.get(publication_namespace, 'published')['value']['items']
+        self.assertEqual(len(published), len(recs[:2]))
+        before_refs = list(published)
+        # Changing IDs and titles cannot republish an equivalent analytical widget.
+        duplicate = {**recs[0], 'id': 'same-calculation-new-id', 'title': 'Renamed metric'}
+        duplicate_result = self.client.post('/api/dashboard/publish-recommended',
+                                            json={'items': [duplicate]})
+        self.assertEqual(duplicate_result.status_code, 200, duplicate_result.text)
+        self.assertEqual(self.semantic_reg.store.get(publication_namespace, 'published')['value']['items'], before_refs)
+        new_metric = {**recs[0], 'kind': 'kpi', 'query_plan': {'metric': 'OpenIssues', 'aggregation': 'MAX'}}
+        if new_metric['query_plan'] != recs[0].get('query_plan'):
+            changed = self.client.post('/api/dashboard/publish-recommended', json={'items': [new_metric]})
+            self.assertEqual(changed.status_code, 200, changed.text)
+            after_refs = self.semantic_reg.store.get(publication_namespace, 'published')['value']['items']
+            self.assertTrue(all(ref in after_refs for ref in before_refs))
 
         # GET /api/dashboard returns the published widgets, not fallback auto-recommendations
         dash_res = self.client.get(

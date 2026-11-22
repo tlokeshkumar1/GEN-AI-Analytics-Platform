@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Optional
 from api.models.request_models import ChatRequest
 from api.models.response_models import ChatResponse
 from api.rag.pipeline import RAGPipeline
+from api.rag.catalog_chat import catalog_intent
 from api.services.history_service import history_service
 from api.utils.auth import get_user_id_from_request
 from api.utils.logger import get_logger
@@ -56,8 +57,13 @@ def chat_with_rag(req: ChatRequest, request: Request):
     session_id = None
     try:
         session_id = history_service.get_or_create_session(req.session_id, user_id=user_id, first_message=req.message)
+    except HTTPException as exc:
+        if exc.status_code < 500:
+            raise
+        session_id = f"ephemeral-{uuid.uuid4().hex[:8]}"
+        logger.warning("Chat history is unavailable; continuing without persistence.")
     except Exception as exc:
-        session_id = req.session_id or f"ephemeral-{uuid.uuid4().hex[:8]}"
+        session_id = f"ephemeral-{uuid.uuid4().hex[:8]}"
         logger.warning(f"HANA chat session creation failed ({exc}); using ephemeral session {session_id}.")
 
     # 1. Save the user query if session is persistent
@@ -72,7 +78,7 @@ def chat_with_rag(req: ChatRequest, request: Request):
             logger.warning(f"Failed to persist user message for session {session_id} ({exc}).")
 
     # 2. Load recent history for context-aware RAG
-    if not session_id.startswith("ephemeral-"):
+    if not session_id.startswith("ephemeral-") and catalog_intent(req.message) is None:
         try:
             chat_history = history_service.get_recent_history(session_id, limit=10)
         except Exception as exc:
@@ -83,23 +89,35 @@ def chat_with_rag(req: ChatRequest, request: Request):
     result = RAGPipeline().run(req.message, req.top_k, chat_history=chat_history)
 
     # 4. Save the chatbot response if persistent
-    try:
-        history_service.save_message(
-            session_id=session_id,
-            role="assistant",
-            content=result.get("reply", ""),
-            sources=result.get("sources", []),
-            intent=result.get("intent"),
-            metadata={
-                "chart_type": result.get("chart_type"),
-                "insights": result.get("insights"),
-                "graph_image": result.get("graph_image"),
-            },
-        )
-    except Exception as exc:
-        logger.warning(f"Failed to persist assistant response ({exc}); session {session_id} is ephemeral.")
+    if not session_id.startswith("ephemeral-"):
+        try:
+            history_service.save_message(
+                session_id=session_id,
+                role="assistant",
+                content=result.get("reply", ""),
+                sources=result.get("sources", []),
+                intent=result.get("intent"),
+                metadata={
+                    "chart_type": result.get("chart_type"),
+                    "insights": result.get("insights"),
+                    "graph_image": result.get("graph_image"),
+                    "retrieval": result.get("retrieval"),
+                    "warnings": result.get("warnings", []),
+                },
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to persist assistant response ({exc}); session {session_id} is ephemeral.")
 
+    session_title = None
+    try:
+        session_title = history_service.ensure_session_title(session_id, user_id, req.message, result.get('reply', ''))
+    except Exception as exc:
+        logger.warning('Could not update conversation title (%s).', type(exc).__name__)
     return ChatResponse(
+        session_title=session_title,
+        cosine_score=result.get('cosine_score'),
+        retrieval=result.get('retrieval'),
+        warnings=result.get('warnings', []),
         reply=result["reply"],
         sources=result.get("sources", []),
         session_id=session_id,

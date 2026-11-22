@@ -5,6 +5,7 @@ semantic metadata, and live value overlap in SAP HANA Cloud or snapshot DataFram
 Strict zero-hardcoding: operates purely on relational metadata, key inference, and data overlap.
 """
 import re
+import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
@@ -66,6 +67,10 @@ class CrossTableJoinService:
             entry = dataset_service._entry(catalog, dataset_id, for_chat=True)
             if not entry:
                 return None, None
+            from api.models.execution_context import current_selection
+            selection = current_selection.get()
+            if selection and selection.context.dataset_id == dataset_id:
+                return selection.entry, selection.snapshot
             snapshot = dataset_service._snapshot(entry, entry.get("currentVersion", 1))
             return entry, snapshot
         except Exception as exc:
@@ -100,6 +105,18 @@ class CrossTableJoinService:
             })
         return cols
 
+    def dataset_for_table(self, table_name):
+        """Resolve legacy physical-table joins through the authorized catalog only."""
+        from api.services.dataset_service import dataset_service
+        from api.platform.data_resolution import current_table
+        catalog = dataset_service._catalog()
+        for entry in catalog.get("datasets", {}).values():
+            table = current_table(entry, entry.get("currentVersion", 1))
+            if table and table.casefold() == table_name.casefold():
+                dataset_service._entry(catalog, entry["id"], for_chat=True)
+                return entry["id"]
+        raise ValueError("The join table is not registered as an accessible dataset")
+
     def _resolve_physical_table_name(self, entry: Dict[str, Any]) -> str:
         """Resolve HANA physical table name dynamically."""
         from api.platform.datasets_metadata_repository import datasets_metadata_repo
@@ -115,7 +132,10 @@ class CrossTableJoinService:
         if entry.get("folder"):
             candidates.append(entry["folder"])
         for cand in candidates:
-            resolved = datasets_metadata_repo._resolve_physical_table(cand)
+            try:
+                resolved = datasets_metadata_repo._resolve_physical_table(cand)
+            except ValueError:
+                continue
             if resolved:
                 return resolved
         return entry.get("tableName") or entry.get("table_name") or entry.get("name", "DATASET_TABLE")
@@ -312,7 +332,13 @@ class CrossTableJoinService:
     def get_workspace_join_graph(self, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Compute all discoverable valid joins across datasets in the workspace."""
         now = time.time()
-        cache_key = workspace_id or "default"
+        from api.models.execution_context import current_identity, current_selection
+        identity = current_identity.get() or {}
+        selection = current_selection.get()
+        cache_key = (workspace_id or identity.get("workspace_id", "default"), identity.get("user_id"),
+                     identity.get("request_channel"),
+                     os.getenv("PLATFORM_CHAT_WORKSPACE_ACCESS", "true"),
+                     (selection.context.dataset_id, selection.context.version) if selection else None)
         if cache_key in self._graph_cache:
             ts, cached_graph = self._graph_cache[cache_key]
             if (now - ts) < self._cache_ttl:
@@ -347,7 +373,8 @@ class CrossTableJoinService:
         left_key: str,
         right_key: str,
         how: str = "left",
-        columns_to_keep: Optional[List[str]] = None
+        columns_to_keep: Optional[List[str]] = None,
+        left_frame: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Load and merge two datasets into a single pandas DataFrame."""
         from api.services.dataset_service import dataset_service
@@ -357,8 +384,9 @@ class CrossTableJoinService:
         if not left_snapshot or not right_snapshot:
             raise ValueError("Failed to load snapshots for joining datasets.")
 
-        left_df = dataset_service._frame(left_snapshot["rows"], left_snapshot["columns"])
-        right_df = dataset_service._frame(right_snapshot["rows"], right_snapshot["columns"])
+        from api.platform.data_resolution import dataset_frame
+        left_df = left_frame if left_frame is not None else dataset_frame(left_entry, left_snapshot, left_entry.get("currentVersion", 1))
+        right_df = dataset_frame(right_entry, right_snapshot, right_entry.get("currentVersion", 1))
 
         if left_key not in left_df.columns:
             # Case-insensitive resolution

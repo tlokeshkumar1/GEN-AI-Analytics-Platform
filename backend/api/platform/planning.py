@@ -18,6 +18,45 @@ def clear_intent_cache():
         _INTENT_CACHE.clear()
 
 
+def simple_semantic_plan(prompt, model):
+    """Recognize complete, unambiguous aggregates using this model's field aliases."""
+    aliases = {}
+    for field in model.fields:
+        for alias in [field.name, field.semantic_name, *field.aliases]:
+            normalized = re.sub(r"[\s_]+", " ", alias.casefold()).strip()
+            if normalized:
+                aliases.setdefault(normalized, set()).add(field.name)
+    if not aliases:
+        return None
+    text = re.sub(r"\s+", " ", prompt.strip().casefold()).rstrip("?.!").strip()
+    names = "|".join(re.escape(name).replace(r"\ ", r"[\s_]+") for name in sorted(aliases, key=len, reverse=True))
+    prefix = r"(?:(?:what is|whats|show me|show|calculate|give me)\s+)?(?:the\s+)?"
+    count = re.fullmatch(prefix + r"(?:count(?: of)?|how many|number of)\s+(?:rows|records)(?:\s+(?:by|per)\s+(?P<dimension>" + names + r"))?", text)
+    match = count or re.fullmatch(prefix + r"(?P<operation>count distinct|total|sum|average|avg|minimum|min|maximum|max|count)\s+(?:of\s+)?(?P<metric>" + names + r")(?:\s+(?:by|per)\s+(?P<dimension>" + names + r"))?", text)
+    if not match:
+        return None
+    def resolve(alias):
+        candidates = aliases.get(re.sub(r"[\s_]+", " ", alias or ""), set())
+        return next(iter(candidates)) if len(candidates) == 1 else None
+    dimension = resolve(match.groupdict().get("dimension"))
+    if match.groupdict().get("dimension") and not dimension:
+        return None
+    field_map = {field.name: field for field in model.fields}
+    if dimension and field_map[dimension].role not in ("dimension", "identifier", "time"):
+        return None
+    operation = "COUNT" if count else {
+        "total": "SUM", "sum": "SUM", "average": "AVG", "avg": "AVG",
+        "minimum": "MIN", "min": "MIN", "maximum": "MAX", "max": "MAX",
+        "count": "COUNT", "count distinct": "COUNT_DISTINCT",
+    }[match["operation"]]
+    metric = "*" if count else resolve(match["metric"])
+    if not metric:
+        return None
+    if metric != "*" and operation not in field_map[metric].aggregations:
+        raise HTTPException(422, f"{operation} is not approved for '{metric}'. Review the dataset semantic model.")
+    return QueryPlan(metric=metric, aggregation=operation, dimensions=[dimension] if dimension else []).model_dump(exclude_none=True, by_alias=True)
+
+
 def classify_request(prompt):
     selection = current_selection.get()
     model = semantic_registry.get(selection.entry, selection.context.version, selection.context.semantic_revision, approved=True)
@@ -30,8 +69,16 @@ def classify_request(prompt):
     with _INTENT_CACHE_LOCK:
         if cache_key in _INTENT_CACHE:
             return copy.deepcopy(_INTENT_CACHE[cache_key])
+    simple = simple_semantic_plan(prompt, model)
+    if simple is not None:
+        return simple
     text = prompt.casefold()
 
+    numerical = bool(re.search(r"\b(total|sum|average|avg|count|how many|how much|top|bottom|highest|lowest|compare|chart|graph|plot|min|max|minimum|maximum|trend|trends|list|distinct)\b", text))
+    if not re.search(r"\b(meaning|definition|describe|explain)\b", text):
+        numerical = numerical or any(f.role == "measure" and any(re.search(r"(?<!\w)" + re.escape(alias.casefold()) + r"(?!\w)", text) for alias in [f.name, f.semantic_name, *f.aliases]) for f in model.fields)
+    if not numerical:
+        return QueryPlan(intent="chat", requires_structured_query=False, requires_vector_search=True).model_dump(exclude_none=True)
     # Discover any joinable datasets dynamically in the current workspace
     from api.platform.join_service import join_service
     current_ds_id = selection.context.dataset_id
@@ -67,11 +114,6 @@ def classify_request(prompt):
             if re.search(r"\b(by|per)\s+" + c_pattern, text):
                 raise HTTPException(422, f"The field '{c_name}' belongs to dataset '{ds_entry.get('name', ds_id)}' which cannot be joined with the active dataset because they do not share common keys or matching data.")
 
-    numerical = bool(re.search(r"\b(total|sum|average|avg|count|how many|how much|top|bottom|highest|lowest|compare|chart|graph|plot|min|max|minimum|maximum|trend|trends)\b", text))
-    if not re.search(r"\b(meaning|definition|describe|explain)\b", text):
-        numerical = numerical or any(f.role == "measure" and any(re.search(r"(?<!\w)" + re.escape(alias.casefold()) + r"(?!\w)", text) for alias in [f.name, f.semantic_name, *f.aliases]) for f in model.fields)
-    if not numerical:
-        return QueryPlan(intent="chat", requires_structured_query=False, requires_vector_search=True).model_dump(exclude_none=True)
     from api.config import settings
     if settings.NVIDIA_API_KEY:
         from api.services.ai_core_service import ai_core_service
@@ -85,20 +127,25 @@ def classify_request(prompt):
             f"Approved Dimensions (Categorical / Temporal): {dimensions_names}\n"
             "Format:\n"
             '{"intent": "analytical"|"graph"|"chat"|"ranking", "requires_structured_query": true|false, '
-            f'"metric": "{measures_names[0] if measures_names else "null"}", "aggregation": "SUM"|"AVG"|"COUNT", '
-            '"dimensions": [], "chart_type": null, "limit": null}\n'
+            '"metric": "explicitly requested approved field", "aggregation": "SUM"|"AVG"|"COUNT"|"MIN"|"MAX"|"COUNT_DISTINCT", '
+            '"dimensions": [], "filters": [{"column": "approved field", "operator": "=", "value": "requested value"}], '
+            '"date_filter": {"column": "approved date field", "from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}, '
+            '"chart_type": null, "limit": null}\n'
             "Rules:\n"
             "- If the user asks for an overall total or average of a metric without a breakdown dimension (e.g. 'what is the total', 'overall sum'), select the matching measure from Approved Measures, aggregation='SUM' (or 'AVG'), dimensions=[], chart_type=null, limit=null.\n"
             "- If the user asks for ranking, top/bottom items, use the matching metric from Approved Measures, appropriate dimension from Approved Dimensions, and limit=number requested or 5.\n"
             "- For trend requests explicitly asking for trends over time, select the primary metric, pair with the temporal dimension, and set chart_type='line'.\n"
             "- If the user asks to calculate or chart specific metrics by dimensions, return intent='analytical' or 'graph' with requires_structured_query=true.\n"
             "- If the user asks a broad semantic question, overview, explanation, or general knowledge, return {\"intent\": \"chat\", \"requires_structured_query\": false}.\n"
+            "- Preserve every requested filter and date period; never silently drop a constraint. Omit filters/date_filter when none are requested.\n"
+            "- Do not guess a field, business definition, comparison period or join. Return {\"clarification\": \"specific question\"} if the request is ambiguous.\n"
+            "- For a distinct-value listing, group by the requested approved dimension and count records. Do not substitute a different dimension.\n"
             f"User request: {prompt}"
         )
         response = ai_core_service.generate_nvidia_completion(instruction)
         proposal = intent_engine._parse_json_response(response)
         if proposal and proposal.get("intent") == "chat":
-            return QueryPlan(intent="chat", requires_structured_query=False, requires_vector_search=True).model_dump(exclude_none=True)
+            raise HTTPException(422, "Specify the metric, aggregation and any filters to calculate. I could not resolve an analytical plan for this question.")
         if proposal and "measures" in proposal and isinstance(proposal["measures"], list):
             for m in proposal["measures"]:
                 if isinstance(m, dict) and "metric" in m and "field" not in m:
@@ -113,9 +160,16 @@ def classify_request(prompt):
         try:
             plan = QueryPlan.model_validate(proposal)
         except Exception:
-            return QueryPlan(intent="chat", requires_structured_query=False, requires_vector_search=True).model_dump(exclude_none=True)
-        if plan.intent == "chat" or not plan.measures:
-            return QueryPlan(intent="chat", requires_structured_query=False, requires_vector_search=True).model_dump(exclude_none=True)
+            raise HTTPException(422, "The proposed calculation was invalid. Specify the metric, aggregation and any filters.") from None
+        if plan.intent == "chat" or not plan.measures or not plan.requires_structured_query:
+            raise HTTPException(422, "Specify which metric and aggregation you want to calculate.")
+        constraints = json.dumps({"filters": proposal.get("filters"), "date_filter": proposal.get("date_filter"),
+                                  "comparison": proposal.get("comparison")})
+        requested_years = set(re.findall(r"\b(?:19|20)\d{2}\b", text))
+        if requested_years - set(re.findall(r"\b(?:19|20)\d{2}\b", constraints)):
+            raise HTTPException(422, "The calculation plan did not preserve the requested year. Specify the date field and period explicitly.")
+        if re.search(r"\bwhere\b", text) and not (plan.filters or plan.date_filter or plan.comparison):
+            raise HTTPException(422, "The calculation plan did not preserve the requested filter. Specify the field and value explicitly.")
         out = plan.model_dump(exclude_none=True, by_alias=True)
         with _INTENT_CACHE_LOCK:
             if len(_INTENT_CACHE) > 200:

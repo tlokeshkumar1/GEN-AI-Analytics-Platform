@@ -25,6 +25,10 @@ class DashboardSummaryResponse(BaseModel):
     top_products: List[Dict[str, Any]]
 
 class ChatResponse(BaseModel):
+    cosine_score: Optional[float] = None
+    retrieval: Optional[Dict[str, Any]] = None
+    warnings: List[str] = []
+    session_title: Optional[str] = None
     reply: str
     sources: List[Dict[str, Any]] = []
     session_id: str
@@ -51,6 +55,9 @@ class AnalyticsResponse(BaseModel):
     records_matched: int = 0
     sql_determinism: Optional[float] = None
     execution_backend: str = "pandas"
+    warnings: List[str] = []
+    context: Optional[Dict[str, Any]] = None
+    data_complete: bool = True
     execution_label: str = "Executed with the deterministic DataFrame engine"
     execution_time_ms: float = 0
     status: str = "success"
@@ -70,6 +77,8 @@ class UploadResponse(BaseModel):
     domain: Optional[str] = None
     semantic_model: Optional[Dict[str, Any]] = None
     recommendations: Optional[List[Dict[str, Any]]] = None
+    ready_for_publication: bool = True
+    warnings: List[str] = []
 
 
 # ── Enhanced Response Models (v2) ─────────────────────────────────────────────

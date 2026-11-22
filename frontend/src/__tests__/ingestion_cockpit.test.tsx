@@ -22,6 +22,28 @@ afterEach(() => {
 });
 
 describe('AIAgentIngestionStepper sequential stages & first-upload publish', () => {
+  it('keeps failed storage visible and blocks publication of partial imports', () => {
+    render(
+      <AIAgentIngestionStepper
+        isOpen
+        isProcessing={false}
+        filename="Projects.csv"
+        result={{
+          filename: 'Projects.csv', status: 'partial', ready_for_publication: false,
+          warnings: ['The dataset was saved, but storage synchronization needs a retry.'],
+          cloud_table: { table_name: 'PROJECTS', success: false },
+          recommendations: [{ id: 'one', title: 'Count', kind: 'kpi', query_plan: {}, explanation: '', selected_by_default: true }],
+        }}
+        onClose={vi.fn()}
+        onNavigateToDashboard={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Storage synchronization failed')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('storage synchronization needs a retry');
+    expect((screen.getByRole('button', { name: /Publish on Dashboard/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it('shows only one running stage at a time while subsequent stages remain Queued', () => {
     render(
       <AIAgentIngestionStepper

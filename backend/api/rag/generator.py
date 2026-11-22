@@ -47,7 +47,8 @@ class RAGGenerator:
     # ── Synchronous Generation ────────────────────────────────────────────────
 
     def generate(self, formatted_prompt: str,
-                 system_prompt: str = "You explain approved enterprise dataset definitions and evidence.") -> str:
+                 system_prompt: str = "You explain approved enterprise dataset definitions and evidence.",
+                 generation_config: Optional[dict] = None) -> str:
         """
         Synchronous completion via NVIDIA NIM.
         Used by: /api/chat, _handle_analytical, _generate_analytical_response, etc.
@@ -58,7 +59,7 @@ class RAGGenerator:
             raise RuntimeError("NVIDIA API key is not configured in environment settings.")
 
         from api.platform.ai_settings import ai_settings
-        config = ai_settings()
+        config = generation_config or ai_settings()
         headers = self._get_headers()
 
         models_to_try = []
@@ -66,6 +67,8 @@ class RAGGenerator:
             if m and m not in models_to_try:
                 models_to_try.append(m)
 
+        if config.get('fallback_models') is False:
+            models_to_try = models_to_try[:1]
         for idx, model_name in enumerate(models_to_try):
             payload = {
                 "model": model_name,
@@ -79,7 +82,7 @@ class RAGGenerator:
             }
             t_start = time.perf_counter()
             try:
-                res = requests.post(self.api_url, headers=headers, json=payload, timeout=60)
+                res = requests.post(self.api_url, headers=headers, json=payload, timeout=config.get('timeout', 60))
                 elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
                 if res.status_code == 200:
                     data = res.json()
@@ -132,7 +135,8 @@ class RAGGenerator:
 
     def generate_stream(self, formatted_prompt: str,
                         system_prompt: str = "You explain approved enterprise dataset definitions and evidence.",
-                        stop_event: Optional[threading.Event] = None
+                        stop_event: Optional[threading.Event] = None,
+                        generation_config: Optional[dict] = None
                         ) -> Generator[str, None, None]:
         """
         Token-by-token streaming generator via NVIDIA NIM (stream=True).
@@ -147,7 +151,7 @@ class RAGGenerator:
             raise RuntimeError("NVIDIA API key is not configured in environment settings.")
 
         from api.platform.ai_settings import ai_settings
-        config = ai_settings()
+        config = generation_config or ai_settings()
         payload = {
             "model": config["llm_model"],
             "messages": [
@@ -208,7 +212,7 @@ class RAGGenerator:
                     f"falling back to synchronous generation."
                 )
                 # Fallback: yield the complete response as a single chunk
-                full = self.generate(formatted_prompt, system_prompt)
+                full = self.generate(formatted_prompt, system_prompt, generation_config=generation_config)
                 yield full
                 return
 
@@ -281,7 +285,7 @@ class RAGGenerator:
                     logger.info("[RAGGenerator] Stream stopped; aborting fallback request.")
                     return
                 logger.info("[RAGGenerator] Falling back to synchronous generation after stream timeout.")
-                full = self.generate(formatted_prompt, system_prompt)
+                full = self.generate(formatted_prompt, system_prompt, generation_config=generation_config)
                 yield full
         except Exception as e:
             if stop_event and stop_event.is_set():
@@ -294,7 +298,7 @@ class RAGGenerator:
                     return
                 logger.info("[RAGGenerator] Falling back to synchronous generation after stream error.")
                 try:
-                    full = self.generate(formatted_prompt, system_prompt)
+                    full = self.generate(formatted_prompt, system_prompt, generation_config=generation_config)
                     yield full
                 except Exception as fallback_err:
                     logger.error(f"[RAGGenerator] Synchronous fallback also failed: {fallback_err}")

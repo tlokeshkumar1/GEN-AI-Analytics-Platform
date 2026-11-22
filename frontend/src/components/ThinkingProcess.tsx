@@ -43,6 +43,14 @@ export interface IntentDetails {
 }
 
 export const resolveIntentDetails = (rawIntent?: string, steps?: ProcessingStep[], text?: string): IntentDetails => {
+  if (rawIntent === 'hybrid_record') {
+    return { key: 'hybrid_record', label: 'Hybrid Retrieval', description: 'Exact record values combined with relevant VECTOR_TABLE evidence',
+      dotColor: 'bg-[var(--color-ai)]', pillClass: 'bg-[var(--color-ai-soft)] text-[var(--color-ai)] border-[var(--color-ai-muted)]', icon: Layers };
+  }
+  if (rawIntent === 'exact_record') {
+    return { key: 'exact_record', label: 'Record Lookup', description: 'Exact structured record evidence',
+      dotColor: 'bg-[var(--color-primary)]', pillClass: 'bg-[var(--color-primary-soft)] text-[var(--color-primary)] border-[var(--color-primary-muted)]', icon: Database };
+  }
   const combined = `${rawIntent || ''} ${(steps || []).map(s => s.message + ' ' + s.stage).join(' ')} ${text || ''}`.toLowerCase();
 
   if (

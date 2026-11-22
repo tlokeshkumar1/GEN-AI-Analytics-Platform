@@ -27,13 +27,17 @@ class ApprovedAnalyticsWorkflow(unittest.TestCase):
         selection = DatasetSelection(ExecutionContext(workspace_id="default", user_id="owner", dataset_id=entry["id"], version=1, semantic_revision=model["revision"]), entry, self.service._snapshot(entry, 1))
         token = current_selection.set(selection)
         try:
-            with patch("api.rag.pipeline.intent_engine.classify", return_value={"metric": "Salary", "aggregation": "SUM", "intent": "analytical"}), patch("api.rag.pipeline.retriever.retrieve") as retrieve, patch("api.rag.pipeline.generator.generate") as generate:
+            with patch("api.rag.pipeline.intent_engine.classify", return_value={"metric": "Salary", "aggregation": "SUM", "intent": "analytical"}), \
+                 patch("api.rag.pipeline.retriever.retrieve") as retrieve, \
+                 patch("api.rag.pipeline.generator.generate_stream", return_value=iter(["Calculated total: ", "0.30"])) as generate:
                 events = []
-                result = RAGPipeline()._run_scoped("Total salary", 5, callback=events.append)
-                self.assertIn("0.30", result["reply"])
+                result = RAGPipeline()._run_scoped("Total salary", 5, callback=events.append, stream=True)
+                self.assertIn("0.3", result["reply"])
                 self.assertEqual(result["context"]["dataset_id"], entry["id"])
                 self.assertEqual(result["data"]["records_matched"], 2)
-                retrieve.assert_not_called(); generate.assert_not_called()
+                retrieve.assert_not_called()
+                generate.assert_not_called()
+                self.assertEqual(result["model"], "Deterministic analytics")
                 self.assertTrue(any(event["type"] == "token" for event in events))
         finally:
             current_selection.reset(token)
@@ -41,17 +45,21 @@ class ApprovedAnalyticsWorkflow(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        env = patch.dict(os.environ, {"PLATFORM_METADATA_BACKEND": "sqlite", "PLATFORM_METADATA_PATH": str(Path(self.temp.name) / "metadata.db")})
+        env = patch.dict(os.environ, {"PLATFORM_METADATA_BACKEND": "sqlite", "PLATFORM_METADATA_PATH": str(Path(self.temp.name) / "metadata.db"),
+                                     "PLATFORM_AUTO_APPROVE_SEMANTICS": "false"})
         env.start(); self.addCleanup(env.stop)
         metadata_store.cache_clear(); self.addCleanup(metadata_store.cache_clear)
         self.service = DatasetService(Path(self.temp.name) / "datasets", default_async_index=False)
         self.addCleanup(self.service.wait_for_idle)
         for name, value in [("_index", ([], "Error")), ("_submit_indexing", None)]:
             p = patch.object(self.service, name, return_value=value); p.start(); self.addCleanup(p.stop)
-        for module in (datasets, semantic, system, upload_service, dataset_module):
+        for module in (datasets, semantic, dashboard, system, upload_service, dataset_module):
             p = patch.object(module, "dataset_service", self.service); p.start(); self.addCleanup(p.stop)
         p = patch("api.xsuaa.authenticated_profile", return_value={"user_id": "owner", "roles": ["Admin"], "role": "Admin"})
         self.profile = p.start(); self.addCleanup(p.stop)
+        p = patch("api.services.upload_service.hana_table_service.persist_dataframe",
+                  side_effect=lambda df, table_name, action: {"success": True, "table_name": table_name})
+        p.start(); self.addCleanup(p.stop)
         from api.config import settings
         p = patch.object(settings, "NVIDIA_API_KEY", ""); p.start(); self.addCleanup(p.stop)
         app = FastAPI()
@@ -64,6 +72,10 @@ class ApprovedAnalyticsWorkflow(unittest.TestCase):
         response = self.client.post("/api/upload", files={"file": ("HR.csv", b"EmployeeID,Salary,Department\n001,0.10,IT\n002,0.20,HR\n")})
         self.assertEqual(response.status_code, 200, response.text)
         dataset_id = response.json()["dataset"]["id"]
+        # This scenario tests an explicitly restricted dataset. Uploads remain
+        # workspace-shared by default in the normal self-service workflow.
+        grants = self.client.put(f"/api/datasets/{dataset_id}/access", json={"readers": [], "writers": []})
+        self.assertEqual(grants.status_code, 200, grants.text)
         path = f"/api/datasets/{dataset_id}/versions/1/semantics"
         proposal = self.client.post(path + "/propose").json()
         proposal["grain"] = "One employee record"
@@ -82,7 +94,7 @@ class ApprovedAnalyticsWorkflow(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         result = self.client.post("/api/insights/execute", json=query, headers=headers)
         self.assertEqual(result.status_code, 200, result.text)
-        self.assertEqual(result.json()["summary"]["value"], "0.30")
+        self.assertEqual(result.json()["summary"]["value"], 0.30)
         proposals = self.client.post("/api/insights/recommendations", headers=headers)
         self.assertEqual(proposals.status_code, 200, proposals.text)
         item = proposals.json()["items"][0]
@@ -103,6 +115,16 @@ class ApprovedAnalyticsWorkflow(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(self.client.get("/api/system/connections").status_code, 403)
         self.assertEqual(self.client.get("/api/datasets").json(), [])
+
+    def test_unknown_definition_cannot_be_published_through_selected_dataset_fallback(self):
+        path, model, headers = self.prepare()
+        self.client.post(f"{path}/{model['revision']}/review", json={"decision": "approved"}).raise_for_status()
+        response = self.client.post("/api/insights/dashboard", headers=headers,
+                                    json={"title": "Invalid reference", "items": [{"id": "does-not-exist", "revision": 1}]})
+        self.assertEqual(response.status_code, 404, response.text)
+        dashboard = self.client.get("/api/insights/dashboard", headers=headers)
+        self.assertEqual(dashboard.status_code, 200, dashboard.text)
+        self.assertEqual(dashboard.json()["items"], [])
 
 
 if __name__ == "__main__":

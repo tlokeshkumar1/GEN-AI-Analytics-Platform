@@ -12,5 +12,5 @@ def get_users(
     refresh: bool = Query(False, description="Force refresh user directory bypass cache"),
 ):
     require_user_admin(authorization)
-    response.headers["Cache-Control"] = "private, max-age=60"
+    response.headers["Cache-Control"] = "no-store"
     return list_users(authorization, force_refresh=refresh)

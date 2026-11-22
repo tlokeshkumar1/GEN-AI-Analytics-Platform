@@ -267,11 +267,12 @@ export const agentActivityStore = {
       datasetId: result.dataset?.id || old.datasetId,
       domain: result.domain || old.domain,
       completedAt: Date.now(),
-      stageStatuses: { 1: 'completed', 2: 'completed', 3: 'completed', 4: 'completed' },
+      error: result.status === 'partial' ? result.warnings?.join(' ') || 'Some ingestion stages need attention.' : null,
+      stageStatuses: { 1: 'completed', 2: 'completed', 3: result.cloud_table?.success === false ? 'failed' : 'completed', 4: 'completed' },
       stageMessages: {
         1: result.preprocessing_audit?.message || 'Preprocessing complete.',
         2: `Open-domain reasoning complete: '${result.domain || old.domain}'.`,
-        3: `HANA cloud storage & vectors synced.`,
+        3: result.cloud_table?.success === false ? 'HANA synchronization failed. Retry the saved ingestion.' : 'HANA cloud storage finalized.',
         4: `Visualization recommendations formulated.`,
       },
     };

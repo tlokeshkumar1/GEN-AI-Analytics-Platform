@@ -62,12 +62,16 @@ class AnalyticsResult:
         self.execution_time_ms = 0
         self.error = None
         self.warnings = []
+        self.execution_backend = "pandas"
+        self.context = None
+        self.data_complete = True
 
     def to_dict(self):
         return dict(success=self.success, status=self.status, data=self.data, summary=self.summary,
                     records_matched=self.records_matched, records_total=self.records_total,
                     execution_time_ms=round(self.execution_time_ms, 3), error=self.error,
-                    warnings=self.warnings, execution_backend="pandas")
+                    warnings=self.warnings, execution_backend=self.execution_backend,
+                    context=self.context, data_complete=self.data_complete)
 
 
 class AnalyticsEngine:
@@ -173,205 +177,130 @@ class AnalyticsEngine:
             return min(values) if aggregation == "MIN" else max(values)
 
     def _execute_on_hana(self, plan: QueryPlan, start: float):
-        """Execute analytical query directly on SAP HANA Cloud table(s), supporting dynamic joins."""
-        try:
-            from api.database.hana_client import hana_client
-            from api.platform.datasets_metadata_repository import datasets_metadata_repo
-            from api.models.execution_context import current_selection
-            selection = current_selection.get()
-
-            # 1. Resolve base (left) table
-            target_table = getattr(plan, "table_name", None)
-            if not target_table and getattr(plan, "left_dataset_id", None):
-                from api.services.dataset_service import dataset_service
-                cat = dataset_service._catalog()
-                left_entry = dataset_service._entry(cat, plan.left_dataset_id, for_chat=True)
-                if left_entry:
-                    target_table = left_entry.get("physical_table_name") or left_entry.get("name")
-            if not target_table and getattr(plan, "dataset_id", None):
-                from api.services.dataset_service import dataset_service
-                cat = dataset_service._catalog()
-                left_entry = dataset_service._entry(cat, plan.dataset_id, for_chat=True)
-                if left_entry:
-                    target_table = left_entry.get("physical_table_name") or left_entry.get("name")
-            if not target_table and selection and selection.entry:
-                target_table = selection.entry.get("physical_table_name") or selection.entry.get("name")
-            target_table = datasets_metadata_repo._resolve_physical_table(target_table)
-
-            # 2. Process joins if present
-            join_clauses = []
-            right_schemas = []
-            if plan.joins:
-                from api.platform.join_service import join_service
-                from api.services.dataset_service import dataset_service
-                cat = dataset_service._catalog()
-                left_id = getattr(plan, "left_dataset_id", None) or getattr(plan, "dataset_id", None) or (selection.entry["id"] if selection and selection.entry else None)
-                for idx, j in enumerate(plan.joins):
-                    r_table = j.right_table
-                    r_key = j.right_key
-                    l_key = j.left_key
-                    if not r_table and j.right_dataset_id:
-                        r_entry = dataset_service._entry(cat, j.right_dataset_id, for_chat=True)
-                        if r_entry:
-                            r_table = datasets_metadata_repo._resolve_physical_table(
-                                r_entry.get("physical_table_name") or r_entry.get("name")
-                            )
-                    if (not l_key or not r_key) and j.right_dataset_id and left_id:
-                        res = join_service.resolve_join(left_id, j.right_dataset_id)
-                        if res.get("joinable"):
-                            l_key = res["left_key"]
-                            r_key = res["right_key"]
-                            if not r_table:
-                                r_table = res.get("right_table")
-
-                    if r_table and l_key and r_key:
-                        r_alias = f"R{idx + 1}"
-                        r_schema_cols = {c["name"].upper(): c["name"] for c in datasets_metadata_repo.load_schema_from_hana(r_table)}
-                        right_schemas.append((r_alias, r_schema_cols))
-                        join_type = "LEFT JOIN" if j.how == "left" else "INNER JOIN"
-                        join_clauses.append(f'{join_type} "{r_table}" {r_alias} ON L."{l_key.upper()}" = {r_alias}."{r_key.upper()}"')
-
-            has_joins = bool(join_clauses)
-            left_schema_cols = (
-                {c["name"].upper(): c["name"] for c in datasets_metadata_repo.load_schema_from_hana(target_table)}
-                if has_joins
-                else {}
-            )
-
-            def qualify_col(col_name: str) -> str:
-                if not has_joins:
-                    return f'"{col_name.upper()}"'
-                c_up = col_name.upper()
-                for r_alias, r_cols in right_schemas:
-                    if c_up in r_cols:
-                        return f'{r_alias}."{c_up}"'
-                if c_up in left_schema_cols:
-                    return f'L."{c_up}"'
-                return f'"{c_up}"'
-
-            dim_cols = [f'{qualify_col(d)} AS "{d.upper()}"' for d in plan.dimensions] if has_joins else [f'"{d.upper()}"' for d in plan.dimensions]
-            measure_exprs = []
-            for m in plan.measures:
-                col = qualify_col(m.field) if m.field != '*' else '*'
-                agg = m.aggregation.upper()
-                alias = m.alias or m.field
-                if agg == 'COUNT_DISTINCT':
-                    measure_exprs.append(f'COUNT(DISTINCT {col}) AS "{alias}"')
-                elif agg == 'COUNT' and col == '*':
-                    measure_exprs.append(f'COUNT(*) AS "{alias}"')
-                else:
-                    measure_exprs.append(f'{agg}({col}) AS "{alias}"')
-
-            select_parts = dim_cols + measure_exprs
-            select_clause = ', '.join(select_parts)
-
-            where_parts = []
-            params = []
-            for f in (plan.filters or []):
-                col = qualify_col(f.column)
-                op = f.operator.upper()
-                if op == 'IS_NULL':
-                    where_parts.append(f'{col} IS NULL')
-                elif op == 'NOT_NULL':
-                    where_parts.append(f'{col} IS NOT NULL')
-                elif op == 'IN':
-                    placeholders = ', '.join(['?'] * len(f.value))
-                    where_parts.append(f'{col} IN ({placeholders})')
-                    params.extend(f.value)
-                elif op == 'CONTAINS':
-                    where_parts.append(f'{col} LIKE ?')
-                    params.append(f'%{f.value}%')
-                elif op in ('=', '!=', '>', '<', '>=', '<='):
-                    where_parts.append(f'{col} {op} ?')
-                    params.append(f.value)
-
-            where_clause = f'WHERE {" AND ".join(where_parts)}' if where_parts else ''
-            group_clause = f'GROUP BY {", ".join([qualify_col(d) for d in plan.dimensions])}' if plan.dimensions else ''
-
-            order_clause = ''
-            if plan.sort:
-                sort_col = plan.sort.column
-                matched_alias = next((m.alias for m in plan.measures if m.alias and m.alias.lower() == sort_col.lower()), None)
-                if matched_alias:
-                    order_clause = f'ORDER BY "{matched_alias}" {plan.sort.direction.upper()}'
-                else:
-                    order_clause = f'ORDER BY {qualify_col(sort_col)} {plan.sort.direction.upper()}'
-            else:
-                temporal_dims = [d for d in plan.dimensions if is_temporal_dimension(d)]
-                if temporal_dims:
-                    order_cols = [f'{qualify_col(td)} ASC' for td in temporal_dims]
-                    order_clause = f'ORDER BY {", ".join(order_cols)}'
-                elif plan.limit and plan.measures:
-                    order_col = plan.measures[0].alias or plan.measures[0].field
-                    order_clause = f'ORDER BY "{order_col}" DESC'
-
-            limit_clause = f'LIMIT {plan.limit}' if plan.limit else ''
-
-            from_clause = f'FROM "{target_table}" L {" ".join(join_clauses)}' if has_joins else f'FROM "{target_table}"'
-            sql = ' '.join(filter(None, ['SELECT', select_clause, from_clause, where_clause, group_clause, order_clause, limit_clause]))
-            raw_rows = hana_client.execute_query(sql, tuple(params))
-            if raw_rows is None:
-                return None
-
-            result = AnalyticsResult()
-            clean_rows = []
-            for r in raw_rows:
-                row_dict = {}
-                for d in plan.dimensions:
-                    val = r.get(d)
-                    if val is None:
-                        val = r.get(d.upper())
-                    if val is None:
-                        d_lower = d.lower()
-                        for k, v in r.items():
-                            if k.lower() == d_lower:
-                                val = v
-                                break
-                    row_dict[d] = json_value(val)
-                for m in plan.measures:
-                    alias = m.alias or m.field
-                    val = r.get(alias)
-                    if val is None:
-                        val = r.get(alias.upper())
-                    if val is None:
-                        alias_lower = alias.lower()
-                        for k, v in r.items():
-                            if k.lower() == alias_lower:
-                                val = v
-                                break
-                    row_dict[alias] = json_value(val)
-                clean_rows.append(row_dict)
-
-            # Determine actual records in target HANA table dynamically (use cached SYS.M_TABLES count when available)
-            total_in_db = datasets_metadata_repo.get_table_record_count(target_table)
-            if total_in_db is None:
-                count_rows = hana_client.execute_query(f'SELECT COUNT(*) AS CNT FROM "{target_table}"')
-                total_in_db = int(count_rows[0].get("CNT") or 0) if count_rows else len(clean_rows)
-
-            result.records_total = total_in_db
-            result.records_matched = len(clean_rows) if plan.dimensions else total_in_db
-            result.data = clean_rows
-            result.success = True
-            result.status = "success"
-            result.execution_time_ms = (time.perf_counter() - start) * 1000
-
-            if not plan.dimensions and len(plan.measures) == 1 and clean_rows:
-                measure = plan.measures[0]
-                val = clean_rows[0].get(measure.alias or measure.field)
-                result.summary = {
-                    "metric": measure.field,
-                    "aggregation": measure.aggregation,
-                    "value": val,
-                    "formatted_value": self._format_value(val, measure.field)
-                }
-                result.data = [{"metric": measure.field, "aggregation": measure.aggregation, "value": val}]
-            return result
-        except Exception:
+        """Compile a validated single-table plan; complex plans use pinned snapshots."""
+        from api.models.execution_context import current_selection
+        from api.platform.data_resolution import current_table, quote_identifier
+        selection = current_selection.get()
+        if selection is None or plan.joins:
             return None
+        table = current_table(selection.entry, selection.context.version)
+        if not table:
+            return None
+        if plan.table_name and plan.table_name.casefold() != table.casefold():
+            raise ValueError("The requested table does not belong to the selected dataset version")
+        from api.database.hana_client import hana_client
+        from api.platform.datasets_metadata_repository import datasets_metadata_repo
+        try:
+            schema = datasets_metadata_repo.load_schema_from_hana(table)
+        except (ValueError, RuntimeError):
+            logger.warning("HANA schema unavailable for the registered table; using the pinned snapshot", exc_info=True)
+            return None
+        if not schema:
+            return None
+        columns = {c["name"].casefold(): c for c in schema}
+
+        def field(name):
+            match = columns.get(name.casefold())
+            if match is None:
+                raise ValueError(f"Unknown field '{name}'. Review the dataset semantic model.")
+            return quote_identifier(match["name"])
+
+        def textual(name):
+            return str(columns[name.casefold()].get("type", "string")).lower() in (
+                "string", "identifier", "nvarchar", "varchar", "text", "nclob", "clob")
+
+        measures = []
+        for measure in plan.measures:
+            if measure.field == "*" and measure.aggregation != "COUNT":
+                raise ValueError("Only COUNT may use the row identifier '*'")
+            column = "*" if measure.field == "*" else field(measure.field)
+            aggregate = (f"COUNT(DISTINCT {column})" if measure.aggregation == "COUNT_DISTINCT"
+                         else f"{measure.aggregation}({column})")
+            measures.append(f'{aggregate} AS {quote_identifier(measure.alias or measure.field)}')
+        dimensions = [f'{field(d)} AS {quote_identifier(d)}' for d in plan.dimensions]
+        predicates, params = [], []
+        for condition in plan.filters:
+            column = field(condition.column)
+            op, value = condition.operator, condition.value
+            if op in ("IS_NULL", "NOT_NULL"):
+                predicates.append(f"{column} IS {'NOT ' if op == 'NOT_NULL' else ''}NULL")
+                continue
+            is_text = textual(condition.column)
+            if is_text:
+                column = f"LOWER({column})"
+            normalize = lambda v: str(v).casefold() if is_text else v
+            if op == "IN":
+                predicates.append(f"{column} IN ({', '.join('?' for _ in value)})" if value else "1=0")
+                params.extend(normalize(v) for v in value)
+            elif op == "CONTAINS":
+                if not is_text:
+                    raise ValueError("CONTAINS requires a textual field")
+                literal = normalize(value).replace("!", "!!").replace("%", "!%").replace("_", "!_")
+                predicates.append(f"{column} LIKE ? ESCAPE '!' ")
+                params.append(f"%{literal}%")
+            else:
+                predicates.append(f"{column} {op} ?")
+                params.append(normalize(value))
+        if plan.date_filter:
+            column = field(plan.date_filter.column)
+            if textual(plan.date_filter.column):
+                raise ValueError("Date ranges require a typed date or numeric time field")
+            for op, value in ((">=", plan.date_filter.start), ("<=", plan.date_filter.end)):
+                if value is not None:
+                    predicates.append(f"{column} {op} ?")
+                    params.append(value)
+        where = "WHERE " + " AND ".join(predicates) if predicates else ""
+        source = f"FROM {quote_identifier(table)}"
+        group = "GROUP BY " + ", ".join(field(d) for d in plan.dimensions) if plan.dimensions else ""
+        outputs = {m.alias or m.field for m in plan.measures} | set(plan.dimensions)
+        order = ""
+        if plan.sort:
+            if plan.sort.column not in outputs:
+                raise ValueError("Sort field must be a grouping or output field")
+            order = f"ORDER BY {quote_identifier(plan.sort.column)} {plan.sort.direction}"
+        else:
+            temporal = [d for d in plan.dimensions if is_temporal_dimension(d)]
+            if temporal:
+                order = "ORDER BY " + ", ".join(quote_identifier(d) + " ASC" for d in temporal)
+            elif plan.limit and plan.measures:
+                order = f"ORDER BY {quote_identifier(plan.measures[0].alias or plan.measures[0].field)} DESC"
+        limit = f"LIMIT {plan.limit}" if plan.limit else ""
+        sql = " ".join(part for part in ("SELECT " + ", ".join(dimensions + measures), source, where, group, order, limit) if part)
+        result = AnalyticsResult()
+        try:
+            rows = hana_client.execute_query(sql, tuple(params), native_types=True)
+            if rows is None:
+                raise RuntimeError("HANA returned no query result")
+            counts = hana_client.execute_query(f"SELECT COUNT(*) AS CNT {source} {where}", tuple(params))
+            totals = hana_client.execute_query(f"SELECT COUNT(*) AS CNT {source}") if predicates else counts
+            if not counts or not totals:
+                raise RuntimeError("HANA row counts are unavailable")
+            result.records_matched = int(counts[0]["CNT"])
+            result.records_total = int(totals[0]["CNT"])
+            result.data = [{name: json_value(next((v for k, v in row.items() if k.casefold() == name.casefold()), None))
+                            for name in [*plan.dimensions, *(m.alias or m.field for m in plan.measures)]} for row in rows]
+            result.success, result.status = True, "success" if result.records_matched else "empty"
+            result.execution_backend = "hana"
+            result.context = selection.context.model_dump()
+            if not result.records_matched:
+                result.data = []
+            elif not plan.dimensions and len(plan.measures) == 1 and result.data:
+                measure = plan.measures[0]
+                value = result.data[0][measure.alias or measure.field]
+                result.summary = dict(metric=measure.field, aggregation=measure.aggregation,
+                                      value=value, formatted_value=self._format_value(value, measure.field))
+                result.data = [dict(metric=measure.field, aggregation=measure.aggregation, value=value)]
+            result.execution_time_ms = (time.perf_counter() - start) * 1000
+            return result
+        except Exception as exc:
+            logger.warning("HANA analytics failed; attempting the pinned snapshot (%s)", type(exc).__name__, exc_info=True)
+            result.warnings.append("HANA execution failed; results were calculated from the selected dataset snapshot.")
+            return result
 
     def execute(self, query_plan, dataframe=None, semantic_fields=None, semantic_model=None):
         result = AnalyticsResult()
         start = time.perf_counter()
+        selection_token = None
         try:
             if isinstance(query_plan, dict) and not query_plan.get("aggregation") and not query_plan.get("measures"):
                 query_plan = dict(query_plan)
@@ -379,22 +308,53 @@ class AnalyticsEngine:
             plan = QueryPlan.model_validate(query_plan)
             if not plan.measures and not plan.derived_metrics:
                 raise ValueError("Specify the metric and aggregation; no business metric is selected automatically.")
+            if plan.intent == "comparison" and plan.comparison is None:
+                raise ValueError("Specify current and previous comparison periods explicitly")
+            from api.models.execution_context import current_selection
+            from api.platform.data_resolution import selected_dataset, current_table
+            selection = current_selection.get()
+            if dataframe is None:
+                target = plan.left_dataset_id or plan.dataset_id
+                resolved = selected_dataset(target, for_chat=True)
+                if resolved is not selection:
+                    selection_token = current_selection.set(resolved)
+                    semantic_model = semantic_fields = None
+                selection = resolved
+            if selection is not None:
+                if semantic_model is None:
+                    from api.platform.semantic import semantic_registry
+                    semantic_model = semantic_registry.get(selection.entry, selection.context.version,
+                                                           selection.context.semantic_revision, approved=True, for_chat=True)
+                result.context = selection.context.model_dump()
+                if plan.table_name:
+                    table = current_table(selection.entry, selection.context.version)
+                    if not table or table.casefold() != plan.table_name.casefold():
+                        raise ValueError("The requested table does not belong to the selected dataset version")
+            elif plan.table_name:
+                raise ValueError("Physical table selection requires an authorized dataset")
+            if semantic_fields is None and semantic_model is not None:
+                semantic_fields = {f.name: f.aggregations for f in semantic_model.fields}
+            if not plan.joins and semantic_fields is not None:
+                for measure in plan.measures:
+                    if measure.field != "*" and measure.aggregation not in semantic_fields.get(measure.field, []):
+                        raise ValueError(f"{measure.aggregation} is not approved for '{measure.field}'.")
+                fields = [*plan.dimensions, *(f.column for f in plan.filters)]
+                if plan.date_filter:
+                    fields.append(plan.date_filter.column)
+                if plan.time_grouping:
+                    fields.append(plan.time_grouping.field)
+                for name in fields:
+                    if name not in semantic_fields:
+                        raise ValueError(f"Unknown field '{name}'. Review the dataset semantic model.")
             if dataframe is None and not plan.derived_metrics and not plan.comparison and not plan.time_grouping:
                 hana_res = self._execute_on_hana(plan, start)
                 if hana_res is not None and hana_res.success:
                     return hana_res
+                if hana_res is not None:
+                    result.warnings.extend(hana_res.warnings)
             if dataframe is None:
                 from api.services.data_service import data_service
-                target_ds_id = getattr(plan, "left_dataset_id", None) or getattr(plan, "dataset_id", None)
-                if target_ds_id:
-                    from api.services.dataset_service import dataset_service
-                    cat = dataset_service._catalog()
-                    entry = dataset_service._entry(cat, target_ds_id, for_chat=True)
-                    if entry:
-                        snap = dataset_service._snapshot(entry, entry.get("currentVersion", 1))
-                        dataframe = dataset_service._frame(snap["rows"], snap["columns"])
-                if dataframe is None:
-                    dataframe = data_service.get_dataframe()
+                dataframe = data_service.get_dataframe()
             df = dataframe.copy()
             # Normalize column names in df if they match plan dimensions/measures case-insensitively
             col_map = {}
@@ -409,12 +369,15 @@ class AnalyticsEngine:
             selection = current_selection.get()
             if semantic_model is None and selection is not None:
                 from api.platform.semantic import semantic_registry
-                semantic_model = semantic_registry.get(selection.entry, selection.context.version, selection.context.semantic_revision, approved=True)
+                semantic_model = semantic_registry.get(selection.entry, selection.context.version, selection.context.semantic_revision, approved=True, for_chat=True)
             if semantic_fields is None:
                 if semantic_model is not None:
                     semantic_fields = {field.name: field.aggregations for field in semantic_model.fields}
             if plan.joins:
                 for join in plan.joins:
+                    if join.right_table and not join.right_dataset_id:
+                        from api.platform.join_service import join_service
+                        join.right_dataset_id = join_service.dataset_for_table(join.right_table)
                     if join.right_dataset_id or (join.left_key and join.right_key):
                         from api.platform.join_service import join_service
                         l_id = getattr(plan, "left_dataset_id", None) or getattr(plan, "dataset_id", None) or (selection.entry["id"] if selection and selection.entry else None)
@@ -426,12 +389,33 @@ class AnalyticsEngine:
                                 raise ValueError(res.get("reason", "Tables cannot be joined."))
                             l_k = res["left_key"]
                             r_k = res["right_key"]
+                        if semantic_fields is not None:
+                            from api.services.dataset_service import dataset_service
+                            from api.platform.semantic import semantic_registry
+                            right_entry = dataset_service._entry(dataset_service._catalog(), join.right_dataset_id, for_chat=True)
+                            right_version = right_entry["currentVersion"]
+                            models = semantic_registry.list(right_entry, right_version, for_chat=True)
+                            revisions = [m["revision"] for m in models if m.get("status") == "approved"]
+                            if not revisions:
+                                import os
+                                if os.getenv("PLATFORM_AUTO_APPROVE_SEMANTICS", "true").lower() == "true":
+                                    revisions = [m["revision"] for m in models if m.get("status") == "proposed"]
+                            if not revisions:
+                                raise ValueError("The joined dataset has no approved semantic model")
+                            right_model = semantic_registry.get(right_entry, right_version, max(revisions), approved=True, for_chat=True)
+                            suffix = "_" + join_service._normalize_name(right_entry.get("name", "right"))[:6]
+                            right_fields = {}
+                            for field in right_model.fields:
+                                output = field.name + suffix if field.name in df.columns and field.name != r_k else field.name
+                                if output not in semantic_fields:
+                                    right_fields[output] = field.aggregations
+                            semantic_fields = {**semantic_fields, **right_fields}
                         df = join_service.load_joined_dataframe(
                             left_dataset_id=l_id,
                             right_dataset_id=join.right_dataset_id,
                             left_key=l_k,
                             right_key=r_k,
-                            how=join.how
+                            how=join.how, left_frame=df
                         )
                     elif join.relationship:
                         if selection is None or semantic_model is None:
@@ -552,7 +536,12 @@ class AnalyticsEngine:
             result.success, result.status = True, "success"
         except (ValueError, TypeError, KeyError, InvalidOperation) as exc:
             result.error, result.status = str(exc), "invalid_query"
+        except RuntimeError as exc:
+            logger.warning("Complete dataset execution failed (%s)", type(exc).__name__, exc_info=True)
+            result.error, result.status = "The complete selected dataset is unavailable. Retry the query.", "execution_failed"
         finally:
+            if selection_token is not None:
+                current_selection.reset(selection_token)
             result.execution_time_ms = (time.perf_counter() - start) * 1000
         return result
 

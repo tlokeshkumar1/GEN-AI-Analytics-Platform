@@ -1,73 +1,72 @@
 # System Architecture
 
-The platform combines a React application, Python FastAPI, spreadsheet analytics, SAP HANA persistence/vector search, NVIDIA NIM chat and embeddings, and SAP AI Core graph code generation.
+The platform combines a React frontend, a FastAPI API, SAP HANA Cloud, immutable dataset snapshots, and AI services for semantics, retrieval, explanations, and custom charts.
 
 ## Components
 
-| Component | Implementation |
+| Component | Implementation and purpose |
 | --- | --- |
-| Frontend | React 19, TypeScript, Vite 8, Tailwind CSS 4, Motion, Lucide, Axios, and sanitized Markdown |
-| UI structure | `frontend/src/App.tsx`, `screens/`, `components/`, and `services/` |
-| App Router | `router/server.js`, `router/xs-app.json`; static assets and authenticated API forwarding |
-| Backend | `backend/api/app.py`; routers, models, services, RAG pipeline, database clients |
-| Dataset | `excel_dataset_service.py` and `data_service.py`; spreadsheet loading/caching |
-| AI | `ai_core_service.py`; NVIDIA completions/embeddings and SAP AI Core graph code generation |
-| Persistence | HANA sales/vector artifacts under `backend/db/` and runtime chat-history tables |
-| Directory | `xsuaa_users_service.py`; Admin token validation and XSUAA SCIM reads |
+| Frontend | React 19, TypeScript, Vite and Tailwind; dataset ingestion, exploration, dashboards, chat and administration |
+| App Router | `router/server.js` and `router/xs-app.json`; SAP sign-in, static assets and authenticated API forwarding |
+| API | `backend/api/app.py`; request context middleware and feature routers |
+| Ingestion | `upload_service.py`; preprocessing, version creation, semantic inference, HANA persistence and recommendations |
+| Analytics | `analytics_engine.py`; validated query plans, HANA execution and deterministic snapshot calculations |
+| Persistence | `DATASETS_METADATA`, `PLATFORM_DOCUMENTS`, dynamic dataset tables, vector storage and configurable object storage |
+| Worker | `api.worker`; leased indexing, connector sync and advanced-chart jobs |
+| AI | NVIDIA chat/embedding services and SAP AI Core chart-code generation |
 
 ## Request flow
 
 ```mermaid
 flowchart TD
     Browser[React frontend] --> Router[SAP App Router]
-    Router -->|Hosted SAP sign-in| XSUAA[XSUAA / configured identity provider]
-    Router -->|API requests with forwarded token| API[FastAPI]
-    Router --> Assets[Built frontend in router/resources]
-    API --> Dataset[Spreadsheet cache / Pandas]
-    Dataset --> Excel[SAC_Sales_Preprocessed.xlsx]
-    API --> Pipeline[Hybrid chat / RAG pipeline]
-    Pipeline --> HANA[SAP HANA history and vectors]
-    Pipeline --> NVIDIA[NVIDIA NIM chat and embeddings]
-    API --> Graph[Python graph agent]
-    Graph --> Dataset
-    Graph --> AICore[SAP AI Core code generation]
-    Graph --> Python[Temporary Python script / PNG]
-    API --> Directory[Admin user directory service]
-    Directory --> SCIM[XSUAA SCIM Users / Groups]
+    Router --> XSUAA[SAP identity provider and XSUAA]
+    Router --> API[FastAPI and dataset context middleware]
+    API --> Catalog[Dataset versions and semantic metadata]
+    API --> Analytics[Validated analytical plans]
+    Analytics --> HANA[SAP HANA dataset tables]
+    Analytics --> Snapshots[Immutable dataset snapshots]
+    API --> Chat[Structured analytics and vector retrieval]
+    Chat --> AI[NVIDIA inference and embeddings]
+    API --> Queue[Persistent job queue]
+    Worker[Dedicated worker] --> Queue
+    Worker --> HANA
+    API --> Charts[Isolated Python chart runtime]
+    Worker --> Charts
 ```
 
-Locally, Vite on port 3000 proxies API requests directly to FastAPI on port 8000 without creating an App Router session.
+Locally, Vite on port 3000 proxies `/api` directly to FastAPI on port 8000. The deployed router supplies the hosted SAP session.
 
-## Data and analytics
+## Dataset lifecycle
 
-Dashboard and analytics use `backend/preprocessing/output/SAC_Sales_Preprocessed.xlsx`. Dataset resolution can fall back to the raw input spreadsheet. The Excel service tracks modification timestamps and checks freshness on requests, with defaults of 15 minutes for reload checks and 24 hours for the stale threshold.
+CSV and workbook imports are parsed with selected header/sheet/locale options. Preprocessing normalizes headers and cleans data while respecting explicit parsing types and duplicate policy. Snapshots preserve identifiers, Decimal values and timestamps. A normalized export is retained alongside version metadata; ingestion does not rewrite earlier snapshots.
 
-Upload replaces the standard file and updates caches in the handling process. It does not insert sales rows or generate embeddings, despite the response field named `embeddings_generated`. Files and caches are local to each backend instance.
+Domain classification uses column profiles and five sample rows. Semantic approval and workspace-wide upload sharing retain the current self-service defaults. `PLATFORM_AUTO_APPROVE_SEMANTICS=false` requires explicit semantic review; `PLATFORM_CHAT_WORKSPACE_ACCESS=false` applies dataset reader grants to chat as well. Categorical null labeling remains the default; `PLATFORM_CATEGORICAL_NULL_POLICY=preserve` retains source categorical nulls.
 
-Analytics classifies dimensions, metrics, and filters and aggregates with Pandas. Generated HANA SQL is for display, referencing `NEOVATIC_DB.SALES_FACT`; the active route does not execute it. Empty aggregations can produce built-in example results, and SQL timing/determinism fields are illustrative.
+The upload response distinguishes successful and partial ingestion. Failed HANA storage stages remain visible, and partial imports cannot publish dashboards. `POST /api/datasets/{id}/retry-ingestion?version=N` retries saved storage without creating another version. Failed appends require destination reconciliation before retry because some rows may have committed.
 
-HANA artifacts include `SALES_ANALYTICS` and `VECTOR_TABLE` with `REAL_VECTOR(1536)`. The NVIDIA embedding service truncates embeddings to 1536 dimensions. These artifacts are separate from the spreadsheet aggregation path and displayed SQL.
+## Analytics and retrieval
 
-## Chat and graphs
+Middleware verifies SAP identity, workspace membership and selected dataset access, then pins dataset/version/semantic context for the request, including SSE completion. Graph body selections use the same authorization helpers and preserve the authenticated identity.
 
-The hybrid RAG pipeline handles conversational, analytical, and graph requests using intent classification, schema processing, retrieval, calculation, and generation. Ordinary chat returns JSON; streaming chat emits processing stages and tokens through server-sent events.
+The analytics engine validates fields and aggregations before selecting an execution backend. Eligible single-table plans execute parameterized HANA SQL, including date ranges and literal text matching. Historical versions, joins, derived metrics and comparisons use complete snapshots/DataFrames. Historical requests do not reuse mutable current-version tables. Table resolution requires an exact mapping and never chooses an unrelated table by size or fuzzy name.
 
-The history service initializes `CHAT_SESSIONS` and `CHAT_MESSAGES` on startup when HANA is available. It persists user/assistant messages and supplies recent context. Session reads and deletion check ownership against the resolved user identity.
+SQL and DataFrame results expose the actual backend, context, filtered input-row count and completeness. SQL failures can fall back to the pinned snapshot and include a warning. DataFrame calculations never use a bounded schema sample as the complete dataset. Complex full-data calculations can require substantial memory; they are not silently truncated.
 
-The graph agent uses the dataset/query plan, requests Python code from SAP AI Core, and supports deterministic fallback rendering. Temporary scripts execute in subprocesses with a 60-second timeout per execution and cleanup afterward. Responses include PNG data and optional insights, counts, and freshness metadata. These subprocesses are not a separate operating-system security sandbox.
+Chat separates record lookup, numerical plans, simulations and explanatory vector retrieval. Numerical errors and empty results return explicit statuses rather than a successful answer synthesized from sample chunks. Scoped vector search retains dataset versions and cannot fall back to an unrestricted vector query. Workspace-wide retrieval is limited to accessible datasets when a verified identity is present.
 
-## Authentication and user management
+Greetings and available-data questions read the authorized dataset catalog directly and bypass snapshot/semantic/AI setup. Simple explicit aggregates resolve against current semantic field names and aliases before AI planning. Calculated answers and exact record values are formatted directly, without model rewriting or inferred dollar units. Explanatory RAG requires matching evidence; missing evidence produces an explicit response. See [RAG chat behavior and validation](rag-chat-improvements.md).
 
-The deployed router authenticates static application routes with XSUAA and requires Member or Admin scope for API requests. The frontend restores the profile through `/api/auth/me` using its router session. Router `/logout` ends that session and opens the public signed-out page.
+## Chart execution
 
-Backend profile/chat identity helpers currently decode JWT claims without signature verification; several data routes have no independent authentication dependency. Their deployed access boundary is the router. Chat identity also supports header/body/local fallback identifiers.
+Routine charts render validated results using application-owned code. Both custom-Python graph paths use the isolated container executor in `platform/custom_charts.py`. Generated code receives approved data through a read-only mount; the container has no application credentials, no network, limited CPU/memory/processes, a bounded output and a timeout. The API host does not execute generated scripts.
 
-The user directory separately validates application tokens with `sap-xssec` and requires Admin scope. It forwards the administrator token to XSUAA SCIM, resolves group IDs when necessary, and filters users to direct project Member/Administrator assignments. It uses the existing application binding. See [deployment](deployment.md) for directory-reader permissions.
+Python chart generation requires `PLATFORM_CHART_IMAGE` on a Docker-capable runtime. Configuring an image name on a Cloud Foundry Python buildpack does not supply Docker. Deploy a compatible chart runtime before using these paths.
 
-## Deployment shape
+## Workers and deployment
 
-The current [MTA manifest](../mta.yaml) defines router, Python API, and frontend build modules. UI assets are copied into `router/resources/`. Managed resources are XSUAA, Destination, and an HDI container. The manifest has no HTML5 repository module, database deployer, AI Core binding, or provisioned autoscaler.
+The main MTA assembles the frontend into the router and deploys the API and worker with SAP service bindings. Its worker module runs `python -m api.worker` for indexing and connector jobs. Configure the worker's AI credentials and provider settings using private environment/service bindings.
 
-Preprocessing input/output files are excluded from the API package. Supply data after deployment. Files uploaded to Cloud Foundry instance storage are not durable/shared across restarts, restaging, or multiple instances. HANA chat persistence separately depends on connectivity and table privileges.
+Workers heartbeat into persistent metadata. Administrators can inspect `GET /api/system/workers/health`; a missing/stale worker is reported unavailable. Workers retry loop-level failures without silently exiting. Advanced Python jobs also need the isolated runtime described above.
 
-Related guides: [setup](setup.md), [API](api.md), [deployment](deployment.md).
+See [setup](setup.md), [API](api.md), and the [remediation notes](code-review-remediation.md) for validation and operational requirements.

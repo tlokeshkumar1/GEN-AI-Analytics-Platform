@@ -1,5 +1,6 @@
 """Optional custom Python charts execute in a resource-limited, credential-free OCI container."""
 import io
+import logging
 import json
 import os
 import re
@@ -68,7 +69,10 @@ def execute_isolated(code, rows, image):
                     process.kill(); process.wait(timeout=5)
                 if process.stdout:
                     process.stdout.close()
-                subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                try:
+                    subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                except (OSError, subprocess.TimeoutExpired):
+                    logging.getLogger(__name__).warning("Chart container cleanup failed for %s", name, exc_info=True)
 
 
 def generate_custom_chart(payload, datasets, progress):

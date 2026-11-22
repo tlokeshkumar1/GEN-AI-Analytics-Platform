@@ -175,10 +175,7 @@ class ConnectionService:
         except ImportError:
             raise HTTPException(503, "Install the documented optional SDK for this connector on the backend.") from None
         except Exception as exc:
-            err_msg = str(exc)
-            import re
-            err_sanitized = re.sub(r'[\?&]apikey=[^&\s]+', '', err_msg)
-            raise HTTPException(502, f"Source operation failed ({type(exc).__name__}: {err_sanitized[:120]}). Check credentials, object selection, permissions and provider availability.") from None
+            raise HTTPException(502, f"Source operation failed ({type(exc).__name__}). Check credentials, object selection, permissions and provider availability.") from None
         finally:
             if adapter is not None:
                 adapter.close()

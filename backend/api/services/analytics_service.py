@@ -41,8 +41,11 @@ class AnalyticsService:
             return {
                 "query": query,
                 "generated_sql": "",
-                "execution_backend": "pandas",
-                "execution_label": "Executed with the deterministic DataFrame engine",
+                "execution_backend": result.execution_backend,
+                "execution_label": "Executed with SAP HANA" if result.execution_backend == "hana" else "Executed with the deterministic DataFrame engine",
+                "warnings": result.warnings,
+                "context": result.context,
+                "data_complete": result.data_complete,
                 "status": getattr(result, "status", "success" if result.success else "invalid_query"),
                 "results": result.data or [],
                 "summary_insights": result.error or ("No matching records." if not result.data else f"Calculated from {result.records_matched} matching records."),

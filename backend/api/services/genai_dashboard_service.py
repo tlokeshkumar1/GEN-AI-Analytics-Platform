@@ -15,14 +15,11 @@ Implements the 10-step Dynamic Query-to-Dashboard Workflow (Analysis-First):
 """
 
 import os
-import sys
-import uuid
 import json
 import re
 import time
 import base64
 import tempfile
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Generator
 import pandas as pd
@@ -97,8 +94,20 @@ class GenAIDashboardService:
             if target_dataset_id and target_dataset_id != "all" and ds_id != target_dataset_id:
                 continue
 
+            from api.models.execution_context import require_dataset_access, current_selection
+            from fastapi import HTTPException
+            try:
+                require_dataset_access(entry)
+            except HTTPException:
+                continue
+
             current_ver = entry.get("currentVersion", 1)
-            snapshot = dataset_service._snapshot(entry, current_ver)
+            selection = current_selection.get()
+            if selection and selection.context.dataset_id == ds_id:
+                current_ver = selection.context.version
+                snapshot = selection.snapshot
+            else:
+                snapshot = dataset_service._snapshot(entry, current_ver)
             columns = snapshot.get("columns", []) if snapshot else entry.get("columns", [])
             row_count = entry.get("rowCount", len(snapshot.get("rows", [])) if snapshot else 0)
 
@@ -166,9 +175,9 @@ CRITICAL INSTRUCTIONS:
    - For categorical status fields (e.g. "RAG Status", "Current Phase", "Escalation Required", "Current Stage"): create dynamic charts (donut, bar, or pie) with dimension=Field_Name and metric="Project_ID" (or primary key), aggregation="COUNT".
 2. If the user refers to metrics and dimensions across different tables, identify if an INNER JOIN, LEFT JOIN, RIGHT JOIN, or FULL OUTER JOIN is needed.
 3. If information is in a single table, do NOT add a join.
-4. Design 2 to 6 KPI summary cards covering all requested measures.
-5. Design 2 to 4 dynamic charts (bar, line, donut, area, scatter, table).
-6. Specify a Python Seaborn/Matplotlib visualization intent (e.g. heatmap, bar, violin, distribution).
+4. Generate EXACTLY the requested number of KPIs and charts. For a KPI-only request return charts=[]. For a chart-only request return kpis=[]. Preserve requested fields, filters, calculations and chart types. Never add generic metrics to a specific request.
+5. Only use columns present in the schema. Use numeric aggregations only on numeric measures. Infer no currency without explicit evidence. Include filters in the plan.
+6. Specify python_visual only when Python, Matplotlib or Seaborn is explicitly requested; otherwise use null.
 7. Generate a clean standard SQL query representing the core aggregation.
 
 Respond with ONLY a valid JSON object strictly matching this JSON schema:
@@ -185,6 +194,7 @@ Respond with ONLY a valid JSON object strictly matching this JSON schema:
   "sql_query": "SELECT Dimension, SUM(Metric) AS Total FROM Table GROUP BY Dimension ORDER BY Total DESC",
   "primary_metric": "ColumnName",
   "primary_dimension": "ColumnName",
+  "filters": [],
   "kpis": [
     {{
       "id": "kpi_1",
@@ -259,6 +269,10 @@ JSON:"""
         dim_cols = [c["name"] for c in cols if c["role"] == "dimension" or c["type"] in ("string", "text", "category")]
         id_cols = [c["name"] for c in cols if c["role"] == "identifier" or "id" in c["name"].lower()]
         time_cols = [c["name"] for c in cols if c["type"] in ("date", "time", "datetime") or "date" in c["name"].lower() or "year" in c["name"].lower()]
+        named_numeric = [c for c in numeric_cols if re.search(r'\b' + re.escape(c).replace('_', r'[_\s]') + r'\b', prompt, re.I)]
+        named_dimensions = [c for c in dim_cols if re.search(r'\b' + re.escape(c).replace('_', r'[_\s]') + r'\b', prompt, re.I)]
+        numeric_cols = named_numeric + [c for c in numeric_cols if c not in named_numeric]
+        dim_cols = named_dimensions + [c for c in dim_cols if c not in named_dimensions]
 
         # Check for multi-table join if multiple datasets exist
         join_required = False
@@ -376,6 +390,26 @@ JSON:"""
                 "aggregation": "COUNT" if chart_metric in id_cols else "SUM"
             })
 
+        from api.platform.widget_contract import requested_counts
+        counts = requested_counts(prompt)
+        if counts.get('kpis', 0) > 0 and named_numeric and not is_dumped:
+            kpis = []
+            for index, column in enumerate(named_numeric):
+                position = re.search(re.escape(column).replace('_', r'[_\s]'), prompt, re.I).start()
+                preceding = prompt[max(0, position - 24):position].casefold()
+                agg = 'AVG' if re.search(r'\b(average|mean|avg)\s*(?:of\s*)?$', preceding) else 'SUM'
+                kpis.append({'id': f'kpi_{index + 1}', 'title': f'{agg} {column}', 'metric': column,
+                             'aggregation': agg, 'format': 'number'})
+        if named_dimensions:
+            for chart in charts:
+                chart['dimension'] = named_dimensions[0]
+                if named_numeric:
+                    chart['metric'] = named_numeric[0]
+                    chart['aggregation'] = 'AVG' if re.search(r'\b(average|mean|avg)\b', prompt, re.I) else 'SUM'
+                kind = re.search(r'\b(bar|line|pie|donut|area)\s+chart', prompt, re.I)
+                if kind:
+                    chart['kind'] = kind.group(1).lower()
+                chart['title'] = f"{chart['aggregation']} {chart['metric']} by {chart['dimension']}"
         table_name = primary["table_name"]
         primary_metric = kpis[0]["metric"]
         primary_dim = charts[0]["dimension"]
@@ -445,19 +479,21 @@ JSON:"""
                     logger.info(f"[GenAIDashboardService] Merged {l_id} and {r_id} on {l_k}={r_k} ({len(df)} rows)")
             except Exception as e:
                 logger.warning(f"[GenAIDashboardService] Join execution failed: {e}. Falling back to primary dataset.")
-                df = None
+                raise ValueError("Requested join could not be executed") from e
 
         if df is None:
-            entry = datasets.get(primary_id)
+            entry = dataset_service._entry(catalog, primary_id)
             if entry:
-                v = entry.get("currentVersion", 1)
-                snap = dataset_service._snapshot(entry, v)
+                from api.models.execution_context import current_selection
+                from api.platform.data_resolution import dataset_frame
+                selection = current_selection.get()
+                v = selection.context.version if selection and selection.context.dataset_id == primary_id else entry.get("currentVersion", 1)
+                snap = selection.snapshot if selection and selection.context.dataset_id == primary_id else dataset_service._snapshot(entry, v)
                 if snap:
-                    df = dataset_service._frame(snap.get("rows", []), snap.get("columns", []))
+                    df = dataset_frame(entry, snap, v)
 
         if df is None:
-            from api.services.excel_dataset_service import excel_dataset_service
-            df = excel_dataset_service.get_df()
+            raise ValueError('No complete dataset is available for this request')
 
         records_total = len(df)
         return df, records_total, join_info
@@ -474,16 +510,36 @@ JSON:"""
         Correctly handles non-numeric columns for COUNT and string values with symbols.
         """
         filtered_df = df.copy()
+        allowed = {'SUM', 'AVG', 'MEAN', 'MIN', 'MAX', 'COUNT', 'COUNT_DISTINCT', 'DISTINCT'}
+        for spec in kpi_specs + chart_specs:
+            metric = spec.get('metric', '*')
+            if metric != '*' and metric not in df.columns:
+                match = next((c for c in df.columns if str(c).casefold() == str(metric).casefold()), None)
+                if match is None:
+                    raise ValueError(f"Unknown metric: {metric}")
+                spec['metric'] = metric = match
+            agg = str(spec.get('aggregation', 'SUM')).upper()
+            if agg not in allowed or (metric == '*' and agg != 'COUNT'):
+                raise ValueError(f"Unsupported aggregation {agg} for {metric}")
+            if spec in chart_specs and spec.get('dimension') not in df.columns:
+                raise ValueError(f"Unknown chart dimension: {spec.get('dimension')}")
+            if agg not in {'COUNT', 'COUNT_DISTINCT', 'DISTINCT'}:
+                values = df[metric]
+                numeric = pd.to_numeric(values, errors='coerce')
+                if (values.notna() & numeric.isna()).any():
+                    raise ValueError(f"{agg} requires a numeric metric: {metric}")
 
         # Apply basic filters if specified
         if filters:
+            from api.models.query_plan import Filter
+            filters = [Filter.model_validate({**condition, 'operator': {'==': '=', 'eq': '='}.get(condition.get('operator'), condition.get('operator', '='))}).model_dump() for condition in filters]
             for f in filters:
                 col = f.get("column")
                 op = f.get("operator", "==")
                 val = f.get("value")
-                if col in filtered_df.columns and val is not None:
+                if col in filtered_df.columns and (val is not None or op in ('IS_NULL', 'NOT_NULL')):
                     try:
-                        if op == "==":
+                        if op in ("==", "=", "eq"):
                             filtered_df = filtered_df[filtered_df[col] == val]
                         elif op == "!=":
                             filtered_df = filtered_df[filtered_df[col] != val]
@@ -491,8 +547,24 @@ JSON:"""
                             filtered_df = filtered_df[filtered_df[col] > float(val)]
                         elif op == "<":
                             filtered_df = filtered_df[filtered_df[col] < float(val)]
-                    except Exception:
-                        pass
+                        elif op == ">=":
+                            filtered_df = filtered_df[filtered_df[col] >= float(val)]
+                        elif op == "<=":
+                            filtered_df = filtered_df[filtered_df[col] <= float(val)]
+                        elif op == 'IN':
+                            filtered_df = filtered_df[filtered_df[col].isin(val)]
+                        elif op == 'CONTAINS':
+                            filtered_df = filtered_df[filtered_df[col].astype('string').str.contains(str(val), regex=False, case=False, na=False)]
+                        elif op == 'IS_NULL':
+                            filtered_df = filtered_df[filtered_df[col].isna()]
+                        elif op == 'NOT_NULL':
+                            filtered_df = filtered_df[filtered_df[col].notna()]
+                        else:
+                            raise ValueError(f"Unsupported filter operator: {op}")
+                    except Exception as exc:
+                        raise ValueError(f"Invalid filter for {col}") from exc
+                else:
+                    raise ValueError(f"Unknown filter column or missing value: {col}")
 
         records_matched = len(filtered_df)
 
@@ -545,6 +617,7 @@ JSON:"""
                 "aggregation": agg,
                 "format": fmt,
                 "subtitle": spec.get("subtitle", f"{agg} across portfolio"),
+                "query_plan": {"metric": metric, "aggregation": agg, "filters": filters or []},
             })
 
         # 2. Compute Charts
@@ -567,13 +640,16 @@ JSON:"""
 
             try:
                 data_points = []
-                if agg in ("COUNT", "COUNT_DISTINCT") or metric == "*" or metric == dim:
+                if agg in ("COUNT", "COUNT_DISTINCT", "DISTINCT"):
                     # Frequency distribution by dimension
                     if agg in ("COUNT_DISTINCT", "DISTINCT") and metric != "*" and metric in filtered_df.columns and metric != dim:
                         grouped = filtered_df.groupby(dim, as_index=False)[metric].nunique()
                         grouped.columns = [dim, "count"]
+                    elif metric != '*':
+                        grouped = filtered_df.groupby(dim, dropna=False)[metric].count().reset_index()
+                        grouped.columns = [dim, "count"]
                     else:
-                        grouped = filtered_df[dim].value_counts().reset_index()
+                        grouped = filtered_df.groupby(dim, dropna=False).size().reset_index()
                         grouped.columns = [dim, "count"]
 
                     grouped = grouped.sort_values(by="count", ascending=False).head(15)
@@ -617,19 +693,10 @@ JSON:"""
                     "aggregation": agg,
                     "data": data_points,
                     "total_categories": len(data_points),
+                    "query_plan": {"metric": metric, "dimension": dim, "aggregation": agg, "filters": filters or []},
                 })
             except Exception as e:
-                logger.warning(f"[GenAIDashboardService] Chart computation error for {title}: {e}")
-                chart_results.append({
-                    "id": spec.get("id"),
-                    "title": title,
-                    "kind": kind,
-                    "metric": metric,
-                    "dimension": dim,
-                    "aggregation": agg,
-                    "data": [],
-                    "error": str(e)
-                })
+                raise ValueError(f"Chart computation failed for {title}") from e
 
         return {
             "records_matched": records_matched,
@@ -825,123 +892,65 @@ JSON:"""
         dataset_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Executes a dedicated Python script with Matplotlib & Seaborn directly ON THE ACTUAL DataFrame.
-        Guarantees accurate, high-resolution rendering without stale Excel fallback crashes.
+        Render the application-owned Matplotlib/Seaborn template on the actual frame.
+        User text remains plotting data and never becomes executable script source.
         """
         if df is None or df.empty:
             return None
 
-        script_id = uuid.uuid4().hex[:8]
-        temp_csv = self.temp_dir / f"data_{script_id}.csv"
-        temp_script = self.temp_dir / f"plot_{script_id}.py"
-        temp_png = self.temp_dir / f"plot_{script_id}.png"
-
+        # Render the existing application-owned template directly. Request titles and
+        # column names stay data; they are never interpolated into executable Python.
         try:
-            # 1. Save active DataFrame to temp CSV
-            df.to_csv(temp_csv, index=False)
-
+            import io
+            import seaborn as sns
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_agg import FigureCanvasAgg
             chart_type = py_spec.get("chart_type", "bar").lower()
             sub_prompt = py_spec.get("prompt") or f"Visual analysis for: {user_prompt}"
-
-            # Identify numeric and categorical columns in the actual DataFrame
-            num_cols = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith('id')]
-            cat_cols = [c for c in df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith('id')]
-
-            # Pick best columns
-            plot_cat = cat_cols[0] if cat_cols else (df.columns[0] if len(df.columns) > 0 else "")
+            num_cols = [c for c in df.select_dtypes(include=["number"]).columns if not str(c).lower().endswith("id")]
+            cat_cols = [c for c in df.select_dtypes(include=["object", "string"]).columns if not str(c).lower().endswith("id")]
+            plot_cat = cat_cols[0] if cat_cols else (df.columns[0] if len(df.columns) else "")
             plot_num = num_cols[0] if num_cols else (cat_cols[1] if len(cat_cols) > 1 else plot_cat)
-
-            # Check if prompt specifies particular columns
-            for c in df.columns:
-                if c.lower() in sub_prompt.lower() or c.lower().replace('_', ' ') in sub_prompt.lower():
-                    if c in cat_cols:
-                        plot_cat = c
-                    elif c in num_cols:
-                        plot_num = c
-
-            # Formulate robust Matplotlib & Seaborn script
-            py_code = f"""import sys
-import pandas as pd
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-try:
-    df = pd.read_csv(r'{str(temp_csv)}')
-    sns.set_theme(style='whitegrid', font='sans-serif')
-    fig, ax = plt.subplots(figsize=(10, 5.2), dpi=150)
-
-    chart_type = '{chart_type}'
-    plot_cat = '{plot_cat}'
-    plot_num = '{plot_num}'
-
-    if (chart_type == 'heatmap' or 'correlation' in chart_type) and len({num_cols}) >= 2:
-        corr = df[{num_cols}].corr(numeric_only=True)
-        sns.heatmap(corr, annot=True, cmap='Blues', fmt='.2f', cbar=True, square=True, ax=ax, linewidths=0.5)
-        ax.set_title('Correlation Matrix ({user_prompt[:35]})', fontsize=12, fontweight='bold', pad=12)
-    elif plot_cat and plot_cat in df.columns:
-        # Categorical bar / countplot
-        top_cats = df[plot_cat].value_counts().head(10)
-        palette = sns.color_palette('Blues_r', len(top_cats))
-        bars = ax.bar([str(x) for x in top_cats.index], top_cats.values, color=palette, edgecolor='#1e3a8a', linewidth=0.8)
-        for b in bars:
-            h = b.get_height()
-            ax.annotate(f'{{int(h)}}', (b.get_x() + b.get_width() / 2., h),
-                        ha='center', va='bottom', fontsize=9, fontweight='bold', xytext=(0, 3), textcoords='offset points')
-        ax.set_title('{sub_prompt[:60]}', fontsize=11, fontweight='bold', pad=12)
-        ax.set_xlabel(plot_cat, fontweight='bold', fontsize=10)
-        ax.set_ylabel('Count of Records', fontweight='bold', fontsize=10)
-        ax.tick_params(axis='x', rotation=25)
-    elif plot_num and plot_num in df.columns:
-        sns.histplot(df[plot_num].dropna(), kde=True, color='#2563eb', ax=ax)
-        ax.set_title('{sub_prompt[:60]}', fontsize=11, fontweight='bold', pad=12)
-        ax.set_xlabel(plot_num, fontweight='bold', fontsize=10)
-    else:
-        ax.text(0.5, 0.5, 'Data visualization generated successfully', ha='center', va='center')
-
-    plt.tight_layout()
-    plt.savefig(r'{str(temp_png)}', dpi=150, bbox_inches='tight')
-    plt.close()
-    print('SUCCESS')
-except Exception as e:
-    print(f'ERROR: {{e}}', file=sys.stderr)
-    sys.exit(1)
-"""
-            with open(temp_script, "w", encoding="utf-8") as f:
-                f.write(py_code)
-
-            proc = subprocess.run(
-                [sys.executable, str(temp_script)],
-                capture_output=True,
-                text=True,
-                timeout=25
-            )
-
-            if proc.returncode == 0 and temp_png.exists():
-                with open(temp_png, "rb") as img_file:
-                    b64_str = f"data:image/png;base64,{base64.b64encode(img_file.read()).decode('utf-8')}"
-                return {
-                    "image_base64": b64_str,
-                    "chart_type": chart_type,
-                    "prompt": sub_prompt,
-                    "verified": True,
-                    "insights": f"Visual distribution rendered via Seaborn on {len(df)} validated dataset records."
-                }
+            for column in df.columns:
+                if column.lower() in sub_prompt.lower() or column.lower().replace("_", " ") in sub_prompt.lower():
+                    if column in cat_cols:
+                        plot_cat = column
+                    elif column in num_cols:
+                        plot_num = column
+            figure = Figure(figsize=(10, 5.2), dpi=150)
+            FigureCanvasAgg(figure)
+            axis = figure.subplots()
+            if (chart_type == "heatmap" or "correlation" in chart_type) and len(num_cols) >= 2:
+                sns.heatmap(df[num_cols].corr(numeric_only=True), annot=True, cmap="Blues", fmt=".2f",
+                            cbar=True, square=True, ax=axis, linewidths=0.5)
+                axis.set_title(f"Correlation Matrix ({user_prompt[:35]})", fontsize=12, fontweight="bold", pad=12)
+            elif plot_cat and plot_cat in df.columns:
+                top = df[plot_cat].value_counts().head(10)
+                bars = axis.bar([str(x) for x in top.index], top.values, color=sns.color_palette("Blues_r", len(top)),
+                                edgecolor="#1e3a8a", linewidth=0.8)
+                for bar in bars:
+                    height = bar.get_height()
+                    axis.annotate(str(int(height)), (bar.get_x() + bar.get_width() / 2, height), ha="center",
+                                  va="bottom", fontsize=9, fontweight="bold", xytext=(0, 3), textcoords="offset points")
+                axis.set_title(sub_prompt[:60], fontsize=11, fontweight="bold", pad=12)
+                axis.set_xlabel(plot_cat, fontweight="bold", fontsize=10)
+                axis.set_ylabel("Count of Records", fontweight="bold", fontsize=10)
+                axis.tick_params(axis="x", rotation=25)
+            elif plot_num and plot_num in df.columns:
+                sns.histplot(df[plot_num].dropna(), kde=True, color="#2563eb", ax=axis)
+                axis.set_title(sub_prompt[:60], fontsize=11, fontweight="bold", pad=12)
+                axis.set_xlabel(plot_num, fontweight="bold", fontsize=10)
             else:
-                logger.warning(f"[GenAIDashboardService] Python execution error: {proc.stderr[:300]}")
-        except Exception as e:
-            logger.warning(f"[GenAIDashboardService] Python visual execution failed: {e}")
-        finally:
-            # Clean up temp files
-            for p in (temp_csv, temp_script, temp_png):
-                try:
-                    if p.exists():
-                        p.unlink()
-                except Exception:
-                    pass
-
-        return None
+                raise ValueError('No supported columns are available for this visualization')
+            figure.tight_layout()
+            output = io.BytesIO()
+            figure.savefig(output, format="png", dpi=150, bbox_inches="tight")
+            return {"image_base64": "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii"),
+                    "chart_type": chart_type, "prompt": sub_prompt, "verified": True,
+                    "insights": f"Visual distribution rendered via Seaborn on {len(df)} validated dataset records."}
+        except Exception as exc:
+            logger.warning("[GenAIDashboardService] Visualization failed (%s)", type(exc).__name__, exc_info=True)
+            return None
 
     # ──────────────────────────────────────────────────────────────────────────
     # SSE Stream Generator: Real-time Step-by-Step Execution
@@ -954,15 +963,18 @@ except Exception as e:
     ) -> Generator[Dict[str, Any], None, None]:
         """Yields real-time step events (1-10) for streaming loaders."""
         start_time = time.time()
+        workflow_steps = []
 
         def step_event(num: int, name: str, detail: str) -> Dict[str, Any]:
-            return {
+            event = {
                 "type": "step",
                 "step": num,
                 "name": name,
                 "detail": detail,
                 "timestamp": round((time.time() - start_time) * 1000, 1),
             }
+            workflow_steps.append({**event, 'status': 'completed'})
+            return event
 
         # Step 1
         yield step_event(1, "Understand", f"Interpreting conversational intent and requested metrics for '{prompt[:45]}...'")
@@ -973,6 +985,31 @@ except Exception as e:
 
         # Step 3
         plan = self._interpret_query_with_llm(prompt, schemas, conversation_history, target_dataset_id)
+        from api.platform.widget_contract import requested_counts, widget_signature
+        for key, count in requested_counts(prompt).items():
+            candidates = plan.get(key) or []
+            if len(candidates) < count:
+                raise ValueError(f"Could not resolve all {count} requested {key}. Specify the missing fields or calculation.")
+            plan[key] = candidates[:count]
+
+        # Read persisted definitions before proposing another equivalent widget.
+        from api.platform.semantic import semantic_registry
+        from api.models.execution_context import current_selection
+        selection = current_selection.get()
+        known = set()
+        if selection:
+            namespace = semantic_registry.namespace(selection.entry, selection.context.version,
+                                                    f"analytics:{selection.context.semantic_revision}")
+            known = {widget_signature(doc['value']) for doc in semantic_registry.store.list(namespace)}
+        regenerate = bool(re.search(r'\b(regenerate|replace|recreate)\b', prompt, re.I))
+        for key, default_kind in [('kpis', 'kpi'), ('charts', 'bar')]:
+            unique = []
+            for item in plan.get(key) or []:
+                signature = widget_signature({**item, 'kind': item.get('kind', default_kind)})
+                if signature not in known or regenerate:
+                    unique.append(item)
+                    known.add(signature)
+            plan[key] = unique
         yield step_event(3, "Identify", f"Identified primary metrics & {len(plan.get('kpis', []))} KPI measures.")
 
         # Step 4
@@ -984,16 +1021,17 @@ except Exception as e:
         # Step 5
         df, records_total, join_info = self._load_data_frame(plan, schemas)
         sql_query = plan.get("sql_query", f"SELECT * FROM {schemas[0]['table_name']} LIMIT 10")
-        yield step_event(5, "Generate & Execute", "Synthesized dynamic SQL query and executed plan against data engine.")
+        yield step_event(5, "Generate & Execute", "Prepared SQL and loaded the complete dataset for DataFrame execution.")
 
         # Step 6
         exec_results = self._execute_aggregations(
             df=df,
             kpi_specs=plan.get("kpis", []),
             chart_specs=plan.get("charts", []),
+            filters=plan.get("filters"),
         )
         records_matched = exec_results["records_matched"]
-        yield step_event(6, "Validate", f"Validated consistency: {records_matched:,} records matched without fan-out.")
+        yield step_event(6, "Validate", f"Validated calculations over {records_matched:,} matching rows.")
 
         # Step 7
         insights = self._synthesize_insights(
@@ -1013,6 +1051,7 @@ except Exception as e:
             executed_charts=exec_results["charts"],
             df=df
         )
+        recommendations = [item for item in recommendations if widget_signature(item) not in known]
         yield step_event(8, "Recommend", f"Generated {len(recommendations)} proactive AI widget recommendations.")
 
         # Step 9
@@ -1020,34 +1059,24 @@ except Exception as e:
         yield step_event(9, "Render", f"Structured {len(exec_results['kpis'])} KPI cards and {len(exec_results['charts'])} chart widgets.")
 
         # Step 10
-        py_visual = self._generate_python_visualization(
-            py_spec=plan.get("python_visual", {"chart_type": "bar", "prompt": f"Visual analysis of {prompt[:40]}"}),
-            user_prompt=prompt,
-            df=df,
-            dataset_id=target_dataset_id if target_dataset_id != "all" else None
-        )
-        yield step_event(10, "Visualize", "Rendered interactive widgets and generated Python Matplotlib/Seaborn graphics.")
+        py_visual = None
+        if re.search(r'\b(python|matplotlib|seaborn)\b', prompt, re.I):
+            from api.services.python_graph_agent import python_graph_agent
+            py_visual = python_graph_agent.generate_custom_graph(prompt)
+            if py_visual.get('status') == 'error' or not py_visual.get('image_base64'):
+                raise ValueError(py_visual.get('message') or 'Python chart execution did not produce an image')
+        yield step_event(10, "Visualize", "Rendered validated widgets." + (" Executed Python visualization." if py_visual else ""))
 
         total_elapsed_ms = round((time.time() - start_time) * 1000, 1)
 
         result_payload = {
             "status": "success",
             "dashboard_id": dashboard_id,
+            "context": selection.context.model_dump() if selection else None,
             "prompt": prompt,
             "intent_summary": plan.get("intent_summary", "Dynamic analytical dashboard"),
             "execution_time_ms": total_elapsed_ms,
-            "workflow_steps": [
-                {"step": "Step 1", "name": "Understand", "detail": "Interpreted natural language query", "timestamp": 20, "status": "completed"},
-                {"step": "Step 2", "name": "Explore", "detail": f"Inspected {len(schemas)} schemas", "timestamp": 40, "status": "completed"},
-                {"step": "Step 3", "name": "Identify", "detail": "Extracted metrics & dimensions", "timestamp": 60, "status": "completed"},
-                {"step": "Step 4", "name": "Relate", "detail": "Validated relationship structure", "timestamp": 80, "status": "completed"},
-                {"step": "Step 5", "name": "Generate & Execute", "detail": "Executed SQL plan", "timestamp": 120, "status": "completed"},
-                {"step": "Step 6", "name": "Validate", "detail": f"{records_matched:,} records validated", "timestamp": 160, "status": "completed"},
-                {"step": "Step 7", "name": "Analyze", "detail": "Synthesized executive findings", "timestamp": 200, "status": "completed"},
-                {"step": "Step 8", "name": "Recommend", "detail": f"{len(recommendations)} recommendations prepared", "timestamp": 240, "status": "completed"},
-                {"step": "Step 9", "name": "Render", "detail": "Configured dashboard layout", "timestamp": 280, "status": "completed"},
-                {"step": "Step 10", "name": "Visualize", "detail": "Completed visualizations", "timestamp": total_elapsed_ms, "status": "completed"},
-            ],
+            "workflow_steps": workflow_steps,
             "sql_info": {
                 "sql_query": sql_query,
                 "join_required": plan.get("join_required", False),
@@ -1055,7 +1084,9 @@ except Exception as e:
                 "join_rationale": plan.get("join_rationale"),
                 "join_info": join_info,
                 "records_matched": records_matched,
-                "records_total": records_total
+                "records_total": records_total,
+                "execution_backend": "dataframe",
+                "sql_executed": False,
             },
             "kpi_cards": exec_results["kpis"],
             "charts": exec_results["charts"],
@@ -1092,6 +1123,8 @@ except Exception as e:
     ) -> Dict[str, Any]:
         """Calculates and returns execution data for an accepted recommended widget."""
         schemas = self.explore_schemas(target_dataset_id)
+        if not schemas:
+            raise ValueError('No accessible datasets are available for widget execution')
         plan = {
             "target_datasets": [target_dataset_id] if target_dataset_id and target_dataset_id != "all" else [schemas[0]["dataset_id"]],
             "join_required": False
@@ -1100,10 +1133,10 @@ except Exception as e:
 
         kind = widget_spec.get("kind", "bar")
         if kind == "kpi":
-            res = self._execute_aggregations(df, [widget_spec], [])
+            res = self._execute_aggregations(df, [widget_spec], [], filters=(widget_spec.get('query_plan') or {}).get('filters'))
             return {"kind": "kpi", "widget": res["kpis"][0] if res["kpis"] else widget_spec}
         else:
-            res = self._execute_aggregations(df, [], [widget_spec])
+            res = self._execute_aggregations(df, [], [widget_spec], filters=(widget_spec.get('query_plan') or {}).get('filters'))
             return {"kind": kind, "widget": res["charts"][0] if res["charts"] else widget_spec}
 
 

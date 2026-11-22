@@ -57,7 +57,7 @@ RULES:
 7. "sort" is null or {{"column": "<col>", "direction": "ASC|DESC"}}
 8. "limit" is null or a positive integer (for top/bottom N)
 9. "chart_type" is null or one of: "bar", "line", "pie", "donut", "scatter", "area", "heatmap", "box", "violin", "funnel", "waterfall", "treemap", "stacked_bar", "horizontal_bar"
-10. "requires_vector_search": true if the question needs semantic context from the knowledge base
+10. "requires_vector_search": true if the question needs semantic context from the workspace datasets or knowledge base. For general knowledge or conversation unrelated to workspace data, set intent="chat", requires_vector_search=false and requires_structured_query=false. For ambiguous data follow-ups keep requires_vector_search=true; never treat missing dataset evidence as general knowledge.
 11. "requires_structured_query": true if the question needs data calculation from the dataset
 
 Map user terms directly to the actual matching column names from the provided DATASET SCHEMA based on business semantics, synonyms, and context.

@@ -50,17 +50,34 @@ if (existingToken) {
 
 let cachedCsrfToken: string | null = null;
 
+export function streamingRequestHeaders(datasetId?: string): Record<string, string> {
+  const token = getStoredToken();
+  const context = contextHeaders();
+  if (datasetId && context['X-Dataset-Id'] !== datasetId) {
+    delete context['X-Dataset-Version'];
+    delete context['X-Semantic-Revision'];
+  }
+  return { ...context, ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(cachedCsrfToken ? { 'x-csrf-token': cachedCsrfToken } : {}) };
+}
+
 interface ExtendedAxiosRequestConfig extends InternalAxiosRequestConfig {
   _csrfRetried?: boolean;
   _authRetried?: boolean;
 }
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  Object.entries(contextHeaders()).forEach(([key, value]) => {
+  const inheritedContext = contextHeaders();
+  const requestedDataset = config.headers.get('X-Dataset-Id');
+  if (requestedDataset && requestedDataset !== inheritedContext['X-Dataset-Id']) {
+    delete inheritedContext['X-Dataset-Version'];
+    delete inheritedContext['X-Semantic-Revision'];
+  }
+  Object.entries(inheritedContext).forEach(([key, value]) => {
     if (config.headers && typeof (config.headers as any).set === 'function') {
-      (config.headers as any).set(key, value);
+      if (!(config.headers as any).has(key)) (config.headers as any).set(key, value);
     } else {
-      config.headers[key] = value;
+      if (config.headers[key] === undefined) config.headers[key] = value;
     }
   });
 

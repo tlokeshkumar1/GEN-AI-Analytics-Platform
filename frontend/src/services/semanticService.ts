@@ -1,4 +1,4 @@
-import api from './api';
+import api, { streamingRequestHeaders } from './api';
 
 export interface SemanticField {
   name: string;
@@ -200,6 +200,7 @@ export interface GenAISqlInfo {
 }
 
 export interface GenAIKpiCard {
+  query_plan?: Record<string, any>;
   id: string;
   title: string;
   value: number | string;
@@ -216,6 +217,7 @@ export interface GenAIChartPoint {
 }
 
 export interface GenAIChart {
+  query_plan?: Record<string, any>;
   id: string;
   title: string;
   kind: string;
@@ -247,6 +249,7 @@ export interface GenAIRecommendation {
 }
 
 export interface GenAIDashboardResponse {
+  context?: { dataset_id: string; version: number; semantic_revision: number };
   status: 'success' | 'error';
   dashboard_id: string;
   prompt: string;
@@ -288,9 +291,12 @@ export const generateGenAiDashboardStream = async (
   },
   onStep?: (step: { step: number; name: string; detail: string; timestamp: number }) => void
 ): Promise<GenAIDashboardResponse> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180_000);
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...streamingRequestHeaders(params.dataset_id),
     };
     if (params.dataset_id && params.dataset_id !== 'all') {
       headers['X-Dataset-Id'] = params.dataset_id;
@@ -300,11 +306,14 @@ export const generateGenAiDashboardStream = async (
       method: 'POST',
       headers,
       body: JSON.stringify(params),
+      credentials: 'include',
+      signal: controller.signal,
     });
 
-    if (!response.ok || !response.body) {
+    if ([404, 405].includes(response.status)) {
       return await generateGenAiDashboard(params);
     }
+    if (!response.ok || !response.body) throw new Error(`Dashboard request failed (${response.status}).`);
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -322,9 +331,7 @@ export const generateGenAiDashboardStream = async (
       for (const line of lines) {
         const trimmed = line.trim();
         if (trimmed.startsWith('data: ')) {
-          try {
-            const jsonStr = trimmed.slice(6);
-            const data = JSON.parse(jsonStr);
+            const data = JSON.parse(trimmed.slice(6));
             if (data.type === 'step' && onStep) {
               onStep(data);
             } else if (data.type === 'result') {
@@ -332,28 +339,34 @@ export const generateGenAiDashboardStream = async (
             } else if (data.type === 'error') {
               throw new Error(data.message || 'Stream processing error');
             }
-          } catch (e) {
-            // Partial chunk or parse error
-          }
         }
       }
     }
 
-    if (finalResult) return finalResult;
+    if (finalResult?.status === 'success') return finalResult;
+    throw new Error(finalResult?.message || 'Dashboard execution ended before completion. Retry explicitly.');
   } catch (err) {
-    // Fallback to standard HTTP post if stream is interrupted or fails
+    if (controller.signal.aborted) throw new Error('Dashboard execution exceeded its timeout. Check processing status before retrying.');
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
   }
-
-  return await generateGenAiDashboard(params);
 };
 
 export const executeGenAiWidget = async (params: {
   widget: Record<string, any>;
   dataset_id?: string;
+  context?: { dataset_id: string; version: number; semantic_revision: number };
 }): Promise<{ kind: string; widget: any }> => {
   const headers: Record<string, string> = {};
   if (params.dataset_id && params.dataset_id !== 'all') {
     headers['X-Dataset-Id'] = params.dataset_id;
+  }
+  if (params.context) {
+    headers['X-Dataset-Id'] = params.context.dataset_id;
+    headers['X-Dataset-Version'] = String(params.context.version);
+    headers['X-Semantic-Revision'] = String(params.context.semantic_revision);
   }
   return (
     await api.post<{ kind: string; widget: any }>(

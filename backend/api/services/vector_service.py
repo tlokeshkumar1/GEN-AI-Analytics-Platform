@@ -54,7 +54,18 @@ class VectorService:
         from api.models.execution_context import current_selection, current_identity
 
         if current_selection.get() is not None or dataset_service.repository is not None or dataset_service.catalog_path.exists():
-            return dataset_service.search(text_query, top_k)
+            # An explicitly named dataset narrows retrieval to that authorized dataset.
+            catalog = dataset_service._catalog()
+            query = text_query.casefold()
+            matches = {identifier for identifier, entry in catalog.get("datasets", {}).items()
+                       if any(str(name).casefold() in query for name in
+                              (entry.get("name"), entry.get("displayName"), entry.get("tableName"), identifier)
+                              if name and len(str(name)) > 3)}
+            selected_id = next(iter(matches)) if len(matches) == 1 else None
+            if selected_id:
+                from api.models.execution_context import require_dataset_access
+                require_dataset_access(catalog["datasets"][selected_id], for_chat=True)
+            return dataset_service.search(text_query, top_k, dataset_id=selected_id)
 
         # Check bounded cache with workspace isolation
         identity = current_identity.get()

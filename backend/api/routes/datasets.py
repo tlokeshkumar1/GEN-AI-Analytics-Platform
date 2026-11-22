@@ -292,6 +292,57 @@ def activate(dataset_id: str):
 def reindex(dataset_id: str):
     return dataset_service.reindex(dataset_id)
 
+
+@router.post("/{dataset_id}/retry-ingestion")
+def retry_ingestion(dataset_id: str, version: int = Query(ge=1)):
+    """Retry failed storage without reuploading or creating another data version."""
+    from api.database.hana_table_service import hana_table_service
+    from api.platform.semantic import semantic_registry
+    with dataset_service._writer():
+        catalog = dataset_service._catalog()
+        entry = dataset_service._entry(catalog, dataset_id)
+        require_dataset_access(entry, write=True)
+        if version != entry["currentVersion"]:
+            raise HTTPException(409, "Only the current version can retry ingestion.")
+        meta = next(v for v in entry["versions"] if v["version"] == version)
+        if meta.get("ingestionStatus") != "partial":
+            return {"status": "unchanged", "dataset_id": dataset_id, "version": version}
+        if meta.get("storageAction") == "append":
+            raise HTTPException(409, "Reconcile the destination before retrying an append; some rows may already have committed.")
+        models = semantic_registry.list(entry, version)
+        if not models:
+            raise HTTPException(409, "Save the semantic model before retrying ingestion.")
+        snapshot = dataset_service._snapshot(entry, version)
+        table = meta.get("storageTarget")
+        if meta.get("storageAction") != "none" and not meta.get('storageReady'):
+            if not table:
+                raise HTTPException(409, "The failed stage has no recorded storage target.")
+            result = hana_table_service.persist_dataframe(
+                df=dataset_service._frame(snapshot["rows"], snapshot["columns"]),
+                table_name=table, action=meta.get("storageAction") or "replace",
+            )
+            if not result.get("success"):
+                raise HTTPException(503, "HANA synchronization failed. The saved version remains available for retry.")
+            entry.update(tableName=table, table_name=table, cloudTable=result)
+            meta["tableName"] = table
+            meta['storageReady'] = True
+            dataset_service._write_json(dataset_service.catalog_path, catalog)
+        # Resume the blocked recommendation agent after its storage prerequisite succeeds.
+        from api.platform.agent_chart_recommender import chart_recommender_agent
+        revision = max(model['revision'] for model in models)
+        model = semantic_registry.get(entry, version, revision)
+        try:
+            recommendations = chart_recommender_agent.recommend(
+                dataset_service._frame(snapshot['rows'], snapshot['columns']), model,
+                dataset_name=entry.get('displayName') or entry.get('name'))
+            semantic_registry.persist_recommendations(entry, version, revision, recommendations, model=model)
+        except Exception as exc:
+            logger.warning('Recommendation retry failed (%s)', type(exc).__name__)
+            raise HTTPException(503, 'Storage succeeded, but recommendation generation failed. Retry ingestion to resume this stage.') from None
+        meta["ingestionStatus"] = entry["ingestionStatus"] = "ready"
+        dataset_service._write_json(dataset_service.catalog_path, catalog)
+    return {"status": "success", "dataset_id": dataset_id, "version": version, 'recommendations': recommendations}
+
 @router.delete("/{dataset_id}")
 def delete_dataset(dataset_id: str):
     return dataset_service.delete(dataset_id)

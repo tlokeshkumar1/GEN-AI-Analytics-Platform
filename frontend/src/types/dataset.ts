@@ -33,6 +33,7 @@ export interface DatasetItem {
   source: string;
   sizeBytes?: number;
   status: 'Ready' | 'Ingesting' | 'Error';
+  ingestionStatus?: 'ready' | 'partial';
   columns: DatasetColumn[];
   currentVersion?: number;
   currentFilename?: string;

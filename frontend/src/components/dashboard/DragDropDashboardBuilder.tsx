@@ -912,6 +912,8 @@ export function DragDropDashboardBuilder({
                         revision: 1,
                         semantic_revision: model?.revision || 1,
                         status: 'approved',
+                        dependencies: [],
+                        explanation: '',
                         query_plan: {
                           metric: createdWidget.metric,
                           aggregation: createdWidget.aggregation,

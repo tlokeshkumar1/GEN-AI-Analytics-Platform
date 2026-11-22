@@ -1,6 +1,8 @@
 import unittest
 import sys
+import sqlite3
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 if str(BASE_DIR) not in sys.path:
@@ -11,11 +13,83 @@ from api.app import app
 from api.database.hana_table_service import hana_table_service
 
 
+class CatalogCursor:
+    """DB-API boundary: SQLite executes SQL against a small HANA catalog fixture."""
+    def __init__(self, connection):
+        self.connection = connection
+        self.cursor = connection.database.cursor()
+
+    def execute(self, sql, params=()):
+        self.connection.statements.append((sql, params))
+        if sql.strip().upper().startswith("SET SCHEMA"):
+            return self
+        sql = sql.replace("CURRENT_SCHEMA", "'TEST_SCHEMA'").replace('"TEST_SCHEMA".', '')
+        self.cursor.execute(sql, params)
+        return self
+
+    def __getattr__(self, name):
+        return getattr(self.cursor, name)
+
+
+class CatalogConnection:
+    def __init__(self):
+        self.database = sqlite3.connect(":memory:", check_same_thread=False)
+        self.statements = []
+        self.database.executescript('''
+            ATTACH DATABASE ':memory:' AS SYS;
+            CREATE TABLE SALES_ANALYTICS (ORDERID TEXT, REGION TEXT, REVENUE INTEGER);
+            INSERT INTO SALES_ANALYTICS VALUES ('001', 'East', 10), ('002', 'West', 20), ('003', 'East', 30);
+            CREATE TABLE VECTOR_TABLE (ID TEXT);
+            CREATE TABLE SYS.TABLES (SCHEMA_NAME TEXT, TABLE_NAME TEXT, TABLE_TYPE TEXT);
+            INSERT INTO SYS.TABLES VALUES ('TEST_SCHEMA', 'SALES_ANALYTICS', 'COLUMN'), ('TEST_SCHEMA', 'VECTOR_TABLE', 'COLUMN');
+            CREATE TABLE SYS.M_TABLES (SCHEMA_NAME TEXT, TABLE_NAME TEXT, RECORD_COUNT INTEGER);
+            INSERT INTO SYS.M_TABLES VALUES ('TEST_SCHEMA', 'SALES_ANALYTICS', 3), ('TEST_SCHEMA', 'VECTOR_TABLE', 0);
+            CREATE TABLE SYS.M_DATABASE (VERSION TEXT);
+            INSERT INTO SYS.M_DATABASE VALUES ('offline-driver-fixture');
+            CREATE TABLE SYS.TABLE_COLUMNS (
+                SCHEMA_NAME TEXT, TABLE_NAME TEXT, COLUMN_NAME TEXT, DATA_TYPE_NAME TEXT,
+                LENGTH INTEGER, SCALE INTEGER, IS_NULLABLE TEXT, POSITION INTEGER, DEFAULT_VALUE TEXT, COMMENTS TEXT);
+            INSERT INTO SYS.TABLE_COLUMNS VALUES
+                ('TEST_SCHEMA', 'SALES_ANALYTICS', 'ORDERID', 'NVARCHAR', 50, 0, 'TRUE', 1, NULL, NULL),
+                ('TEST_SCHEMA', 'SALES_ANALYTICS', 'REGION', 'NVARCHAR', 50, 0, 'TRUE', 2, NULL, NULL),
+                ('TEST_SCHEMA', 'SALES_ANALYTICS', 'REVENUE', 'INTEGER', 10, 0, 'TRUE', 3, NULL, NULL),
+                ('TEST_SCHEMA', 'VECTOR_TABLE', 'ID', 'NVARCHAR', 50, 0, 'TRUE', 1, NULL, NULL);
+        ''')
+
+    def cursor(self):
+        return CatalogCursor(self)
+
+    def setautocommit(self, enabled):
+        self.database.isolation_level = None if enabled else ""
+
+    def __getattr__(self, name):
+        return getattr(self.database, name)
+
+
 class TestHanaAdmin(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(app)
         cls.auth_headers = {"Authorization": "Bearer dev-token-local:admin@sap.com:Admin:12345678"}
+
+    def setUp(self):
+        # Exercise real services/routes and SQL without assuming an external HANA
+        # instance or a developer's XSUAA binding exists on the test machine.
+        self.connection = CatalogConnection()
+        self.addCleanup(self.connection.close)
+        self.manager = Mock()
+        self.manager.get_connection.return_value = self.connection
+        dependencies = [
+            patch("api.database.hana_table_service.db_manager", self.manager),
+            patch("api.database.hana_table_service.settings.HANA_SCHEMA", "TEST_SCHEMA"),
+            patch("api.database.hana_table_service.settings.HANA_ADDRESS", "offline-test.local"),
+            patch("api.xsuaa.authenticated_profile", return_value={"user_id": "test-admin", "role": "Admin", "roles": ["Admin"]}),
+        ]
+        for dependency in dependencies:
+            dependency.start()
+            self.addCleanup(dependency.stop)
+        hana_table_service.clear_overview_cache()
+        self.addCleanup(hana_table_service.clear_overview_cache)
 
     def test_database_stats(self):
         stats = hana_table_service.get_database_stats()
@@ -49,6 +123,25 @@ class TestHanaAdmin(unittest.TestCase):
         self.assertGreaterEqual(len(data["rows"]), 0)
         self.assertEqual(data["page"], 1)
         self.assertGreaterEqual(data["totalPages"], 0)
+        self.assertEqual(data["totalRows"], 3)
+        self.assertEqual([row["ORDERID"] for row in data["rows"]], ["001", "002", "003"])
+
+    def test_search_and_descending_pagination_use_actual_rows(self):
+        data = hana_table_service.get_table_data("SALES_ANALYTICS", page=1, page_size=1,
+                                                 sort_col="ORDERID", sort_dir="DESC", search="east")
+        self.assertEqual(data["filteredRows"], 2)
+        self.assertEqual(data["rows"][0]["ORDERID"], "003")
+        self.assertEqual(data["totalPages"], 2)
+
+    def test_disconnected_database_is_reported_offline(self):
+        self.manager.get_connection.return_value = None
+        self.assertFalse(hana_table_service.get_database_stats()["connected"])
+
+    def test_members_cannot_access_admin_routes(self):
+        with patch("api.xsuaa.authenticated_profile", return_value={"user_id": "member", "role": "Member", "roles": ["Member"]}):
+            response = self.client.get("/api/hanaadmin", headers=self.auth_headers)
+        self.assertEqual(response.status_code, 403)
+        self.manager.get_connection.assert_not_called()
 
     def test_read_only_query_security(self):
         # Valid read-only query

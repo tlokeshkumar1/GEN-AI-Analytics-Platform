@@ -77,7 +77,7 @@ class DataService:
                 hint = sel.entry.get("physical_table_name") or sel.entry.get("name")
             target_table = datasets_metadata_repo._resolve_physical_table(hint)
             from api.database.hana_client import hana_client
-            rows = hana_client.execute_query(f'SELECT * FROM "{target_table}" LIMIT 100')
+            rows = hana_client.execute_query(f'SELECT * FROM "{target_table}"', native_types=True)
             if rows:
                 self._df = pd.DataFrame(rows)
                 logger.info(f"Schema sample loaded directly from SAP HANA Cloud {target_table}. Shape: {self._df.shape}")
@@ -94,6 +94,12 @@ class DataService:
         from api.models.execution_context import current_selection
         if current_selection.get() is not None:
             return current
+        if current is None or current.empty:
+            from api.services.dataset_service import dataset_service
+            from api.platform.data_resolution import dataset_frame
+            entry, snapshot = dataset_service.active()
+            if entry is not None and snapshot is not None:
+                return dataset_frame(entry, snapshot, entry["currentVersion"])
         if current is not None and not current.empty:
             if current is not self._df:
                 self._df = current
@@ -111,6 +117,10 @@ class DataService:
         from api.platform.datasets_metadata_repository import datasets_metadata_repo
         from api.models.execution_context import current_selection
         sel = current_selection.get()
+        if sel:
+            from api.platform.data_resolution import current_table
+            if current_table(sel.entry, sel.context.version) is None:
+                return None
         hint = table_name or (sel.entry.get("physical_table_name") or sel.entry.get("tableName") or sel.entry.get("name") if sel and sel.entry else None)
         return datasets_metadata_repo._resolve_physical_table(hint)
 
@@ -498,18 +508,25 @@ class DataService:
                     return CaseInsensitiveRecord(rows[0])
             except Exception:
                 continue
-        num_part = re.sub(r'^[A-Za-z]+[-_]?', '', clean_id)
-        if num_part and len(num_part) >= 3:
-            for col in candidate_columns[:2]:
-                try:
-                    col_q = self._quote_ident(col)
-                    sql_like = f'SELECT * FROM {tbl_q} WHERE CAST({col_q} AS NVARCHAR) LIKE ? LIMIT 1'
-                    rows = hana_client.execute_query(sql_like, (f"%{num_part}%",))
-                    if rows:
-                        return CaseInsensitiveRecord(rows[0])
-                except Exception:
-                    continue
         return None
+
+    @staticmethod
+    def _record_with_provenance(record, backend, table=None):
+        from api.models.execution_context import current_selection
+        from api.services.dataset_service import dataset_service
+        from api.platform.data_resolution import current_table
+        selection = current_selection.get()
+        entry = selection.entry if selection else dataset_service.active()[0]
+        if entry:
+            version = selection.context.version if selection else entry.get('currentVersion', 1)
+            record['_resolved_dataset_id'] = entry['id']
+            record['_resolved_dataset_name'] = entry.get('displayName') or entry.get('name')
+            record['_resolved_version'] = version
+            record['_resolved_table'] = table or current_table(entry, version)
+            if selection and selection.snapshot.get('source_backend') == 'hana':
+                backend = 'hana_table'
+        record['_resolved_backend'] = backend
+        return record
 
     def get_record_details(self, record_id: str, table_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get details for any record ID dynamically from active DataFrame or SAP HANA Cloud tables."""
@@ -527,7 +544,7 @@ class DataService:
                 for col in id_cols:
                     matches = df[df[col].astype(str).str.strip().str.upper() == clean_id.upper()]
                     if not matches.empty:
-                        return CaseInsensitiveRecord(matches.iloc[0].to_dict())
+                        return self._record_with_provenance(CaseInsensitiveRecord(matches.iloc[0].to_dict()), 'dataset_snapshot')
         except Exception as e:
             logger.debug(f"DataFrame record lookup skipped ({e})")
 
@@ -538,7 +555,7 @@ class DataService:
             if target:
                 rec = self._lookup_record_in_table(target, clean_id)
                 if rec:
-                    return rec
+                    return self._record_with_provenance(rec, 'hana_table', table=target)
         except Exception as e:
             logger.warning(f"Direct HANA record lookup failed ({e})")
 
@@ -548,6 +565,15 @@ class DataService:
             from api.platform.datasets_metadata_repository import datasets_metadata_repo
             catalog = dataset_service._catalog()
             for d_id, entry in catalog.get("datasets", {}).items():
+                from api.models.execution_context import current_selection, require_dataset_access
+                from api.platform.data_resolution import current_table
+                try:
+                    require_dataset_access(entry, for_chat=True)
+                except Exception:
+                    continue
+                selection = current_selection.get()
+                if selection and selection.context.dataset_id == d_id and current_table(entry, selection.context.version) is None:
+                    continue
                 other_hint = entry.get("physical_table_name") or entry.get("tableName") or entry.get("name")
                 other_target = datasets_metadata_repo._resolve_physical_table(other_hint)
                 if not other_target or other_target == target:
@@ -557,7 +583,9 @@ class DataService:
                     logger.info(f"Resolved record {clean_id} from alternate table '{other_target}' (dataset '{d_id}')")
                     rec["_resolved_table"] = other_target
                     rec["_resolved_dataset_id"] = d_id
-                    rec["_resolved_dataset_name"] = entry.get("name")
+                    rec["_resolved_dataset_name"] = entry.get("displayName") or entry.get("name")
+                    rec["_resolved_version"] = entry.get("currentVersion", 1)
+                    rec["_resolved_backend"] = 'hana_table'
                     return rec
         except Exception as e:
             logger.debug(f"Cross-table record fallback search failed: {e}")

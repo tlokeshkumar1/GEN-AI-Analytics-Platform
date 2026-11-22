@@ -7,6 +7,7 @@ import { GraphStudio } from '../screens/GraphStudio';
 vi.mock('../services/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
   getApiErrorMessage: (error: Error, fallback: string) => error.message || fallback,
+  streamingRequestHeaders: () => ({}),
 }));
 
 beforeEach(() => {
@@ -246,13 +247,22 @@ describe('Generative AI Dashboards (10-Step Analysis-First Workflow)', () => {
     expect(screen.getByText('Proactive AI Widget Recommendations (Analysis-First)')).toBeTruthy();
     expect(screen.getByText('Category Sales Composition')).toBeTruthy();
 
-    // Test adding recommendation directly into active dashboard
+    // Executed recommendations remain pending until preview and approval.
     const addRecBtn = screen.getByRole('button', { name: /Add to Dashboard/i });
     fireEvent.click(addRecBtn);
 
     await waitFor(() => {
-      expect(screen.getByText(/Added recommended widget "Category Sales Composition" directly to active dashboard!/i)).toBeTruthy();
+      expect(screen.getByText(/Executed "Category Sales Composition". Preview and approve it before publishing./i)).toBeTruthy();
     });
+
+    const previewButtons = screen.getAllByRole('button', { name: /Preview Live/i });
+    fireEvent.click(previewButtons[0]);
+    await waitFor(() => {
+      expect(vi.mocked(api.post).mock.calls.some(([url]) => url === '/graph/genai-dashboard/execute-widget')).toBe(true);
+      expect(screen.getByText('Live Preview & Verification Mode')).toBeTruthy();
+    });
+    expect(screen.getByText(/Status: pending/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Approve Widget/i }));
 
     // Verify SQL Inspector
     const inspectBtn = screen.getByRole('button', { name: /Inspect SQL & Join Plan/i });

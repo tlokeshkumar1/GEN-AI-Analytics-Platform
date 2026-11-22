@@ -41,6 +41,16 @@ class JobService:
         workspace = workspace or current_identity.get()["workspace_id"]
         return workspace + ":jobs"
 
+    def heartbeat(self, worker_id, workspace):
+        namespace = workspace + ":workers"
+        previous = self.store.get(namespace, worker_id)
+        self.store.put(namespace, worker_id, {"last_seen": time.time()}, previous["revision"] if previous else 0)
+
+    def worker_health(self, workspace):
+        workers = self.store.list(workspace + ":workers")
+        active = [row for row in workers if time.time() - row["value"].get("last_seen", 0) < 90]
+        return {"status": "available" if active else "unavailable", "active_workers": len(active)}
+
     def enqueue(self, kind, payload, idempotency_key):
         identity = current_identity.get()
         if identity is None:

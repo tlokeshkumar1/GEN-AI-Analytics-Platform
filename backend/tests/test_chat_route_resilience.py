@@ -28,6 +28,7 @@ class ChatRouteSessionResilienceTests(unittest.TestCase):
              patch("api.routes.chat.RAGPipeline") as mock_rag:
 
             mock_history.get_or_create_session.return_value = "session-valid-created"
+            mock_history.ensure_session_title.return_value = None
             mock_history.save_message.return_value = None
             mock_history.get_recent_history.side_effect = RuntimeError("HANA transient timeout during history fetch")
 
@@ -58,6 +59,7 @@ class ChatRouteSessionResilienceTests(unittest.TestCase):
              patch("api.routes.chat.RAGPipeline") as mock_rag:
 
             mock_history.get_or_create_session.side_effect = RuntimeError("Database down")
+            mock_history.ensure_session_title.return_value = None
             mock_pipeline_instance = MagicMock()
             mock_pipeline_instance.run.return_value = {
                 "reply": "Test response",
@@ -92,6 +94,7 @@ class ChatRouteSessionResilienceTests(unittest.TestCase):
                  patch("api.routes.chat_stream.RAGPipeline") as mock_rag:
 
                 mock_history.get_or_create_session.side_effect = RuntimeError("HANA down")
+                mock_history.ensure_session_title.return_value = None
                 mock_pipeline_instance = MagicMock()
 
                 def fake_run_stream(msg, top_k, cb, history, stop):

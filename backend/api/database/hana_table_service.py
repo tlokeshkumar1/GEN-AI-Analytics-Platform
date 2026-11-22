@@ -440,6 +440,8 @@ class HANATableService:
             col_defs = self.infer_column_types(df)
             col_names = [c[0] for c in col_defs]
 
+            if exists and action == "create":
+                raise ValueError(f"Table '{clean_table}' already exists; select append or replace explicitly.")
             if not exists or action == "create":
                 if not exists:
                     # Create the table

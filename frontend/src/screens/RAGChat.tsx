@@ -1,4 +1,6 @@
+import './RAGChat.css';
 import React, { useState, useRef, useEffect } from 'react';
+import { Sparkles, Rows3, ChartNoAxesCombined, ChartColumnIncreasing, Database, ArrowRight, ArrowUp, LoaderCircle } from 'lucide-react';
 import {
   sendChatMessageStream,
   ChatResponse,
@@ -31,6 +33,7 @@ interface RAGChatProps {
 }
 
 export interface RetrievedDocument {
+  retrieval?: string;
   id: string;
   source: string;
   snippet: string;
@@ -40,6 +43,7 @@ export interface RetrievedDocument {
 }
 
 export interface ChatMessage {
+  retrievalWarnings?: string[];
   id: string;
   sender: 'user' | 'agent';
   timestamp: string;
@@ -74,6 +78,20 @@ export interface ChatThread {
   timestamp: string;
   messages: ChatMessage[];
 }
+
+export const toRetrievedDocument = (source: any, index: number): RetrievedDocument => {
+  let meta: any = source.METADATA || {};
+  if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { meta = {}; } }
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) meta = {};
+  const retrieval = meta.retrieval || (meta.row_id ? 'structured_record' : 'unknown');
+  const isCosine = meta.score_type === 'cosine' || (meta.source_table === 'VECTOR_TABLE' && meta.score_type !== 'lexical');
+  const score = isCosine && typeof source.SCORE === 'number' && Number.isFinite(source.SCORE) ? source.SCORE : null;
+  return { id: source.ID || `source-${index}`, source: meta.source || 'Dataset evidence',
+    snippet: source.TEXT_CHUNK || source.snippet || '', relevanceScore: score, retrieval,
+    tableOrCollection: meta.source_table || meta.table || meta.dataset_id || 'Dataset evidence',
+    timestamp: retrieval === 'hana_vector' ? 'HANA vector search' : retrieval === 'structured_record' ? 'Exact record match' :
+      ['fallback', 'snapshot_lexical'].includes(retrieval) ? 'Snapshot keyword match' : 'Dataset evidence' };
+};
 
 const getGroupForDate = (dateStr?: string): 'Today' | 'Yesterday' | 'Previous 7 Days' | 'Older' => {
   if (!dateStr) return 'Today';
@@ -215,6 +233,8 @@ interface PromptSuggestion {
   badge?: string;
 }
 
+const suggestionIcons: Record<string, React.ElementType> = { table_rows: Rows3, insights: ChartNoAxesCombined, bar_chart: ChartColumnIncreasing, database: Database };
+
 const DEFAULT_SUGGESTIONS: PromptSuggestion[] = [
   {
     icon: 'table_rows',
@@ -295,14 +315,23 @@ export const RAGChat: React.FC<RAGChatProps> = ({
   const [searchThreads, setSearchThreads] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 144)}px`;
+  }, [inputText]);
+
   // Chat history drawer (slides in above current chat from the side toggle)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Three-dot menu and modal states
   const [activeMenuThreadId, setActiveMenuThreadId] = useState<string | null>(null);
   const [threadToDelete, setThreadToDelete] = useState<ChatThread | null>(null);
+  const [deletingThread, setDeletingThread] = useState(false);
   const [threadToRename, setThreadToRename] = useState<ChatThread | null>(null);
   const [renameTitleInput, setRenameTitleInput] = useState('');
+  const manuallyRenamedThreads = useRef(new Set<string>());
   const [previewGraphModalUrl, setPreviewGraphModalUrl] = useState<{ url: string; title?: string } | null>(null);
 
   // Expanded document source cards per message
@@ -317,7 +346,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
   const streamRequestRef = useRef<AbortController | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -390,7 +419,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
             const localThreads = prev.filter(thread => !ids.has(thread.id));
             const savedThreads = loadedThreads.map(thread => {
               const existing = prev.find(item => item.id === thread.id);
-              if (existing) return { ...thread, title: existing.title, subtitle: existing.subtitle, messages: existing.messages };
+              if (existing) return { ...thread, title: manuallyRenamedThreads.current.has(thread.id) ? existing.title : thread.title, subtitle: existing.subtitle, messages: existing.messages };
               return thread;
             });
             ids.forEach(id => draftIds.current.delete(id));
@@ -440,27 +469,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
         }
 
         // Map retrieved docs
-        const retrievedDocs: RetrievedDocument[] = (Array.isArray(sourcesArray) ? sourcesArray : []).map((s: any, idx: number) => {
-          let srcMeta: any = {};
-          if (typeof s.METADATA === 'object' && s.METADATA !== null) {
-            srcMeta = s.METADATA;
-          } else if (typeof s.METADATA === 'string') {
-            try {
-              srcMeta = JSON.parse(s.METADATA);
-            } catch {
-              srcMeta = {};
-            }
-          }
-
-          return {
-            id: s.ID || `doc-${idx}`,
-            source: srcMeta.source || (srcMeta.country ? `Country: ${srcMeta.country}` : (srcMeta.type || 'SAP_HANA_VECTOR_STORE')),
-            tableOrCollection: 'SAP_HANA_VECTOR_DB',
-            snippet: s.TEXT_CHUNK || s.snippet || '',
-            relevanceScore: typeof s.SCORE === 'number' ? Number(s.SCORE.toFixed(3)) : null,
-            timestamp: srcMeta.year ? `Partition: FY${srcMeta.year}` : 'Indexed Chunk',
-          };
-        });
+        const retrievedDocs: RetrievedDocument[] = (Array.isArray(sourcesArray) ? sourcesArray : []).map(toRetrievedDocument);
 
         // Parse timestamp
         let formattedTime = 'Just now';
@@ -499,6 +508,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
           intent: m.INTENT || metaObj.intent,
           insights: metaObj.insights,
           processing: metaObj.processing,
+          retrievalWarnings: metaObj.warnings,
         };
       });
 
@@ -526,7 +536,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
 
   // Scroll smoothly to bottom when messages or submitting state change
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messages.length > 0 || isSubmitting) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isSubmitting]);
 
   // Close menus on outside click
@@ -584,12 +594,15 @@ export const RAGChat: React.FC<RAGChatProps> = ({
 
   const handleDeleteThreadConfirmed = async () => {
     if (!threadToDelete) return;
+    if (deletingThread) return;
+    setDeletingThread(true);
     const deletedId = threadToDelete.id;
     try {
       if (!draftIds.current.has(deletedId)) await deleteChatSession(deletedId);
     } catch (err) {
       setSessionLoadError(getApiErrorMessage(err, 'Unable to delete this conversation. Please retry.'));
       setThreadToDelete(null);
+      setDeletingThread(false);
       return;
     }
     const remaining = threads.filter(t => t.id !== deletedId);
@@ -608,11 +621,13 @@ export const RAGChat: React.FC<RAGChatProps> = ({
     }
 
     setThreadToDelete(null);
+    setDeletingThread(false);
     showToast('Conversation permanently deleted');
   };
 
   const handleRenameThreadConfirmed = () => {
     if (!threadToRename || !renameTitleInput.trim()) return;
+    manuallyRenamedThreads.current.add(threadToRename.id);
     setThreads(prev =>
       prev.map(t =>
         t.id === threadToRename.id
@@ -645,9 +660,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
     if (
       lowerQ.includes('order') ||
       lowerQ.includes('so-') ||
-      lowerQ.includes('fulfillment') ||
-      lowerQ.includes('so106760') ||
-      lowerQ.includes('106760')
+      lowerQ.includes('fulfillment')
     ) {
       initialIntent = 'order_lookup';
     } else if (
@@ -678,10 +691,8 @@ export const RAGChat: React.FC<RAGChatProps> = ({
     setThreads(prev =>
       prev.map(t => {
         if (t.id === activeThreadId) {
-          const newTitle = t.title === 'New Conversation' ? query.slice(0, 32) : t.title;
           return {
             ...t,
-            title: newTitle,
             subtitle: query.slice(0, 42),
             messages: [...t.messages, userMsg, initialAgentMsg],
           };
@@ -757,18 +768,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
 
     // Handle full result metadata
     const handleResult = (res: ChatResponse) => {
-      const docs: RetrievedDocument[] = (res.sources || []).map((s, idx) => {
-        let metadata: any = s.METADATA || {};
-        if (typeof metadata === 'string') { try { metadata = JSON.parse(metadata); } catch { metadata = {}; } }
-        return ({
-          id: s.ID || `src-${idx}`,
-          source: metadata.source || 'Selected dataset',
-          tableOrCollection: metadata.dataset_id || metadata.context?.dataset_id || 'Dataset evidence',
-          snippet: s.TEXT_CHUNK || 'Retrieved semantic document chunk',
-          relevanceScore: typeof s.SCORE === 'number' ? Number(s.SCORE.toFixed(3)) : null,
-          timestamp: 'Indexed Chunk',
-        });
-      });
+      const docs: RetrievedDocument[] = (res.sources || []).map(toRetrievedDocument);
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
 
@@ -778,6 +778,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
             return {
               ...t,
               id: res.session_id || t.id,
+              title: manuallyRenamedThreads.current.has(t.id) ? t.title : (res.session_title || t.title),
               messages: t.messages.map(m => {
                 if (m.id === agentMsgId) {
                   const completedProcessing = (m.processing || []).map(p => ({
@@ -805,6 +806,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                     insights: res.insights,
                     intent: res.intent || initialIntent,
                     processing: completedProcessing,
+                    retrievalWarnings: res.warnings,
                   };
                 }
                 return m;
@@ -815,6 +817,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
         })
       );
       if (res.session_id && res.session_id !== activeThreadId) {
+        if (manuallyRenamedThreads.current.delete(activeThreadId)) manuallyRenamedThreads.current.add(res.session_id);
         draftIds.current.delete(activeThreadId);
         setActiveThreadId(res.session_id);
       }
@@ -879,7 +882,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
   const groups: ('Today' | 'Yesterday' | 'Previous 7 Days' | 'Older')[] = ['Today', 'Yesterday', 'Previous 7 Days', 'Older'];
 
   return (
-    <div className="flex w-full h-full overflow-hidden rounded-[var(--radius-page)] bg-[var(--color-surface)] border border-[var(--color-border)] shadow-[var(--shadow-sm)] relative select-auto font-sans">
+    <div className="rag-chat-workspace flex w-full h-full overflow-hidden rounded-[var(--radius-page)] bg-[var(--color-surface)] border border-[var(--color-border)] shadow-[var(--shadow-sm)] relative select-auto font-sans">
       {/* Toast Alert */}
       {toastMessage && (
         <div className="fixed top-20 right-4 sm:right-8 z-50 bg-[var(--color-text-primary)] text-white px-4 py-2.5 rounded-[var(--radius-element)] shadow-[var(--shadow-xl)] flex items-center gap-2.5 text-xs animate-in fade-in slide-in-from-top-2 border border-[var(--color-border)]">
@@ -891,7 +894,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
       {/* Delete Confirmation Modal */}
       {threadToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in">
-          <div
+          <div role="alertdialog" aria-modal="true" aria-labelledby="delete-chat-title"
             className="w-full max-w-md bg-[var(--color-surface)] rounded-[var(--radius-page)] p-6 shadow-[var(--shadow-xl)] border border-[var(--color-border)] animate-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
@@ -900,7 +903,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                 <span className="material-symbols-outlined text-[22px]">delete_forever</span>
               </div>
               <div className="flex flex-col">
-                <h3 className="text-base text-[var(--color-text-primary)] font-semibold">Delete Conversation?</h3>
+                <h3 id="delete-chat-title" className="text-base text-[var(--color-text-primary)] font-semibold">Delete Conversation?</h3>
                 <p className="text-xs text-[var(--color-text-secondary)] mt-1 leading-relaxed">
                   Are you sure you want to permanently delete <strong className="text-[var(--color-text-primary)]">"{threadToDelete.title}"</strong>? This will remove all prompt history, retrieved vectors, and charts in this session.
                 </p>
@@ -910,6 +913,8 @@ export const RAGChat: React.FC<RAGChatProps> = ({
             <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[var(--color-border)]">
               <button
                 type="button"
+                disabled={deletingThread}
+                autoFocus
                 onClick={() => setThreadToDelete(null)}
                 className="px-4 py-2 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer"
               >
@@ -918,10 +923,11 @@ export const RAGChat: React.FC<RAGChatProps> = ({
               <button
                 type="button"
                 onClick={handleDeleteThreadConfirmed}
+                disabled={deletingThread}
                 className="px-4 py-2 rounded-[var(--radius-element)] text-xs font-medium bg-[var(--color-danger)] hover:opacity-90 text-white shadow-[var(--shadow-2xs)] transition-colors flex items-center gap-1.5 cursor-pointer active:scale-95"
               >
                 <span className="material-symbols-outlined text-[16px]">delete</span>
-                <span>Delete Chat</span>
+                <span>{deletingThread ? 'Deleting…' : 'Delete Chat'}</span>
               </button>
             </div>
           </div>
@@ -1036,11 +1042,12 @@ export const RAGChat: React.FC<RAGChatProps> = ({
       {/* ============================================================ */}
       <aside
         className={`
-          absolute inset-y-0 left-0 z-40 w-[285px] sm:w-[320px] max-w-[85%]
+          rag-history absolute inset-y-0 left-0 z-40 w-[285px] sm:w-[320px] max-w-[85%]
           bg-slate-50/95 backdrop-blur-md border-r border-slate-200/90 flex flex-col justify-between
           transition-all duration-300 ease-in-out p-3.5 overflow-hidden h-full
           ${isSidebarOpen ? 'translate-x-0 pointer-events-auto shadow-2xl opacity-100 visible' : '-translate-x-full pointer-events-none shadow-none opacity-0 invisible'}
         `}
+        id="rag-chat-history"
         aria-label="Chat history sessions"
       >
         <div className="flex flex-col h-full min-w-[245px] overflow-hidden">
@@ -1236,9 +1243,9 @@ export const RAGChat: React.FC<RAGChatProps> = ({
           <div className="pt-2.5 mt-2 border-t border-slate-200/80 flex items-center justify-between text-[11px] text-slate-500 shrink-0">
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="font-mono text-slate-800">3,248 Docs</span>
+              <span className="font-mono text-slate-800">Dataset sources</span>
             </div>
-            <span className="font-mono text-[10px] text-slate-500 px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200/80">HANA Vector 4.2</span>
+            <span className="font-mono text-[10px] text-slate-500 px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200/80">HANA</span>
           </div>
         </div>
       </aside>
@@ -1250,7 +1257,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
         {/* ============================================================ */}
         {/* CHAT HEADER: Persistent, Stable Top Control Bar */}
         {/* ============================================================ */}
-        <header className="h-[56px] border-b border-[var(--color-border)] px-3 sm:px-5 flex items-center justify-between bg-[var(--color-surface)]/95 backdrop-blur-md shrink-0 z-10 gap-2 sm:gap-3 w-full">
+        <header className="rag-header h-[56px] border-b border-[var(--color-border)] px-3 sm:px-5 flex items-center justify-between bg-[var(--color-surface)]/95 backdrop-blur-md shrink-0 z-10 gap-2 sm:gap-3 w-full">
           {/* Left: Sidebar Toggle Button + Auto-truncating Active Session Title with Dots */}
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 overflow-hidden mr-2">
             {/* Sidebar Toggle Button */}
@@ -1260,6 +1267,8 @@ export const RAGChat: React.FC<RAGChatProps> = ({
               title={isSidebarOpen ? "Collapse chat history" : "Open chat history"}
               className="w-8 h-8 rounded-[var(--radius-element)] flex items-center justify-center text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors border border-[var(--color-border)] bg-[var(--color-surface)] shrink-0 shadow-[var(--shadow-2xs)] cursor-pointer active:scale-95"
               aria-label="Toggle chat history sidebar"
+              aria-expanded={isSidebarOpen}
+              aria-controls="rag-chat-history"
             >
               <span className="material-symbols-outlined text-[18px]">
                 {isSidebarOpen ? 'left_panel_close' : 'dock_to_left'}
@@ -1277,11 +1286,11 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                 </h2>
                 <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-success-subtle)] text-[var(--color-success)] text-[10px] font-medium border border-[var(--color-success-border)] shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
-                  <span>HANA Vector Synced</span>
+                  <span>Dataset assistant</span>
                 </span>
               </div>
               <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-[var(--color-text-muted)] truncate leading-tight mt-0.5 min-w-0">
-                <span className="font-mono text-[var(--color-text-secondary)]">us10-prod</span>
+                <span className="font-mono text-[var(--color-text-secondary)]">Workspace</span>
                 <span aria-hidden="true" className="text-[var(--color-border-strong)]">·</span>
                 <span>{messages.length} msgs</span>
                 <span aria-hidden="true" className="text-[var(--color-border-strong)] hidden sm:inline">·</span>
@@ -1291,16 +1300,17 @@ export const RAGChat: React.FC<RAGChatProps> = ({
           </div>
 
           {/* Right: Header Action Controls */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto">
+          <div className="rag-header-actions flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto">
             {/* Export MD */}
             {activeThread && (
               <button
                 onClick={() => handleExportMarkdown(activeThread)}
                 title="Export thread as Markdown transcript"
+                aria-label="Export thread as Markdown transcript"
                 className="h-8 px-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs font-medium inline-flex items-center gap-1.5 transition-all shadow-[var(--shadow-2xs)] shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[15px] text-[var(--color-text-muted)]">download</span>
-                <span>Export</span>
+                <span className="rag-action-label">Export</span>
               </button>
             )}
 
@@ -1315,10 +1325,11 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                 }
               }}
               title="Clear all messages in active session"
+              aria-label="Clear all messages in active session"
               className="h-8 px-2.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] text-xs font-medium inline-flex items-center gap-1.5 transition-all shadow-[var(--shadow-2xs)] shrink-0 whitespace-nowrap active:scale-95 cursor-pointer"
             >
               <span className="material-symbols-outlined text-[15px] text-[var(--color-text-muted)]">restart_alt</span>
-              <span>Clear</span>
+              <span className="rag-action-label">Clear</span>
             </button>
 
             {onToggleMaximize && (
@@ -1352,7 +1363,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
         {/* ============================================================ */}
         {/* CHAT CONVERSATION AREA: The Primary Scrollable Region */}
         {/* ============================================================ */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 scroll-touch min-h-0 bg-[var(--color-bg-base)] relative">
+        <div className="rag-conversation flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 scroll-touch min-h-0 bg-[var(--color-bg-base)] relative">
           {sessionLoadError ? (
             <div role="alert" className="py-8 text-center text-xs text-[var(--color-danger)] font-medium">
               {sessionLoadError}{' '}
@@ -1381,62 +1392,27 @@ export const RAGChat: React.FC<RAGChatProps> = ({
             /* ============================================================ */
             /* Empty State: Modern Enterprise AI Welcome & Prompt Starters  */
             /* ============================================================ */
-            <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto text-center px-4 py-8">
-              {/* AI Squircle Emblem with subtle Astryx border */}
-              <div className="w-12 h-12 rounded-[var(--radius-container)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[var(--color-text-primary)] flex items-center justify-center shadow-[var(--shadow-2xs)] mb-4">
-                <span className="material-symbols-outlined text-[24px]">auto_awesome</span>
-              </div>
-
-              {/* Dynamic Greeting Title */}
-              <div className="space-y-1 mb-2">
-                <h3 className="text-lg sm:text-xl font-semibold tracking-tight text-[var(--color-text-primary)]">
-                  {getTimeGreeting()}, {displayName}
-                </h3>
-                <p className="text-sm font-medium text-[var(--color-text-secondary)]">
-                  How can I assist your enterprise analytics today?
-                </p>
-              </div>
-
-              <p className="text-xs sm:text-sm text-[var(--color-text-muted)] mt-1 mb-6 max-w-lg leading-relaxed">
-                Ask natural language questions about approved field definitions, calculate metrics with in-memory SQL, or synthesize visual charts grounded in SAP HANA Cloud.
-              </p>
+            <div className="rag-welcome">
+              <div className="rag-welcome-emblem" aria-hidden="true"><Sparkles size={27} strokeWidth={1.65} /></div>
+              <p className="rag-welcome-greeting">{getTimeGreeting()}, {displayName}</p>
+              <h3 className="rag-welcome-title">What would you like<br className="rag-title-break" /> to explore?</h3>
+              <p className="rag-welcome-description">Ask a question, explore a trend, or find an insight.<br />A conversation with your data starts here.</p>
 
               {/* Suggested prompt starter cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full text-left">
-                {suggestions.map((card, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => handleSuggestedPrompt(card.query)}
-                    className="group relative p-3.5 sm:p-4 rounded-[var(--radius-container)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] border border-[var(--color-border)] hover:border-[var(--color-border-strong)] shadow-[var(--shadow-2xs)] hover:shadow-[var(--shadow-xs)] transition-all duration-200 text-left flex flex-col justify-between cursor-pointer"
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] flex items-center justify-center border border-[var(--color-border)]">
-                          <span className={`material-symbols-outlined text-[16px]`}>
-                            {card.icon}
-                          </span>
-                        </div>
-                        <span className="font-semibold text-xs text-[var(--color-text-primary)]">
-                          {card.title}
-                        </span>
+              <div className="rag-suggestions" aria-label="Suggested questions">
+                {suggestions.map((card, idx) => {
+                  const Icon = suggestionIcons[card.icon] || ChartNoAxesCombined;
+                  return (
+                    <button key={idx} type="button" className="rag-suggestion" onClick={() => handleSuggestedPrompt(card.query)}>
+                      <div className="rag-suggestion-top">
+                        <span className="rag-suggestion-icon" aria-hidden="true"><Icon size={20} strokeWidth={1.7} /></span>
+                        {card.badge && <span className="rag-suggestion-category">{card.badge}</span>}
                       </div>
-                      {card.badge && (
-                        <span className="text-[10px] font-medium px-2 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-surface-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)]">
-                          {card.badge}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-between text-[11px] text-[var(--color-text-secondary)]">
-                      <span className="line-clamp-2 leading-relaxed pr-2">
-                        {card.query}
-                      </span>
-                      <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)] transition-all shrink-0">
-                        arrow_forward
-                      </span>
-                    </div>
-                  </button>
-                ))}
+                      <span className="rag-suggestion-title">{card.title}</span>
+                      <span className="rag-suggestion-bottom"><span>{card.query}</span><ArrowRight size={17} strokeWidth={1.7} aria-hidden="true" /></span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : (
@@ -1454,7 +1430,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                         <span aria-hidden="true">·</span>
                         <span>{msg.timestamp}</span>
                       </div>
-                      <div className="bg-[var(--color-text-primary)] text-[var(--color-surface)] px-4 py-2.5 rounded-[var(--radius-container)] rounded-tr-[var(--radius-inner)] shadow-[var(--shadow-2xs)] text-xs sm:text-sm leading-relaxed break-words font-normal">
+                      <div className="rag-user-bubble bg-[var(--color-text-primary)] text-[var(--color-surface)] px-4 py-2.5 rounded-[var(--radius-container)] rounded-tr-[var(--radius-inner)] shadow-[var(--shadow-2xs)] text-xs sm:text-sm leading-relaxed break-words font-normal">
                         {msg.text}
                       </div>
                     </div>
@@ -1471,7 +1447,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
               const IntentIcon = intentInfo.icon;
 
               return (
-                <div key={msg.id} className="flex items-start gap-3 sm:gap-3.5 max-w-4xl mr-auto animate-in fade-in duration-200">
+                <div key={msg.id} className="flex items-start gap-3 sm:gap-3.5 rag-assistant-message max-w-4xl mr-auto animate-in fade-in duration-200">
                   {/* Assistant Avatar: Subtle Astryx icon */}
                   <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] text-[var(--color-text-primary)] border border-[var(--color-border)] flex items-center justify-center shrink-0 mt-0.5 shadow-[var(--shadow-2xs)]">
                     <span className="material-symbols-outlined text-[17px]">auto_awesome</span>
@@ -1498,13 +1474,13 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                       {msg.agentMeta?.cosineSim && !['Not available', 'undefined', 'null', 'N/A'].includes(msg.agentMeta.cosineSim) && (
                         <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-success)] bg-[var(--color-success-subtle)] px-2.5 py-0.5 rounded-[var(--radius-full)] border border-[var(--color-success-border)] font-medium">
                           <span className="material-symbols-outlined text-[13px] text-[var(--color-success)]">verified</span>
-                          <span>HANA Match {msg.agentMeta.cosineSim}</span>
+                          <span>Vector similarity {msg.agentMeta.cosineSim}</span>
                         </div>
                       )}
                     </div>
 
                     {/* Assistant Response Content Card */}
-                    <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] rounded-tl-[var(--radius-inner)] p-4 sm:p-5 text-[var(--color-text-primary)] text-xs sm:text-sm leading-relaxed shadow-[var(--shadow-2xs)] space-y-3.5">
+                    <div className="rag-answer bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] rounded-tl-[var(--radius-inner)] p-4 sm:p-5 text-[var(--color-text-primary)] text-xs sm:text-sm leading-relaxed shadow-[var(--shadow-2xs)] space-y-3.5">
                       {/* Step-wise Intent & Thinking Process */}
                       {msg.processing && msg.processing.length > 0 && (
                         <ThinkingProcess
@@ -1521,7 +1497,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                       {msg.isStreaming && !msg.text && (
                         <div className="flex items-center gap-2 py-2 text-xs text-[var(--color-text-muted)] font-mono">
                           <span className="w-2 h-2 rounded-full bg-[var(--color-primary)] animate-pulse" />
-                          <span>Synthesizing response via NVIDIA NIM...</span>
+                          <span>Preparing your answer…</span>
                         </div>
                       )}
 
@@ -1538,9 +1514,15 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                         </div>
                       )}
 
+                      {msg.retrievalWarnings?.length ? (
+                        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                          {msg.retrievalWarnings.map((warning, index) => <p key={index}>{warning}</p>)}
+                        </div>
+                      ) : null}
+
                       {/* Generated Graph Image (Powered by SAP AI Core) */}
                       {msg.graph_image && (
-                        <div className="bg-gradient-to-br from-slate-50/90 to-indigo-50/20 rounded-xl p-3.5 sm:p-4 border border-slate-200/90 shadow-2xs space-y-2.5">
+                        <div className="rag-graph-card bg-gradient-to-br from-slate-50/90 to-indigo-50/20 rounded-xl p-3.5 sm:p-4 border border-slate-200/90 shadow-2xs space-y-2.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 font-label-md text-xs font-semibold text-slate-900">
                               <span className="material-symbols-outlined text-[17px] text-violet-600">analytics</span>
@@ -1571,7 +1553,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
 
                       {/* Key AI Insights Callout (if present and distinct) */}
                       {msg.insights && msg.insights !== msg.text && (
-                        <div className="bg-gradient-to-r from-violet-50/80 to-purple-50/80 border border-violet-200/80 rounded-xl p-3.5 space-y-1.5">
+                        <div className="rag-insight bg-gradient-to-r from-violet-50/80 to-purple-50/80 border border-violet-200/80 rounded-xl p-3.5 space-y-1.5">
                           <div className="flex items-center gap-1.5 text-xs font-semibold text-violet-700">
                             <span className="material-symbols-outlined text-[16px]">lightbulb</span>
                             <span>Key Model Insights</span>
@@ -1584,7 +1566,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
 
                       {/* Inline Analytical Chart Visualization (if present) */}
                       {msg.chartData && (
-                        <div className="bg-slate-50/80 rounded-xl p-3.5 sm:p-4 border border-slate-200 shadow-2xs space-y-3">
+                        <div className="rag-chart-card bg-slate-50/80 rounded-xl p-3.5 sm:p-4 border border-slate-200 shadow-2xs space-y-3">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-1.5 font-label-md text-xs font-semibold text-slate-900">
                               <span className="material-symbols-outlined text-[16px] text-indigo-600">bar_chart</span>
@@ -1641,9 +1623,11 @@ export const RAGChat: React.FC<RAGChatProps> = ({
 
                       {/* Retrieved Documents & Grounding Accordion */}
                       {msg.retrievedDocs && msg.retrievedDocs.length > 0 && (
-                        <div className="pt-2 border-t border-slate-200/80">
+                        <div className="rag-source-panel pt-2 border-t border-slate-200/80">
                           <button
                             type="button"
+                            aria-expanded={areDocsExpanded}
+                            aria-controls={`rag-sources-${msg.id}`}
                             onClick={() =>
                               setExpandedDocMessageId(areDocsExpanded ? null : msg.id)
                             }
@@ -1651,7 +1635,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                           >
                             <div className="flex items-center gap-2">
                               <span className="material-symbols-outlined text-[16px] text-violet-600">source</span>
-                              <span>Retrieved Vector Sources ({msg.retrievedDocs.length} Chunks)</span>
+                              <span>Supporting sources ({msg.retrievedDocs.length})</span>
                             </div>
                             <span className="material-symbols-outlined text-[18px] text-slate-500">
                               {areDocsExpanded ? 'expand_less' : 'expand_more'}
@@ -1659,25 +1643,25 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                           </button>
 
                           {areDocsExpanded && (
-                            <div className="mt-2 space-y-2 animate-in fade-in slide-in-from-top-1">
-                              {msg.retrievedDocs.map((doc) => (
+                            <div id={`rag-sources-${msg.id}`} className="mt-2 space-y-2 animate-in fade-in slide-in-from-top-1">
+                              {msg.retrievedDocs.map((doc, sourceIndex) => (
                                 <div
                                   key={doc.id}
-                                  className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 space-y-1.5 text-xs"
+                                  className="rag-source-card p-3 rounded-xl bg-slate-50 border border-slate-200/90 space-y-1.5 text-xs"
                                 >
                                   <div className="flex items-center justify-between">
                                     <span className="font-semibold text-slate-900 font-mono text-[11px] truncate">
-                                      {doc.source}
+                                      [{sourceIndex + 1}] {doc.source}
                                     </span>
                                     <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                      Sim: {doc.relevanceScore ?? 'Not available'}
+                                      {doc.relevanceScore != null ? `Cosine: ${doc.relevanceScore.toFixed(3)}` : doc.retrieval === 'structured_record' ? 'Exact match' : ['fallback', 'snapshot_lexical', 'hana_vector'].includes(doc.retrieval || '') ? 'Keyword match' : 'Evidence'}
                                     </span>
                                   </div>
                                   <p className="text-slate-700 font-mono text-[11px] bg-white p-2 rounded-lg border border-slate-200 leading-relaxed break-words">
                                     {doc.snippet}
                                   </p>
                                   <div className="text-[10px] text-slate-500">
-                                    Partition / Index: {doc.timestamp}
+                                    Source: {doc.tableOrCollection} · {doc.timestamp}
                                   </div>
                                 </div>
                               ))}
@@ -1688,7 +1672,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                     </div>
 
                     {/* Assistant Actions Bar */}
-                    <div className="flex items-center gap-1.5 text-xs text-slate-500 pt-0.5">
+                    <div className="rag-message-actions flex items-center gap-1.5 text-xs text-slate-500 pt-0.5">
                       <button
                         type="button"
                         onClick={() => {
@@ -1731,7 +1715,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
               <div className="w-8.5 h-8.5 rounded-xl bg-gradient-to-tr from-violet-600 via-indigo-600 to-sky-500 text-white flex items-center justify-center shrink-0 shadow-sm animate-pulse">
                 <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
               </div>
-              <div className="bg-gradient-to-r from-violet-50/80 to-indigo-50/70 border border-violet-200/80 rounded-2xl rounded-tl-xs p-3.5 sm:p-4 text-xs text-indigo-950 space-y-2 shadow-2xs">
+              <div className="rag-loading-state bg-gradient-to-r from-violet-50/80 to-indigo-50/70 border border-violet-200/80 rounded-2xl rounded-tl-xs p-3.5 sm:p-4 text-xs text-indigo-950 space-y-2 shadow-2xs">
                 <div className="flex items-center gap-2 font-medium text-indigo-900">
                   <span className="material-symbols-outlined text-[18px] animate-spin text-indigo-600">
                     progress_activity
@@ -1739,9 +1723,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                   <span>Retrieving context from SAP HANA in-memory vector store...</span>
                 </div>
                 <div className="flex items-center gap-2 text-indigo-700 pl-6 text-[11px]">
-                  <span>Cosine Match Score &gt; 0.90</span>
-                  <span aria-hidden="true">·</span>
-                  <span>Evaluating 3,248 partitions</span>
+                  <span>Searching relevant dataset evidence</span>
                 </div>
               </div>
             </div>
@@ -1753,23 +1735,25 @@ export const RAGChat: React.FC<RAGChatProps> = ({
         {/* ============================================================ */}
         {/* CHAT INPUT AREA: Modern Enterprise Floating Dock (Claude 3.5 & Gemini Inspired) */}
         {/* ============================================================ */}
-        <div className="p-3 sm:pb-4 sm:px-6 bg-[var(--color-bg-base)] shrink-0 z-20">
+        <div className="rag-composer p-3 sm:pb-4 sm:px-6 bg-[var(--color-bg-base)] shrink-0 z-20">
           <div className="max-w-4xl mx-auto rounded-[var(--radius-container)] bg-[var(--color-surface)] border border-[var(--color-border)] shadow-[var(--shadow-md)] hover:border-[var(--color-border-strong)] focus-within:border-[var(--color-primary)] focus-within:ring-1 focus-within:ring-[var(--color-primary)] transition-all p-2.5 sm:p-3">
             {/* Input row */}
             <div className="flex items-center gap-2 sm:gap-3 px-1">
-              <input
+              <textarea
                 ref={inputRef}
-                type="text"
+                rows={1}
+                aria-label="Message the NEOVATIC assistant"
+                title="Enter to send; Shift+Enter for a new line"
                 value={inputText}
                 disabled={Boolean(loadingSessionId || sessionLoadError)}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault();
                     handleSendMessage();
                   }
                 }}
-                placeholder="Ask anything about your data, calculate a metric, or request a chart..."
+                placeholder="Ask anything about your data…"
                 className="flex-1 min-w-0 bg-transparent text-xs sm:text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none py-1"
               />
 
@@ -1781,22 +1765,22 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                 aria-label="Send message"
                 className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] disabled:bg-[var(--color-surface-active)] disabled:text-[var(--color-text-muted)] text-white flex items-center justify-center transition-all disabled:opacity-60 disabled:cursor-not-allowed shrink-0 shadow-[var(--shadow-2xs)] active:scale-95 cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[17px]">arrow_upward</span>
+                {isSubmitting ? <LoaderCircle size={19} className="animate-spin" aria-hidden="true" /> : <ArrowUp size={19} strokeWidth={2} aria-hidden="true" />}
               </button>
             </div>
 
             {/* Metadata & Controls Bottom Row */}
-            <div className="flex items-center justify-between pt-2 mt-1 border-t border-[var(--color-border)] px-1 text-[11px] text-[var(--color-text-muted)]">
+            <div className="rag-composer-footer flex items-center justify-between pt-2 mt-1 border-t border-[var(--color-border)] px-1 text-[11px] text-[var(--color-text-muted)]">
               <div className="flex items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 text-[var(--color-text-secondary)] font-medium">
                   <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"></span>
-                  <span>NVIDIA NIM · Grounded in SAP HANA Cloud</span>
+                  <span className="rag-provider-label">NVIDIA NIM <span aria-hidden="true">·</span> SAP HANA Cloud</span>
                 </span>
               </div>
-              <div className="hidden sm:flex items-center gap-2 text-[var(--color-text-muted)]">
-                <span>Press</span>
+              <div className="rag-keyboard-hint hidden sm:flex items-center gap-2 text-[var(--color-text-muted)]">
+                <span>Send with</span>
                 <kbd className="px-1.5 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-secondary)] shadow-[var(--shadow-2xs)]">Enter ↵</kbd>
-                <span>to send</span>
+
               </div>
             </div>
           </div>

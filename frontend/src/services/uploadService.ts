@@ -21,6 +21,8 @@ export interface CloudTableInfo {
 
 export interface UploadResponse {
   status: string;
+  ready_for_publication?: boolean;
+  warnings?: string[];
   filename: string;
   rows_processed: number;
   embeddings_generated: number;

@@ -93,21 +93,40 @@ class HANAVectorClient:
         """
         exact_chunks = []
         is_multi = (not dataset_id) or (str(dataset_id).strip().lower() in ("all", "*", "default"))
-        target_pattern = "%" if is_multi else f"%{dataset_id}%"
+        def patterns(identifier, number):
+            return [f"{identifier}:v{int(number)}:%", f"%:{identifier}:%:v{int(number)}:%"]
+        scope_patterns = ["%"] if is_multi else patterns(dataset_id, version)
+        from api.models.execution_context import current_identity, current_selection, require_dataset_access
+        identity = current_identity.get()
+        if is_multi and identity is not None:
+            from api.services.dataset_service import dataset_service
+            scope_patterns = []
+            selection = current_selection.get()
+            for entry in dataset_service._catalog().get("datasets", {}).values():
+                try:
+                    require_dataset_access(entry, for_chat=True)
+                except Exception:
+                    continue
+                number = selection.context.version if selection and selection.context.dataset_id == entry["id"] else entry["currentVersion"]
+                scope_patterns.extend(patterns(entry["id"], number))
+            if not scope_patterns:
+                return []
+        predicate = "(" + " OR ".join("ID LIKE ?" for _ in scope_patterns) + ")"
+        target_pattern = scope_patterns[0]
         if text_query:
             import re
-            matches = re.findall(r'\b(SO-\d+|P\d{4}|C\d{4})\b', text_query, re.IGNORECASE)
+            matches = re.findall(r'\b([A-Za-z]{1,12}[-_]?\d{2,12})\b', text_query, re.IGNORECASE)
             for m in matches[:2]:
-                keyword_sql = f"""SELECT TOP 2 ID, TEXT_CHUNK, METADATA, 1.0 AS SCORE
+                score_sql = 'COSINE_SIMILARITY(EMBEDDING, TO_REAL_VECTOR(?))' if embedding else 'NULL'
+                keyword_sql = f"""SELECT TOP {min(max(int(top_k), 1), 20)} ID, TEXT_CHUNK, METADATA, {score_sql} AS SCORE
                                   FROM VECTOR_TABLE
-                                  WHERE ID LIKE ? AND (TEXT_CHUNK LIKE ? OR ID LIKE ?)"""
-                found = hana_client.execute_query(keyword_sql, (target_pattern, f"%{m}%", f"%{m}%"))
-                if not found:
-                    legacy_sql = """SELECT TOP 2 ID, TEXT_CHUNK, METADATA, 1.0 AS SCORE
-                                    FROM VECTOR_TABLE
-                                    WHERE (TEXT_CHUNK LIKE ? OR ID LIKE ?)"""
-                    found = hana_client.execute_query(legacy_sql, (f"%{m}%", f"%{m}%"))
-                for row in found:
+                                  WHERE {predicate} AND (UPPER(TEXT_CHUNK) LIKE ? ESCAPE '\\' OR UPPER(ID) LIKE ? ESCAPE '\\')
+                                  ORDER BY ID"""
+                literal = m.upper().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+                params = ((str(embedding),) if embedding else ()) + (*scope_patterns, f"%{literal}%", f"%{literal}%")
+                found = hana_client.execute_query(keyword_sql, params)
+                for row in found or []:
+                    row['MATCH_TYPE'] = 'identifier'
                     if not any(r["ID"] == row["ID"] for r in exact_chunks):
                         exact_chunks.append(row)
 
@@ -115,20 +134,11 @@ class HANAVectorClient:
         if embedding:
             sql = f"""SELECT TOP {int(top_k)} ID, TEXT_CHUNK, METADATA,
                       COSINE_SIMILARITY(EMBEDDING, TO_REAL_VECTOR(?)) AS SCORE
-                      FROM VECTOR_TABLE WHERE ID LIKE ? ORDER BY SCORE DESC"""
+                      FROM VECTOR_TABLE WHERE {predicate} ORDER BY SCORE DESC"""
             try:
-                vector_results = hana_client.execute_query(sql, (str(embedding), target_pattern))
+                vector_results = hana_client.execute_query(sql, (str(embedding), *scope_patterns))
             except Exception as e:
                 logger.warning(f"HANA Cloud vector search with pattern {target_pattern} failed: {e}")
-
-            if not vector_results:
-                sql_all = f"""SELECT TOP {int(top_k)} ID, TEXT_CHUNK, METADATA,
-                              COSINE_SIMILARITY(EMBEDDING, TO_REAL_VECTOR(?)) AS SCORE
-                              FROM VECTOR_TABLE ORDER BY SCORE DESC"""
-                try:
-                    vector_results = hana_client.execute_query(sql_all, (str(embedding),))
-                except Exception as e:
-                    logger.warning(f"HANA Cloud fallback vector search failed: {e}")
 
         # Combine exact matches with top semantic vector results
         combined = []
@@ -137,10 +147,18 @@ class HANAVectorClient:
             if r["ID"] not in seen_ids:
                 combined.append(r)
                 seen_ids.add(r["ID"])
-        for r in vector_results:
+        for r in vector_results or []:
             if r["ID"] not in seen_ids:
                 combined.append(r)
                 seen_ids.add(r["ID"])
+        for row in combined:
+            try:
+                meta = json.loads(row.get('METADATA') or '{}') if isinstance(row.get('METADATA'), str) else dict(row.get('METADATA') or {})
+            except (ValueError, TypeError):
+                meta = {}
+            row['METADATA'] = json.dumps({**meta, 'retrieval': 'hana_vector', 'source_table': 'VECTOR_TABLE',
+                                          'match_type': row.get('MATCH_TYPE', 'semantic'),
+                                          'score_type': 'cosine' if row.get('SCORE') is not None else None})
         return combined[:top_k]
 
     def update_row_vector(self, dataset_id: str, row_identifier: str, text_chunk: str, embedding: List[float], metadata: Optional[Dict[str, Any]] = None) -> bool:
@@ -229,8 +247,10 @@ class HANAVectorClient:
                 (f"{dataset_id}:%", f"%:{dataset_id}:%", f'%"dataset_id": "{dataset_id}"%')
             )
             logger.info(f"Purged vector embeddings for dataset '{dataset_id}' from VECTOR_TABLE")
+            return True
         except Exception as e:
             logger.warning(f"Could not delete HANA vectors for dataset {dataset_id}: {e}")
+            return False
         try:
             from api.services.vector_service import vector_service
             vector_service.cache.clear()

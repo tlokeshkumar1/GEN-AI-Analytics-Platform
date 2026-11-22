@@ -176,7 +176,10 @@ class ComplexExcelIngestionTests(unittest.TestCase):
         ):
             res = UploadService().process_file(raw, "plant_report.xlsx", False, plan, "PLANT_REPORT", "create")
 
-        self.assertEqual(res["status"], "success")
+        # Catalog persistence is deliberately disabled by this fixture. The raw
+        # sheet plan still applies once, and the saved result exposes that partial state.
+        self.assertEqual(res["status"], "partial")
+        self.assertFalse(res["ready_for_publication"])
         self.assertEqual(res["rows_processed"], 3)
         self.assertIsNone(captured["transformation_plan"])
         self.assertEqual(captured["rows"], 3)

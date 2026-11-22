@@ -36,6 +36,11 @@ class PublishRecommendedRequest(BaseModel):
 
 @router.post("/publish-recommended")
 def publish_recommended_charts(req: PublishRecommendedRequest):
+    with semantic_registry.store.transaction():
+        return _publish_recommended_charts(req)
+
+
+def _publish_recommended_charts(req: PublishRecommendedRequest):
     """
     Publish user-selected recommended charts directly to the Executive Dashboard.
     """
@@ -47,13 +52,22 @@ def publish_recommended_charts(req: PublishRecommendedRequest):
     entry = selection.entry
     version = context.version
     semantic_revision = context.semantic_revision
+    state = next((v.get("ingestionStatus", entry.get("ingestionStatus")) for v in entry.get("versions", [])
+                  if v["version"] == version), entry.get("ingestionStatus"))
+    if state == "partial":
+        raise HTTPException(409, "Complete the failed ingestion stages before publishing this dataset.")
 
     # Auto-approve semantic model if currently proposed
     model = None
     try:
         model = semantic_registry.get(entry, version, semantic_revision)
         if model.status != "approved":
+            import os
+            if os.getenv("PLATFORM_AUTO_APPROVE_SEMANTICS", "true").lower() != "true":
+                raise HTTPException(409, "Review and approve the semantic model before publishing.")
             model = semantic_registry.review(entry, version, semantic_revision, "approved")
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning(f"Semantic model auto-approval note: {exc}")
 
@@ -62,10 +76,27 @@ def publish_recommended_charts(req: PublishRecommendedRequest):
 
     analytics_ns = semantic_registry.namespace(entry, version, f"analytics:{semantic_revision}")
     published_refs = []
+    from api.platform.widget_contract import widget_signature
+    known = {widget_signature(doc['value']): doc['value']
+             for doc in semantic_registry.store.list(analytics_ns)}
 
     for item_data in req.items:
         item_id = item_data.get("id") or ("rec_" + uuid.uuid4().hex[:12])
         query_plan = QueryPlan.model_validate(item_data.get("query_plan", {}))
+        candidate = {**item_data, 'query_plan': query_plan.model_dump(exclude_none=True)}
+        signature = widget_signature(candidate)
+        if signature in known:
+            original = known[signature]
+            published_refs.append({'id': original['id'], 'revision': original.get('revision', 1)})
+            continue
+        collision = semantic_registry.store.get(analytics_ns, f'{item_id}:1')
+        if collision:
+            # Generated plans often reuse IDs such as kpi_1; retain the published calculation.
+            import hashlib
+            item_id = 'widget_' + hashlib.sha256(repr(signature).encode('utf-8')).hexdigest()[:20]
+        validation = analytics_engine.execute(query_plan.model_dump(mode='json', exclude_none=True))
+        if not validation.success:
+            raise HTTPException(422, validation.error or 'Widget calculation validation failed.')
         title = item_data.get("title", "Metric Chart")
         kind = item_data.get("kind", "bar")
         explanation = item_data.get("explanation", "Recommended analytical chart.")
@@ -92,6 +123,7 @@ def publish_recommended_charts(req: PublishRecommendedRequest):
             expected_revision=existing_item["revision"] if existing_item else 0,
         )
         published_refs.append({"id": item.id, "revision": 1})
+        known[signature] = item.model_dump(mode='json')
 
     # Preserve existing published items on this dataset and append/update newly selected ones
     dashboard_ns = semantic_registry.namespace(entry, version, f"dashboard:{semantic_revision}")

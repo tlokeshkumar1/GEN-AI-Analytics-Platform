@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi import HTTPException
@@ -90,6 +91,9 @@ class SemanticApprovalTests(unittest.TestCase):
         self.assertEqual(self.registry.list(self.entry, 3), [])
 
     def setUp(self):
+        policy = patch.dict("os.environ", {"PLATFORM_AUTO_APPROVE_SEMANTICS": "false"})
+        policy.start()
+        self.addCleanup(policy.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.registry = SemanticRegistry(MetadataStore(Path(self.temp.name) / "metadata.db", "sqlite"))

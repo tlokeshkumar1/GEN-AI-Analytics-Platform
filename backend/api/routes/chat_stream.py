@@ -5,6 +5,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from api.models.request_models import ChatRequest
 from api.rag.pipeline import RAGPipeline
+from api.rag.catalog_chat import catalog_intent
 from api.services.history_service import history_service
 from api.utils.logger import get_logger
 from api.utils.json_encoder import safe_json_dumps, hana_json_default
@@ -47,27 +48,41 @@ async def chat_stream(req: ChatRequest, request: Request):
     user_id = get_user_id_from_request(request, req.user_id)
     session_id = None
     chat_history = []
-    try:
-        session_id = history_service.get_or_create_session(req.session_id, user_id=user_id, first_message=req.message)
-    except Exception as exc:
-        session_id = req.session_id or f"ephemeral-{uuid.uuid4().hex[:8]}"
-        logger.warning(f"HANA chat session creation failed ({exc}); using ephemeral session {session_id}.")
-
-    if not session_id.startswith("ephemeral-"):
+    defer_history = catalog_intent(req.message) == "greeting" and req.session_id in (None, "default")
+    async def prepare_history():
+        nonlocal session_id, chat_history
         try:
-            history_service.save_message(
-                session_id=session_id,
-                role="user",
-                content=req.message,
-            )
+            session_id = await asyncio.to_thread(history_service.get_or_create_session, req.session_id, user_id=user_id, first_message=req.message)
+        except HTTPException as exc:
+            if exc.status_code < 500:
+                raise
+            session_id = f"ephemeral-{uuid.uuid4().hex[:8]}"
+            logger.warning("Chat history is unavailable; continuing without persistence.")
         except Exception as exc:
-            logger.warning(f"Failed to persist user message for session {session_id} ({exc}).")
+            session_id = f"ephemeral-{uuid.uuid4().hex[:8]}"
+            logger.warning(f"HANA chat session creation failed ({exc}); using ephemeral session {session_id}.")
 
-        try:
-            chat_history = history_service.get_recent_history(session_id, limit=10)
-        except Exception as exc:
-            logger.warning(f"Failed to load recent history for session {session_id} ({exc}); continuing with empty history.")
-            chat_history = []
+        if not session_id.startswith("ephemeral-"):
+            try:
+                await asyncio.to_thread(history_service.save_message,
+                    session_id=session_id,
+                    role="user",
+                    content=req.message,
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to persist user message for session {session_id} ({exc}).")
+
+            if catalog_intent(req.message) is None:
+                try:
+                    chat_history = await asyncio.to_thread(history_service.get_recent_history, session_id, limit=10)
+                except Exception as exc:
+                    logger.warning(f"Failed to load recent history for session {session_id} ({exc}); continuing with empty history.")
+                    chat_history = []
+
+    if defer_history:
+        session_id = f"ephemeral-{uuid.uuid4().hex[:8]}"
+    else:
+        await prepare_history()
 
     def stage_callback(event: dict) -> None:
         """Thread-safe callback invoked by the pipeline for each stage transition or token."""
@@ -119,26 +134,36 @@ async def chat_stream(req: ChatRequest, request: Request):
 
             # Get the final result from the pipeline
             result = pipeline_task.result()
+            if defer_history:
+                await prepare_history()
 
             # Save the chatbot response to HANA Cloud if persistent
             try:
-                history_service.save_message(
-                    session_id=session_id,
-                    role="assistant",
-                    content=result.get("reply", ""),
-                    sources=result.get("sources", []),
-                    intent=result.get("intent"),
-                    metadata={
-                        "chart_type": result.get("chart_type"),
-                        "insights": result.get("insights"),
-                        "graph_image": result.get("graph_image"),
-                    },
-                )
+                if not session_id.startswith("ephemeral-"):
+                    await asyncio.to_thread(history_service.save_message,
+                        session_id=session_id,
+                        role="assistant",
+                        content=result.get("reply", ""),
+                        sources=result.get("sources", []),
+                        intent=result.get("intent"),
+                        metadata={
+                            "chart_type": result.get("chart_type"),
+                            "insights": result.get("insights"),
+                            "graph_image": result.get("graph_image"),
+                            "retrieval": result.get("retrieval"),
+                            "warnings": result.get("warnings", []),
+                        },
+                    )
             except Exception as exc:
                 logger.warning(f"Failed to persist assistant response ({exc}); session {session_id} is ephemeral.")
 
             # Inject session_id into result data
             result["session_id"] = session_id
+            try:
+                result['session_title'] = await asyncio.to_thread(
+                    history_service.ensure_session_title, session_id, user_id, req.message, result.get('reply', ''))
+            except Exception as exc:
+                logger.warning('Could not update conversation title (%s).', type(exc).__name__)
 
             # Emit final_answer event (complete assembled text)
             final_answer_event = {

@@ -984,6 +984,9 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
           onSaved={(result: UploadResponse) => {
             setPendingFile(null);
             setMessage(result.message || `Dataset ${result.filename} imported successfully.`);
+            if (result.status === 'partial') {
+              setError(result.warnings?.join(' ') || 'The dataset was saved, but some ingestion stages need attention.');
+            }
             if (result.dataset) {
               setDatasets(prev => [result.dataset!, ...prev.filter(d => d.id !== result.dataset!.id)]);
               selectDataset(result.dataset);
