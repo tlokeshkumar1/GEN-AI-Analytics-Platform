@@ -10,6 +10,7 @@ backend/preprocessing/output/.objects/
 backend/preprocessing/output/*/
 scratch/test-deps/
 frontend/dist/
+frontend/.mta-dist/
 router/resources/assets/
 *.mtar
 mta_archives/
