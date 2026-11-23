@@ -58,6 +58,20 @@ async def get_stats():
         raise HTTPException(status_code=500, detail=f"Failed to fetch database statistics: {str(e)}")
 
 
+@router.get("/views")
+async def list_metadata_views():
+    require_admin()
+    from api.services.metadata_views import browse_views
+    return await run_in_threadpool(browse_views)
+
+
+@router.get("/views/{view_name}/data")
+async def get_metadata_view_data(view_name: str, page: int = Query(1, ge=1), pageSize: int = Query(25, ge=1, le=100), publication: Literal['all', 'published', 'unpublished'] = 'all'):
+    require_admin()
+    from api.services.metadata_views import browse_views
+    return await run_in_threadpool(browse_views, view_name, page, pageSize, publication)
+
+
 @router.get("/tables")
 async def list_tables(include_internal: bool = Query(True, description="Include system and vector/chat internal tables")):
     """

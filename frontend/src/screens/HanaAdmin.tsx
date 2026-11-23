@@ -11,6 +11,7 @@ import {
   deleteHanaTableRange,
   deleteHanaTable,
 } from '../services/hanaAdminService';
+import { HanaMetadataViews } from '../components/HanaMetadataViews';
 import { getApiErrorMessage } from '../services/api';
 
 const PROTECTED_SYSTEM_TABLES = new Set([
@@ -35,7 +36,7 @@ let cachedHanaAdminOverview: {
 
 export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
   // Navigation & View tabs
-  const [activeTab, setActiveTab] = useState<'tables' | 'query' | 'schema'>('tables');
+  const [activeTab, setActiveTab] = useState<'tables' | 'views' | 'query' | 'schema'>('tables');
 
   // Database stats & table catalog
   const [stats, setStats] = useState<HanaDatabaseStats | null>(cachedHanaAdminOverview?.stats ?? null);
@@ -402,6 +403,11 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
             <span>Tables ({tables.length})</span>
           </button>
 
+          <button type="button" onClick={() => setActiveTab('views')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-inner)] text-xs cursor-pointer ${activeTab === 'views' ? 'bg-[var(--color-surface)] font-semibold shadow-sm' : 'text-[var(--color-text-secondary)]'}`}>
+            <span className="material-symbols-outlined text-[15px]">view_module</span><span>Views</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setActiveTab('query')}
@@ -481,6 +487,8 @@ export const HanaAdmin: React.FC<HanaAdminProps> = ({ onNavigate }) => {
       )}
 
       {/* ==================== TAB 1: TABLES & DATA RECORDS ==================== */}
+      {activeTab === 'views' && <HanaMetadataViews />}
+
       {activeTab === 'tables' && (
         <div className="space-y-2.5 w-full">
           {/* 2. Sleek Compact Table Selector Bar (Reduced from giant panel to slim horizontal row) */}
