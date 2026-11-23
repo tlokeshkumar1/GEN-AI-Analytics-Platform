@@ -90,7 +90,7 @@ class QueryPlan(BaseModel):
     comparison: PeriodComparison | None = None
     sort: Sort | None = None
     limit: int | None = Field(None, ge=1, le=10000)
-    chart_type: Literal["bar", "line", "scatter", "pie"] | None = None
+    chart_type: Literal["kpi", "table", "bar", "line", "scatter", "pie", "area", "donut", "horizontal_bar", "gauge", "funnel", "radar"] | None = None
     requires_vector_search: bool = False
     requires_structured_query: bool = True
 

@@ -10,6 +10,7 @@ vi.mock('../services/api', () => ({
 }));
 
 beforeEach(() => {
+  window.dispatchEvent(new Event('neovatic_signed_out_event'));
   vi.resetAllMocks();
   localStorage.clear();
   sessionStorage.clear();
@@ -77,7 +78,7 @@ const MOCK_MODEL_2 = {
 };
 
 describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and Drop)', () => {
-  it('combines Visual KPI Builder and Drag-and-Drop with step-by-step creation and preserves tab on dataset switch', async () => {
+  it.each([['Bar Chart', 'bar'], ['Donut Chart', 'donut'], ['Gauge KPI', 'gauge'], ['Area Chart', 'area']])('creates and publishes %s while preserving existing widgets', async (chartLabel, chartKind) => {
     vi.mocked(api.get).mockImplementation((url: string) => {
       if (url === '/datasets') return Promise.resolve({ data: [MOCK_DATASET_1, MOCK_DATASET_2] });
       if (url.includes('ds_finance') && url.includes('semantics')) return Promise.resolve({ data: [MOCK_MODEL_1] });
@@ -102,7 +103,7 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
           },
         });
       }
-      if (url === '/insights/dashboard') {
+      if (url === '/dashboard/publish-recommended') {
         return Promise.resolve({ data: { status: 'published' } });
       }
       return Promise.resolve({ data: {} });
@@ -148,13 +149,11 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
     expect(screen.getAllByText('Donut Chart').length).toBeGreaterThan(0);
 
     // 6. Step 1: Select Chart Type (Bar Chart)
-    const barChartItem = screen.getAllByText('Bar Chart')[0];
+    const barChartItem = screen.getAllByText(chartLabel)[0];
     fireEvent.click(barChartItem);
 
     // Canvas transitions to Configuration Card with empty dropzones
-    expect(await screen.findByText('Bar Chart Configuration')).toBeTruthy();
-    expect(screen.getAllByText(/X-Axis \/ Category Dimension/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Y-Axis \/ Metric Measure/i).length).toBeGreaterThan(0);
+    expect(await screen.findByText(`${chartLabel} Configuration`)).toBeTruthy();
 
     // Verify Create Widget is disabled because 2 fields are required
     const createBtn = screen.getByRole('button', { name: /Create Widget/i });
@@ -180,18 +179,25 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
 
     // Verify widget preview rendered
     await waitFor(() => {
-      expect(screen.getByText(/Widget Generated Successfully/i)).toBeTruthy();
-      expect(screen.getByRole('button', { name: /Publish to Executive Dashboard/i })).toBeTruthy();
+      expect(screen.getAllByRole('checkbox', { name: /for publishing/ })).toHaveLength(1);
+      expect(screen.getByRole('button', { name: /Publish Selected Widgets/i })).toBeTruthy();
     });
 
     // 9. Step 5: Publish widget appends to Executive Dashboard (preserves existing widgets)
-    const publishBtn = screen.getByRole('button', { name: /Publish to Executive Dashboard/i });
+    const publishBtn = screen.getByRole('button', { name: /Publish Selected Widgets/i });
+    fireEvent.click(screen.getByRole('checkbox', { name: /for publishing/ }));
     fireEvent.click(publishBtn);
 
     await waitFor(() => {
-      expect(screen.getByText(/Successfully published/i)).toBeTruthy();
-      expect(screen.getByText(/Added alongside 1 existing published widget/i)).toBeTruthy();
+      expect(screen.getByText(/Selected widgets published alongside existing dashboard widgets/i)).toBeTruthy();
+
     });
+
+    const execution = vi.mocked(api.post).mock.calls.find(([url]) => url === '/insights/execute');
+    expect(execution?.[1]).toMatchObject({ chart_type: chartKind });
+    const publication = vi.mocked(api.post).mock.calls.find(([url]) => url === '/dashboard/publish-recommended');
+    expect(publication?.[1]).toMatchObject({ items: [expect.objectContaining({ kind: chartKind })] });
+    expect(vi.mocked(api.post).mock.calls.some(([url]) => url === '/insights/definitions')).toBe(false);
 
     // 10. Switch Active Dataset Source: verify user stays in "Select Drag and Drop" tab
     const datasetSelect = screen.getByRole('combobox', { name: /Active Dataset Source/i });
@@ -202,6 +208,8 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
       expect(screen.getByText('Select Drag and Drop Dashboard Builder')).toBeTruthy();
       expect(screen.getAllByText('Chart Types Library').length).toBeGreaterThan(0);
     });
+
+    expect(screen.queryByLabelText('Generated results')).toBeNull();
 
     // 11. Can switch back to "Build Manually" seamlessly
     const currentModeBtn = screen.getByRole('button', { name: /Select Drag and Drop/i });

@@ -36,6 +36,12 @@ const DASHBOARD_ITEMS: NavItem[] = [
     isAi: true,
   },
   {
+    id: 'widgets',
+    label: 'Widgets',
+    badge: null,
+    icon: 'widgets',
+  },
+  {
     id: 'data-explorer',
     label: 'Data Explorer',
     badge: null,

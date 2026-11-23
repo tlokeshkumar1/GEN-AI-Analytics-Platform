@@ -338,6 +338,21 @@ class HANAVersionTests(unittest.TestCase):
 
 
 class EmbeddingBatchTests(unittest.TestCase):
+    def test_retired_model_returns_actionable_error_without_provider_body(self):
+        import requests
+        from api.services.ai_core_service import ai_core_service, settings, EmbeddingProviderError
+        response = requests.Response()
+        response.status_code = 410
+        response._content = b'{"detail":"provider diagnostic data"}'
+        error = requests.HTTPError(response=response)
+        with patch.object(settings, 'NVIDIA_API_KEY', 'test-key'), \
+             patch.object(ai_core_service, '_request_with_retry', side_effect=error):
+            with self.assertRaises(EmbeddingProviderError) as caught:
+                ai_core_service.generate_embeddings(['test document'])
+        self.assertIn('HTTP 410', str(caught.exception))
+        self.assertIn('AI Settings', str(caught.exception))
+        self.assertNotIn('provider diagnostic data', str(caught.exception))
+
     def test_provider_batch_preserves_input_order_and_hana_dimensions(self):
         from api.services.ai_core_service import ai_core_service, settings
         response = Mock()

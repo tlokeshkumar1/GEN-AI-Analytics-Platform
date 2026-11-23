@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
-import api from '../services/api';
+import api, { getApiErrorMessage } from '../services/api';
+import { AxiosError } from 'axios';
 
 vi.mock('../services/executionContext', () => ({
   contextHeaders: () => ({ 'X-Dataset-Id': 'active-dataset', 'X-Dataset-Version': '7', 'X-Semantic-Revision': '2' }),
@@ -31,4 +32,10 @@ it('does not inherit a version or semantic revision from a different dataset', a
   expect(response.data['X-Dataset-Id']).toBe('another-dataset');
   expect(response.data['X-Dataset-Version']).toBeUndefined();
   expect(response.data['X-Semantic-Revision']).toBeUndefined();
+});
+
+it('shows the validation field and reason for a 422 response', () => {
+  const error = new AxiosError('Request failed with status code 422');
+  error.response = { status: 422, data: { detail: [{ loc: ['body', 'chart_type'], msg: "Input should be a supported chart type" }] } } as any;
+  expect(getApiErrorMessage(error, 'Failed')).toBe('chart_type: Input should be a supported chart type');
 });

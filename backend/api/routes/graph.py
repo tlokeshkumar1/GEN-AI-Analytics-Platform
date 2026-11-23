@@ -8,6 +8,10 @@ from api.models.query_plan import QueryPlan
 from api.services.analytics_engine import analytics_engine
 from api.platform.charts import render_chart
 
+from api.utils.logger import get_logger
+
+logger = get_logger("routes.graph")
+
 router = APIRouter(prefix="/api/graph", tags=["Custom Graph Generation"])
 
 
@@ -165,8 +169,11 @@ def generate_genai_dashboard(req: GenAIDashboardRequest):
             )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Generative AI Dashboard generation failed: {str(e)}")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Gen AI dashboard generation failed")
+        raise HTTPException(status_code=500, detail="Dashboard generation failed. Retry the request.") from exc
 
 
 @router.post("/genai-dashboard/generate-stream")
@@ -195,7 +202,13 @@ def generate_genai_dashboard_stream(req: GenAIDashboardRequest):
         except StopIteration:
             return
         except Exception as exc:
-            message = exc.detail if isinstance(exc, HTTPException) else "Dashboard generation failed. Retry the request."
+            if isinstance(exc, HTTPException):
+                message = exc.detail
+            elif isinstance(exc, ValueError):
+                message = str(exc)
+            else:
+                logger.exception("Gen AI dashboard streaming failed")
+                message = "Dashboard generation failed. Retry the request."
             yield f"data: {json.dumps({'type': 'error', 'message': message})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

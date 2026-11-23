@@ -87,7 +87,7 @@ flowchart TB
     end
 
     subgraph AI_Inference_Tier["AI Inference & Embedding Services"]
-        NIM["NVIDIA NIM Service\n• nemotron-3.5-bolt-e4b (Chat & Semantics)\n• nemotron-3-embed-1b (1536-dim Vectors)"]
+        NIM["NVIDIA NIM Service\n• nemotron-3.5-bolt-e4b (Chat & Semantics)\n• nemotron-3.5-embed-1b (1536-dim Vectors)"]
         AICore["SAP AI Core\n• GPT-4o / GPT-4o-mini (Graph Code Agent)"]
         API <--> NIM
         Agents <--> NIM
@@ -430,7 +430,7 @@ GEN-AI-Analytics-Platform/
 |---|---|---|
 | **Database & Vector** | SAP HANA Cloud (HDI Container) | Relational column store + Vector Engine (`REAL_VECTOR(1536)`) |
 | **Conversational & Semantic LLM** | NVIDIA NIM (`nvidia/nemotron-3.5-bolt-e4b`) | Streaming RAG chat, what-if synthesis & 5-row open-domain inference |
-| **Text Embeddings** | NVIDIA NIM (`nvidia/nemotron-3-embed-1b`) | 1536-dim dense semantic vector embeddings |
+| **Text Embeddings** | NVIDIA NIM (`nvidia/nemotron-3.5-embed-1b`) | 1536-dim dense semantic vector embeddings |
 | **Custom Code Agent** | SAP AI Core (GPT-4o / GPT-4o-mini) | 10-step sandboxed Python visualization generation |
 | **App Gateway** | SAP App Router (`@sap/approuter` Node.js) | Reverse proxy, CSRF protection, static routing, XSUAA gateway |
 | **Identity & Access** | SAP XSUAA | Enterprise OAuth2 JWT identity provider |
@@ -461,7 +461,7 @@ HANA_POOL_TIMEOUT=30.0
 NVIDIA_API_KEY=nvapi-your-nvidia-nim-api-key
 NVIDIA_LLM_MODEL=nvidia/nemotron-3.5-bolt-e4b
 NVIDIA_LLM_URL=https://integrate.api.nvidia.com/v1/chat/completions
-NVIDIA_EMBEDDING_MODEL=nvidia/nemotron-3-embed-1b
+NVIDIA_EMBEDDING_MODEL=nvidia/nemotron-3.5-embed-1b
 NVIDIA_API_URL=https://integrate.api.nvidia.com/v1/embeddings
 
 # ==============================================================================
@@ -717,7 +717,7 @@ CREATE COLUMN TABLE PLATFORM_METADATA (
 Dedicated vector storage for dataset-scoped RAG retrieval:
 - `ID` (NVARCHAR): Deterministic vector chunk identifier.
 - `CONTENT` (NCLOB): Textual record narrative or document slice.
-- `EMBEDDING` (`REAL_VECTOR(1536)`): 1536-dimensional embedding vector computed by `nemotron-3-embed-1b`.
+- `EMBEDDING` (`REAL_VECTOR(1536)`): 1536-dimensional embedding vector computed by `nemotron-3.5-embed-1b`.
 - `METADATA` (NCLOB): Structured JSON metadata (`dataset_id`, `version`, `table_name`, order/record identifiers).
 
 ### 4. Dynamic Dataset & Connector Tables (`DS_*`)

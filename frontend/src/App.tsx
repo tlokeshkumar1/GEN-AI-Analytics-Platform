@@ -450,6 +450,8 @@ export default function App() {
                 />
               )}
 
+              {activePath === 'widgets' && <GraphStudio onNavigate={handleNavigate} user={currentUser} widgetsOnly />}
+
               {activePath === 'ai-agents' && (
                 <AIAgents onNavigate={handleNavigate} />
               )}

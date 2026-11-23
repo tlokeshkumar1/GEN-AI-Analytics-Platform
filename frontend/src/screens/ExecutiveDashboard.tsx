@@ -206,7 +206,7 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
   const approvedCount = widgets.filter(w => w.definition.status === 'approved').length;
 
   return (
-    <div className="space-y-3.5 w-full max-w-[1560px] mx-auto pt-1 pb-16">
+    <div className="executive-dashboard space-y-3.5 w-full max-w-[1560px] mx-auto pt-1 pb-16">
       {/* Sleek, Single-Row Page Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-1 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-3">
@@ -267,7 +267,7 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
       {loading && !dashboard && !error && (
         <div className="space-y-3.5 animate-pulse" aria-busy="true" aria-label="Loading executive dashboard">
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2.5">
-            {Array.from({ length: 4 }).map((_, i) => (
+            {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-3 h-24 space-y-2">
                 <div className="h-3 bg-[var(--color-surface-active)] rounded w-2/3" />
                 <div className="h-6 bg-[var(--color-surface-hover)] rounded w-1/2" />
@@ -275,7 +275,7 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
             ))}
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
-            {Array.from({ length: 2 }).map((_, i) => (
+            {Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] p-4 h-72 space-y-3">
                 <div className="h-4 bg-[var(--color-surface-active)] rounded w-1/3" />
                 <div className="h-56 bg-[var(--color-surface-hover)] rounded-[var(--radius-element)] w-full" />

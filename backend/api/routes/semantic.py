@@ -154,10 +154,12 @@ def publish_dashboard(publication: DashboardPublication):
     for ds_info in grouped.values():
         ns = semantic_registry.namespace(ds_info["entry"], ds_info["version"], f"dashboard:{ds_info['semantic_revision']}")
         prev = semantic_registry.store.get(ns, "published")
+        refs = (prev['value'].get('items', []) if prev else []) + ds_info['items']
+        merged = list({(ref['id'], ref['revision']): ref for ref in refs}.values())
         last_res = semantic_registry.store.put(
             ns,
             "published",
-            {"title": publication.title, "items": ds_info["items"]},
+            {"title": publication.title, "items": merged},
             prev["revision"] if prev else 0
         )
 

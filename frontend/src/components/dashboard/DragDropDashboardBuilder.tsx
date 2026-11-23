@@ -6,8 +6,6 @@ import {
   SemanticModel,
   SemanticField,
   executePlan,
-  saveDefinition,
-  getDashboardPublication,
 } from '../../services/semanticService';
 import { AnalyticsWidget } from '../AnalyticsWidget';
 import { invalidateDashboardCache } from '../../screens/ExecutiveDashboard';
@@ -127,6 +125,7 @@ export interface DragDropDashboardBuilderProps {
   model: SemanticModel | null;
   existingItems?: AnalyticsDefinition[];
   onSavedDefinition?: () => void;
+  onCreatedWidget?: (widget: CreatedWidgetDraft) => void;
   user?: { role?: string; roles?: string[] } | null;
 }
 
@@ -136,6 +135,7 @@ export function DragDropDashboardBuilder({
   onSwitchDataset,
   model,
   onSavedDefinition,
+  onCreatedWidget,
 }: DragDropDashboardBuilderProps) {
   const [dashboardTitle, setDashboardTitle] = useState('My Custom Interactive Dashboard');
   const [selectedChartType, setSelectedChartType] = useState<ChartTypeOption | null>(null);
@@ -290,7 +290,7 @@ export function DragDropDashboardBuilder({
       let metricField = field2;
 
       // If user put measure in zone 1 and dimension in zone 2 for a chart, align correctly
-      if (field1.role === 'measure' && field2.role !== 'measure' && selectedChartType.category === 'chart') {
+      if (!['COUNT', 'COUNT_DISTINCT'].includes(aggregation) && field1.role === 'measure' && field2.role !== 'measure' && selectedChartType.category === 'chart') {
         metricField = field1;
         dimensionField = field2;
       }
@@ -309,7 +309,9 @@ export function DragDropDashboardBuilder({
 
       const title = customTitle.trim() || `${selectedChartType.label}: ${metricField.semantic_name || metricField.name} by ${dimensionField.semantic_name || dimensionField.name}`;
 
-      setCreatedWidget({
+      if (!res.success) throw new Error(res.error || 'The widget query could not be executed.');
+
+      const draft: CreatedWidgetDraft = {
         id: `widget_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         title,
         kind: selectedChartType.id,
@@ -319,7 +321,9 @@ export function DragDropDashboardBuilder({
         datasetId: selectedDatasetId,
         result: res,
         isPublished: false,
-      });
+      };
+      setCreatedWidget(onCreatedWidget ? null : draft);
+      onCreatedWidget?.(draft);
       setMessage(`Successfully created ${selectedChartType.label} widget! Review your interactive preview below.`);
     } catch (err) {
       setError(getApiErrorMessage(err, 'Failed to execute query for widget.'));
@@ -336,52 +340,29 @@ export function DragDropDashboardBuilder({
     setMessage('');
 
     try {
-      const targetDataset = datasets.find(d => d.id === selectedDatasetId) || datasets[0];
-      const modelRev = model?.revision || 1;
-
-      const item: AnalyticsDefinition = {
-        id: `dragdrop_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        title: createdWidget.title,
-        kind: createdWidget.kind,
-        revision: 1,
-        semantic_revision: modelRev,
-        dataset_id: targetDataset?.id,
-        dataset_name: targetDataset?.name,
-        source_file: targetDataset?.name,
-        explanation: `Created via Select Drag & Drop: ${createdWidget.aggregation} of ${createdWidget.metric}${createdWidget.dimension ? ` by ${createdWidget.dimension}` : ''}`,
-        status: 'approved',
-        query_plan: {
-          metric: createdWidget.metric,
-          aggregation: createdWidget.aggregation,
-          dimension: createdWidget.dimension,
-          chart_type: createdWidget.kind,
-        },
-        dependencies: [createdWidget.metric, createdWidget.dimension].filter(Boolean) as string[],
-      };
-
-      // 1. Save new definition to platform
-      await saveDefinition(item);
-
-      // 2. Fetch existing published widgets to append, NEVER removing existing ones!
-      const currentPub = await getDashboardPublication(true).catch(() => ({ title: '', items: [], status: 'unpublished' }));
-      const existingItems: Array<{ id: string; revision: number }> = (currentPub as any)?.items || [];
-
-      // Merge and deduplicate by id and revision
-      const mergedList = [...existingItems, { id: item.id, revision: item.revision }];
-      const uniqueItems = Array.from(new Map(mergedList.map(it => [`${it.id}:${it.revision}`, it])).values());
-
-      // 3. Publish merged catalog to Executive Dashboard
-      await api.post('/insights/dashboard', {
+      // Publish the reviewed preview through the validated append endpoint.
+      await api.post('/dashboard/publish-recommended', {
         title: 'Executive Analytics Dashboard',
-        items: uniqueItems,
-      });
+        items: [{
+          id: createdWidget.id,
+          title: createdWidget.title,
+          kind: createdWidget.kind,
+          query_plan: {
+            metric: createdWidget.metric,
+            aggregation: createdWidget.aggregation,
+            dimension: createdWidget.dimension,
+            chart_type: createdWidget.kind,
+            left_dataset_id: createdWidget.datasetId,
+          },
+        }],
+      }, { headers: { 'X-Dataset-Id': createdWidget.datasetId } });
 
       invalidateDashboardCache();
       window.dispatchEvent(new Event('dashboard_updated'));
       onSavedDefinition?.();
 
       setCreatedWidget(prev => (prev ? { ...prev, isPublished: true } : null));
-      setMessage(`Successfully published "${item.title}" to the Executive Dashboard! Added alongside ${existingItems.length} existing published widget(s).`);
+      setMessage(`Successfully published "${createdWidget.title}" to the Executive Dashboard! Existing dashboard widgets were preserved.`);
     } catch (err) {
       setError(getApiErrorMessage(err, `Failed to publish widget "${createdWidget.title}".`));
     } finally {

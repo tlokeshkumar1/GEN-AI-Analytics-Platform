@@ -1,4 +1,5 @@
 export const SIGNED_OUT_KEY = 'neovatic_signed_out';
+export const SIGNED_OUT_EVENT = 'neovatic_signed_out_event';
 export const TOKEN_EXPIRY_KEY = 'auth_token_expires_at';
 
 interface RouterOptions { configuredUrl?: string; isDevelopment?: boolean; }
@@ -23,7 +24,11 @@ export function clearLocalIdentity(signedOut: boolean): void {
     localStorage.removeItem(key);
     sessionStorage.removeItem(key);
   }
-  if (signedOut) localStorage.setItem(SIGNED_OUT_KEY, 'true');
+  if (signedOut) {
+    localStorage.setItem(SIGNED_OUT_KEY, 'true');
+    localStorage.removeItem('neovatic_agent_activity_records');
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+  }
   else localStorage.removeItem(SIGNED_OUT_KEY);
 }
 

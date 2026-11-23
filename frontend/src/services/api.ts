@@ -209,6 +209,14 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
     const data = error.response?.data;
     const detail = data?.detail;
     if (typeof detail === 'string' && detail.trim()) return detail;
+    if (Array.isArray(detail)) {
+      const messages = detail.map(item => {
+        if (typeof item?.msg !== 'string') return '';
+        const path = Array.isArray(item.loc) ? item.loc.filter((part: unknown) => part !== 'body').join('.') : '';
+        return path ? `${path}: ${item.msg}` : item.msg;
+      }).filter(Boolean);
+      if (messages.length) return messages.join('; ');
+    }
     if (detail && typeof detail.message === 'string' && detail.message.trim()) return detail.message;
     if (typeof data?.error_description === 'string' && data.error_description.trim()) return data.error_description;
     if (typeof data?.message === 'string' && data.message.trim()) return data.message;

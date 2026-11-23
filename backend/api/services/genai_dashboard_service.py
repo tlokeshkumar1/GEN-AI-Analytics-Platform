@@ -131,6 +131,53 @@ class GenAIDashboardService:
     # ──────────────────────────────────────────────────────────────────────────
     # Step 1, 3, 4: Understand, Identify, Relate (LLM Reasoning Layer)
     # ──────────────────────────────────────────────────────────────────────────
+    def _date_comparison_plan(self, prompt, schemas):
+        """Resolve an explicit date-versus-measure request without inventing fields."""
+        parts = re.split(r"\s+(?:vs\.?|versus)\s+", prompt, flags=re.I)
+        if len(parts) != 2 or not re.search(r"\bdate\b", prompt, re.I):
+            return None
+
+        # Leave calculations, filters and follow-up instructions to the full planner.
+        if re.search(r"\b(where|filter|only|last|since|between|average|sum|count|mean|by)\b|[<>=()]", prompt, re.I):
+            return None
+
+        def normalized(value):
+            value = re.sub(r"^(?:give me|show me|show|plot|compare)\s+", "", value.strip(), flags=re.I)
+            value = re.sub(r"percentage|percent|pct", "%", value, flags=re.I)
+            return re.sub(r"[^a-z0-9%]", "", value.lower())
+
+        for schema in schemas:
+            columns = schema['columns']
+            matches = [next((c for c in columns if normalized(c['name']) == normalized(part)), None)
+                       for part in parts]
+            if not all(matches):
+                continue
+            dates = [c for c in matches if c.get('type') in ('date', 'datetime', 'time')
+                     or 'date' in c['name'].lower()]
+            if len(dates) != 1:
+                return None
+            dimension = dates[0]['name']
+            metric = next(c['name'] for c in matches if c is not dates[0])
+            title = f"Average {metric} by {dimension}"
+            quote = lambda value: '"' + value.replace('"', '""') + '"'
+            return {
+                'intent_summary': title, 'target_datasets': [schema['dataset_id']],
+                'join_required': False, 'primary_metric': metric, 'primary_dimension': dimension,
+                'sql_query': f"SELECT {quote(dimension)}, AVG({quote(metric)}) FROM {quote(schema['table_name'])} GROUP BY {quote(dimension)} ORDER BY {quote(dimension)}",
+                'kpis': [], 'charts': [{'id': 'chart_1', 'title': title, 'kind': 'line',
+                    'metric': metric, 'dimension': dimension, 'aggregation': 'AVG'}],
+            }
+        # A comparison across tables still needs the join planner.
+        resolved = [any(normalized(c['name']) == normalized(part)
+                        for schema in schemas for c in schema['columns']) for part in parts]
+        if all(resolved):
+            return None
+        missing = [re.sub(r"^(?:give me|show me|show|plot|compare)\s+", "", part.strip(), flags=re.I)
+                   for part, found in zip(parts, resolved) if not found]
+        scope = ', '.join(schema['table_name'] for schema in schemas) or 'the selected data scope'
+        raise ValueError(f"Cannot create this comparison: {scope} does not contain the requested field(s): "
+                         + ', '.join(missing) + '. Select a dataset containing these fields or use its actual column names.')
+
     def _interpret_query_with_llm(
         self,
         prompt: str,
@@ -142,6 +189,9 @@ class GenAIDashboardService:
         LLM understands user intent, explores schemas, selects tables, determines JOIN strategy,
         and generates dynamic SQL. Robustly supports raw dumped field lists.
         """
+        comparison = self._date_comparison_plan(prompt, schemas)
+        if comparison:
+            return comparison
         history_text = ""
         if conversation_history:
             history_text = "\nPrior Conversation Context:\n" + "\n".join(
@@ -179,6 +229,7 @@ CRITICAL INSTRUCTIONS:
 5. Only use columns present in the schema. Use numeric aggregations only on numeric measures. Infer no currency without explicit evidence. Include filters in the plan.
 6. Specify python_visual only when Python, Matplotlib or Seaborn is explicitly requested; otherwise use null.
 7. Generate a clean standard SQL query representing the core aggregation.
+8. For an explicit date vs measure comparison, return a chart with the date as dimension and the requested measure as metric. Use AVG for completion percentages. If either field cannot be resolved in the selected scope, explain the missing fields in intent_summary and return empty kpis and charts. Never substitute unrelated fields.
 
 Respond with ONLY a valid JSON object strictly matching this JSON schema:
 {{
@@ -239,6 +290,10 @@ JSON:"""
                 return parsed
         except Exception as exc:
             logger.warning(f"[GenAIDashboardService] LLM parsing failed or timed out: {exc}. Using heuristic engine.")
+
+        if re.search(r"\s+(?:vs\.?|versus)\s+", prompt, re.I) and re.search(r"\bdate\b", prompt, re.I):
+            raise ValueError('Could not resolve the requested date comparison in the selected dataset. '
+                             'Check that both fields exist and try again.')
 
         # Heuristic / Algorithmic Fallback Engine
         return self._heuristic_query_interpretation(prompt, schemas, target_dataset_id)
@@ -525,9 +580,15 @@ JSON:"""
                 raise ValueError(f"Unknown chart dimension: {spec.get('dimension')}")
             if agg not in {'COUNT', 'COUNT_DISTINCT', 'DISTINCT'}:
                 values = df[metric]
-                numeric = pd.to_numeric(values, errors='coerce')
-                if (values.notna() & numeric.isna()).any():
+                clean_values = values.astype('string').str.replace(r'[\$,%]', '', regex=True)
+                numeric = pd.to_numeric(clean_values, errors='coerce')
+                # Ingested text measures use these markers for missing observations.
+                missing = values.isna() | clean_values.str.strip().str.casefold().isin(
+                    {'', 'unassigned', 'n/a', 'na', 'null', 'none', 'nan', '-', '--'})
+                if (~missing & numeric.isna()).any():
                     raise ValueError(f"{agg} requires a numeric metric: {metric}")
+                if not numeric.notna().any():
+                    raise ValueError(f"No numeric values are available for {metric} in the selected dataset.")
 
         # Apply basic filters if specified
         if filters:
@@ -678,7 +739,11 @@ JSON:"""
                     else:
                         grouped = temp_df.groupby(dim, as_index=False)[metric].sum()
 
-                    grouped = grouped.sort_values(by=metric, ascending=False).head(15)
+                    if kind in ('line', 'area') and ('date' in dim.lower() or pd.api.types.is_datetime64_any_dtype(temp_df[dim])):
+                        order = pd.to_datetime(grouped[dim], errors='coerce')
+                        grouped = grouped.iloc[order.argsort()] if order.notna().all() else grouped.sort_values(by=dim)
+                    else:
+                        grouped = grouped.sort_values(by=metric, ascending=False).head(15)
                     for _, row in grouped.iterrows():
                         d_val = str(row[dim])
                         m_val = round(float(row[metric]), 2)
@@ -992,7 +1057,10 @@ JSON:"""
                 raise ValueError(f"Could not resolve all {count} requested {key}. Specify the missing fields or calculation.")
             plan[key] = candidates[:count]
 
-        # Read persisted definitions before proposing another equivalent widget.
+        if not plan.get('kpis') and not plan.get('charts'):
+            raise ValueError('No widgets could be resolved for this request. Check that the selected dataset contains the requested fields. ' + str(plan.get('intent_summary') or ''))
+
+        # Persisted definitions suppress unsolicited recommendations, not requested output.
         from api.platform.semantic import semantic_registry
         from api.models.execution_context import current_selection
         selection = current_selection.get()
@@ -1001,13 +1069,14 @@ JSON:"""
             namespace = semantic_registry.namespace(selection.entry, selection.context.version,
                                                     f"analytics:{selection.context.semantic_revision}")
             known = {widget_signature(doc['value']) for doc in semantic_registry.store.list(namespace)}
-        regenerate = bool(re.search(r'\b(regenerate|replace|recreate)\b', prompt, re.I))
+        requested_signatures = set()
         for key, default_kind in [('kpis', 'kpi'), ('charts', 'bar')]:
             unique = []
             for item in plan.get(key) or []:
                 signature = widget_signature({**item, 'kind': item.get('kind', default_kind)})
-                if signature not in known or regenerate:
+                if signature not in requested_signatures:
                     unique.append(item)
+                    requested_signatures.add(signature)
                     known.add(signature)
             plan[key] = unique
         yield step_event(3, "Identify", f"Identified primary metrics & {len(plan.get('kpis', []))} KPI measures.")

@@ -179,3 +179,34 @@ npm run build
 These tests use isolated temporary storage and mocked external providers. Live HANA transactions, cloud buckets, SAP APIs, SOAP schemas, NIM models and Docker charts still need tenant-specific acceptance tests. Broad load testing, HANA failover testing, scheduled synchronization, automatic object garbage collection and a polished visual relationship/formula designer remain outside the verified behavior. The advanced semantic editors expose validated JSON contracts; they are not a drag-and-drop designer. Upload/extraction currently materializes one dataset in memory; large-volume deployments require measured sizing and streaming before claiming scale.
 
 Latest verification on 2026-10-18: 92 backend tests passed in 4.137 seconds, 11 frontend tests passed, TypeScript checking passed, and the production build passed (3.42 seconds with warm local caches). These are development verification times, not application latency or scalability measurements. The build reports a roughly 594 kB JavaScript bundle/chunk-size warning and a future Vite configuration-loader warning; neither is a build failure.
+
+
+## Read-only metadata category views
+
+The eight populated metadata categories can be inspected through these read-only views:
+
+| View | Category |
+| --- | --- |
+| PM_ANALYTICS_V | KPI and chart definitions |
+| PM_DASHBOARDS_V | Published dashboard references |
+| PM_SEMANTIC_MODELS_V | Semantic models |
+| PM_WORKFLOWS_V | Ingestion workflow state |
+| PM_DATASET_CATALOG_V | Dataset catalog documents |
+| PM_ARTIFACT_OBJECTS_V | Uploaded files, snapshot data, indexes and manifests |
+| PM_WORKERS_V | Worker heartbeats |
+| PM_USER_LOGINS_V | Login tracking |
+
+These views select the existing NAMESPACE, DOCUMENT_ID, REVISION and PAYLOAD columns from PLATFORM_DOCUMENTS. They do not copy, move or delete records, change application routing, or grant additional access. Unknown categories remain in the original store and are reported by the runner; eight views are not a complete list of all supported application namespaces. Views are organizational access paths, not independent storage or a guaranteed performance improvement.
+
+For an explicit-schema deployment, run from the repository root:
+
+```powershell
+backend/venv/Scripts/python.exe scripts/create_metadata_category_views.py
+backend/venv/Scripts/python.exe scripts/create_metadata_category_views.py --apply
+```
+
+The first invocation is read-only. Apply refuses existing object-name collisions, checks non-overlapping membership and source fingerprints, and removes only views created in that invocation if validation fails. HANA DDL is not assumed to roll back as one transaction. Updates to existing worker heartbeats are allowed and reported separately. Record identities and every non-heartbeat payload must remain unchanged; other concurrent changes require retrying during a quiet period. Re-running apply after a successful deployment intentionally refuses existing view names.
+
+The explicit SQL is in backend/db/migrations/003_metadata_category_views.sql. HDI deployments instead use the matching backend/db/src/views/pm_*.hdbview artifacts against the HDI-managed PLATFORM_DOCUMENTS table. Do not apply both provisioning paths to the same schema. No startup code provisions these views.
+
+To reverse an explicit-schema deployment, drop only the eight named views after checking consumers. The source table and both existing synonyms remain in place. Any future physical-table migration requires its own design, routing changes, data-copy verification and rollback process.

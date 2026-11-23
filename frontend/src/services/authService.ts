@@ -1,4 +1,5 @@
 import api from './api';
+import { clearLocalIdentity } from './authNavigation';
 
 export interface UserProfile {
   authenticated: boolean;
@@ -100,6 +101,7 @@ export const fetchCurrentUser = async (): Promise<UserProfile> => {
 
 export const logoutUser = async (): Promise<void> => {
   await api.post('/auth/logout');
+  clearLocalIdentity(true);
 };
 
 export default {

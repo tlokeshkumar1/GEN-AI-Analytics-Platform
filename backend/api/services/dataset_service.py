@@ -366,7 +366,7 @@ class DatasetService:
         columns = list(df.columns)
         return [self._format_row_chunk(row, columns, filename) for row in rows]
 
-    def _index(self, chunks, previous=None):
+    def _index(self, chunks, previous=None, *, raise_on_error=False):
         from api.services.embedding_service import embedding_service
         from api.utils.logger import get_logger
         try:
@@ -380,6 +380,8 @@ class DatasetService:
             return vectors, "Ready"
         except Exception:
             get_logger("datasets").exception("Embedding generation failed; current source text remains available for retrieval")
+            if raise_on_error:
+                raise
             return [], "Error"
 
     @staticmethod
@@ -1077,7 +1079,7 @@ class DatasetService:
             catalog = self._catalog()
             entry = self._entry(catalog, dataset_id)
             require_dataset_access(entry, write=True)
-            snap = self._snapshot(entry)
+            snap = copy.deepcopy(self._snapshot(entry))
 
             # Reconstruct chunks from row-level data if available or if transitioning to 1-row-per-chunk
             rows = snap.get("rows")
@@ -1108,7 +1110,13 @@ class DatasetService:
                     columns = [c["name"] for c in snap["columns"]]
                 snap["chunks"] = self._chunks(ColumnsProxy(), entry["name"], rows)
 
-            vectors, status = self._index(snap["chunks"])
+            from api.services.ai_core_service import EmbeddingProviderError
+            try:
+                vectors, status = self._index(snap["chunks"], raise_on_error=True)
+            except EmbeddingProviderError as exc:
+                raise HTTPException(503, f"{exc} Dataset is still saved.") from exc
+            except Exception as exc:
+                raise HTTPException(503, "Embedding service unavailable. Dataset is still saved; please retry.") from exc
             if status != "Ready":
                 raise HTTPException(503, "Embedding service unavailable. Dataset is still saved; please retry.")
             snap.update(embeddings=vectors, embeddingCount=len(vectors), embeddingStatus=status)

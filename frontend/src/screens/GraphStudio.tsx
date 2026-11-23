@@ -31,6 +31,8 @@ import {
 } from '../services/semanticService';
 import { AnalyticsWidget } from '../components/AnalyticsWidget';
 import { invalidateDashboardCache } from './ExecutiveDashboard';
+import { GeneratedWidgetSections, GeneratedWidget } from '../components/dashboard/GeneratedWidgetSections';
+import { SIGNED_OUT_EVENT } from '../services/authNavigation';
 import { DragDropDashboardBuilder } from '../components/dashboard/DragDropDashboardBuilder';
 
 const DISPLAY_TYPES = [
@@ -102,16 +104,33 @@ interface CachedStudioState {
 }
 
 let cachedStudioState: CachedStudioState | null = null;
+let generatedWidgetCache: GeneratedWidget[] = [];
+window.addEventListener(SIGNED_OUT_EVENT, () => { generatedWidgetCache = []; cachedStudioState = null; });
 
 export function GraphStudio({
   onNavigate,
   user,
   initialMode = 'visual',
+  widgetsOnly = false,
 }: {
   onNavigate: (path: string) => void;
   user?: { role?: string; roles?: string[] } | null;
   initialMode?: CreationMode;
+  widgetsOnly?: boolean;
 }) {
+  const [generatedWidgets, setGeneratedWidgets] = useState<GeneratedWidget[]>(generatedWidgetCache);
+  const addGenerated = (widget: GeneratedWidget) => {
+    setGeneratedWidgets(prev => {
+      const next = [{ ...widget, source: widget.source || activeMode }, ...prev.filter(w => w.definition.id !== widget.definition.id)];
+      generatedWidgetCache = next;
+      return next;
+    });
+  };
+  useEffect(() => {
+    const clear = () => setGeneratedWidgets([]);
+    window.addEventListener(SIGNED_OUT_EVENT, clear);
+    return () => window.removeEventListener(SIGNED_OUT_EVENT, clear);
+  }, []);
   const canPublish = true;
   const [model, setModel] = useState<SemanticModel | null>(cachedStudioState?.model ?? null);
   const [items, setItems] = useState<AnalyticsDefinition[]>(cachedStudioState?.items ?? []);
@@ -197,15 +216,11 @@ export function GraphStudio({
   const [genAiFailed, setGenAiFailed] = useState(false);
   const [genAiStepDetail, setGenAiStepDetail] = useState<string>('');
   const [genAiDashboard, setGenAiDashboard] = useState<GenAIDashboardResponse | null>(null);
-  const [executedGenAi, setExecutedGenAi] = useState<Record<string, boolean>>({});
-  const [executingGenAi, setExecutingGenAi] = useState(false);
   const [conversationHistory, setConversationHistory] = useState<Array<{ role: string; content: string }>>([]);
   const [activeRecommendations, setActiveRecommendations] = useState<GenAIRecommendation[]>([]);
   const [showSqlInspector, setShowSqlInspector] = useState(false);
   const [isAddingRecommendation, setIsAddingRecommendation] = useState<Record<string, boolean>>({});
-  const [isPublishingGenAi, setIsPublishingGenAi] = useState(false);
   const [followUpPrompt, setFollowUpPrompt] = useState('');
-  const [chartViewModes, setChartViewModes] = useState<Record<string, 'chart' | 'table'>>({});
   const [widgetStatuses, setWidgetStatuses] = useState<Record<string, 'approved' | 'rejected' | 'pending'>>({});
   const [previewWidget, setPreviewWidget] = useState<{
     id: string;
@@ -219,6 +234,8 @@ export function GraphStudio({
     data?: any[];
     subtitle?: string;
     sql_query?: string;
+    query_plan?: GenAIChart['query_plan'];
+    recommendationId?: string;
   } | null>(null);
 
   // Mode 1: Visual KPI Builder States
@@ -628,14 +645,41 @@ export function GraphStudio({
         explanation: isCrossTable ? `Cross-table query linked on ${joinResolution?.left_key} = ${joinResolution?.right_key}` : 'A user-defined query over approved semantic fields.',
         status: 'proposed',
       };
-    await saveDefinition(item);
+    const result = await executePlan(query, { 'X-Dataset-Id': selectedDatasetId });
+    if (!result.success) throw new Error(result.error || 'Widget calculation failed.');
+    const canonical = Object.fromEntries(Object.entries(item).filter(([key]) =>
+      ['id', 'title', 'kind', 'revision', 'semantic_revision', 'query_plan', 'dependencies', 'explanation', 'status'].includes(key))) as unknown as AnalyticsDefinition;
+    const saved = await saveDefinition(canonical);
+    addGenerated({ definition: { ...item, ...saved, dataset_id: selectedDatasetId,
+      dataset_name: datasets.find(d => d.id === selectedDatasetId)?.name,
+      version: datasets.find(d => d.id === selectedDatasetId)?.currentVersion || 1 }, result });
     setItems(await getRecommendations(true));
     setEdit(null);
     setTitle('');
-    setMessage('Saved definition proposal. Click "Preview Live" below to verify calculations, then "Approve".');
+    setMessage('Widget generated below. Review the result and select it to publish.');
   };
 
   // ── Mode 1: Generative AI Dashboards Handlers (Analysis-First 10-Step Workflow) ──
+
+  const stageGenAiWidget = (widget: any, context?: GenAIDashboardResponse['context'], prefix = 'generated') => {
+    const datasetId = context?.dataset_id || selectedDatasetId;
+    const metricName = widget.metric || '*';
+    const query = { ...widget.query_plan, metric: metricName, aggregation: widget.aggregation,
+      ...(widget.dimension ? { dimension: widget.dimension } : {}) };
+    const data = widget.kind === 'kpi' ? [{ [metricName]: widget.value }] :
+      (widget.data || []).map((point: any) => ({ [widget.dimension || 'label']: point.label, [metricName]: point.value }));
+    addGenerated({ definition: {
+      id: `${prefix}_${widget.id}`, title: widget.title, kind: widget.kind || 'kpi', revision: 1,
+      semantic_revision: context?.semantic_revision || model?.revision || 1,
+      dataset_id: datasetId, dataset_name: datasets.find(d => d.id === datasetId)?.name,
+      version: context?.version || datasets.find(d => d.id === datasetId)?.currentVersion || 1,
+      query_plan: query, dependencies: [metricName, widget.dimension].filter(Boolean),
+      explanation: 'Generated from the requested analysis.', status: 'proposed',
+    }, result: { success: true, data, summary: widget.kind === 'kpi' ? { formatted_value:
+      widget.format === 'percent' ? `${widget.value}%` : widget.format === 'currency' ?
+      `$${Number(widget.value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : String(widget.value) } : {},
+      records_matched: data.length, execution_time_ms: 0, execution_backend: 'dataframe' } });
+  };
 
   const handleRunGenAiDashboard = async (customPrompt?: string) => {
     const text = (customPrompt || genAiPrompt || promptInput).trim();
@@ -659,16 +703,21 @@ export function GraphStudio({
           setGenAiStepDetail(stepEvent.detail || `Executing Stage ${stepEvent.step} of 10...`);
         }
       );
+      if (!res.kpi_cards?.length && !res.charts?.length) {
+        throw new Error('No widgets were generated. Check that the selected dataset contains the requested fields.');
+      }
+      setPreviewWidget(null);
       setGenAiStep(10);
       setGenAiStepDetail('All 10 stages completed successfully.');
       setGenAiDashboard(res);
+      res.kpi_cards?.forEach(widget => stageGenAiWidget({ ...widget, kind: 'kpi' }, res.context, res.dashboard_id));
+      res.charts?.forEach(widget => stageGenAiWidget(widget, res.context, res.dashboard_id));
       setPublishedSuccess(false);
 
       // Approval follows a successful live execution and user review.
       const initialStatuses: Record<string, 'approved' | 'rejected' | 'pending'> = {};
       res.kpi_cards?.forEach(k => { initialStatuses[k.id] = 'pending'; });
       res.charts?.forEach(c => { initialStatuses[c.id] = 'pending'; });
-      setExecutedGenAi({});
       setWidgetStatuses(initialStatuses);
 
       setActiveRecommendations(res.recommendations || []);
@@ -688,25 +737,8 @@ export function GraphStudio({
     }
   };
 
-  const executeGenAiPreview = async (widget: any) => {
-    if (executingGenAi) return;
-    setExecutingGenAi(true);
-    setError('');
-    try {
-      const result = await executeGenAiWidget({ widget, context: genAiDashboard?.context,
-        dataset_id: genAiDashboard?.context?.dataset_id || (selectedDatasetId === 'all' ? undefined : selectedDatasetId || undefined) });
-      if (!result.widget || result.widget.error) throw new Error(result.widget?.error || 'Widget execution returned no output.');
-      setPreviewWidget({ ...widget, ...result.widget, kind: result.kind });
-      setExecutedGenAi(previous => ({ ...previous, [widget.id]: true }));
-    } catch (err) {
-      setExecutedGenAi(previous => ({ ...previous, [widget.id]: false }));
-      setError(getApiErrorMessage(err, 'Unable to execute widget preview.'));
-    } finally {
-      setExecutingGenAi(false);
-    }
-  };
-
   const handleAcceptRecommendation = async (rec: GenAIRecommendation) => {
+    setError('');
     setIsAddingRecommendation(prev => ({ ...prev, [rec.id]: true }));
     try {
       const res = await executeGenAiWidget({
@@ -714,25 +746,13 @@ export function GraphStudio({
         context: genAiDashboard?.context,
         dataset_id: selectedDatasetId === 'all' ? undefined : selectedDatasetId || undefined,
       });
-      if (res.kind === 'kpi' && res.widget) {
-        const w = res.widget;
-        setWidgetStatuses(prev => ({ ...prev, [w.id]: 'pending' }));
-        setGenAiDashboard(prev => prev ? {
-          ...prev,
-          kpi_cards: [...prev.kpi_cards, w],
-        } : prev);
-      } else if (res.widget) {
-        const w = res.widget;
-        setWidgetStatuses(prev => ({ ...prev, [w.id]: 'pending' }));
-        setGenAiDashboard(prev => prev ? {
-          ...prev,
-          charts: [...prev.charts, w],
-        } : prev);
+      if (!res.widget || res.widget.error) throw new Error(res.widget?.error || 'Widget execution returned no output.');
+      if (res.kind === 'kpi' ? res.widget.value == null : !res.widget.data?.length) {
+        throw new Error('No data matched this recommendation. Adjust the data scope or filters and try again.');
       }
-      setActiveRecommendations(prev => prev.filter(r => r.id !== rec.id));
-      setMessage(`Executed "${rec.title}". Preview and approve it before publishing.`);
+      setPreviewWidget({ ...res.widget, id: rec.id, kind: res.kind, recommendationId: rec.id });
     } catch (err) {
-      setError(getApiErrorMessage(err, `Failed to add recommendation "${rec.title}".`));
+      setError(getApiErrorMessage(err, `Failed to preview recommendation "${rec.title}".`));
     } finally {
       setIsAddingRecommendation(prev => ({ ...prev, [rec.id]: false }));
     }
@@ -740,57 +760,6 @@ export function GraphStudio({
 
   const handleDismissRecommendation = (recId: string) => {
     setActiveRecommendations(prev => prev.filter(r => r.id !== recId));
-  };
-
-  const handlePublishGenAiDashboard = async () => {
-    if (!genAiDashboard) return;
-    const approvedKpis = (genAiDashboard.kpi_cards || []).filter(k => widgetStatuses[k.id] === 'approved' && executedGenAi[k.id]);
-    const approvedCharts = (genAiDashboard.charts || []).filter(c => widgetStatuses[c.id] === 'approved' && executedGenAi[c.id]);
-
-    if (approvedKpis.length === 0 && approvedCharts.length === 0) {
-      setError('No approved widgets to publish. Please approve at least one KPI card or chart.');
-      return;
-    }
-
-    setIsPublishingGenAi(true);
-    try {
-      const generationContext = genAiDashboard.context;
-      const targetDataset = datasets.find(d => d.id === (generationContext?.dataset_id || selectedDatasetId));
-      if (!targetDataset) throw new Error('Select the dataset used to generate these widgets before publishing.');
-      const items = [
-        ...approvedKpis.map(widget => ({ ...widget, kind: 'kpi' })),
-        ...approvedCharts,
-      ].map(widget => ({
-        id: widget.id,
-        title: widget.title,
-        kind: widget.kind,
-        query_plan: {
-          ...widget.query_plan,
-          metric: widget.metric,
-          aggregation: widget.aggregation,
-          ...('dimension' in widget ? { dimension: widget.dimension } : {}),
-        },
-      }));
-      const response = await api.post('/dashboard/publish-recommended', {
-        title: genAiDashboard.intent_summary || 'Executive Analytics Dashboard', items,
-      }, { headers: { 'X-Dataset-Id': targetDataset.id,
-        'X-Dataset-Version': String(generationContext?.version || targetDataset.currentVersion || 1),
-        'X-Semantic-Revision': String(generationContext?.semantic_revision || model?.revision || 1) } });
-      invalidateDashboardCache();
-      setMessage(`Successfully published ${response.data.published_count} approved widgets to the Executive Dashboard!`);
-      setPublishedSuccess(true);
-    } catch (err) {
-      setError(getApiErrorMessage(err, 'Failed to publish Gen AI Dashboard widgets.'));
-    } finally {
-      setIsPublishingGenAi(false);
-    }
-  };
-
-  const toggleChartViewMode = (chartId: string) => {
-    setChartViewModes(prev => ({
-      ...prev,
-      [chartId]: prev[chartId] === 'table' ? 'chart' : 'table'
-    }));
   };
 
   const handleRunAgentPrompt = async () => {
@@ -888,7 +857,7 @@ export function GraphStudio({
       });
       invalidateDashboardCache();
       window.dispatchEvent(new Event('dashboard_updated'));
-      setPublishedKeys([...selected]);
+      setPublishedKeys(prev => Array.from(new Set([...prev, ...selected])));
       setPublishedSuccess(true);
       setMessage(`Successfully published ${selectedWidgets.length} widget(s) to the Executive Dashboard!`);
     }, 'publish');
@@ -904,7 +873,7 @@ export function GraphStudio({
           </div>
           <div className="flex items-center gap-2.5">
             <h1 className="text-base font-semibold text-[var(--color-text-primary)] tracking-tight">
-              Build Your KPI
+              {widgetsOnly ? 'Widgets' : 'Build Your KPI'}
             </h1>
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-full)] text-[11px] font-medium bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               Analytics Studio
@@ -923,6 +892,14 @@ export function GraphStudio({
                 const newlyProposed = await proposeRecommendations(true);
                 const allItems = await getRecommendations(true);
                 setItems(allItems);
+                if (!widgetsOnly) {
+                  const proposals = Array.isArray(newlyProposed) ? newlyProposed : (newlyProposed as any)?.items || [];
+                  for (const item of proposals) {
+                    const result = await executePlan(item.query_plan);
+                    if (result.success) addGenerated({ definition: { ...item, dataset_id: item.dataset_id || selectedDatasetId,
+                      version: datasets.find(d => d.id === selectedDatasetId)?.currentVersion || 1 }, result });
+                  }
+                }
                 if (Array.isArray(newlyProposed) && newlyProposed.length > 0) {
                   setMessage(
                     `Added ${newlyProposed.length} new AI-recommended KPI/chart definition${newlyProposed.length === 1 ? '' : 's'}. Existing definitions were preserved.`
@@ -991,6 +968,7 @@ export function GraphStudio({
         </div>
       )}
 
+      <div hidden={widgetsOnly && !edit} className="space-y-4">
       {/* CREATION PATHWAYS (Top Segmented Tab Selector) */}
       <div className="bg-[var(--color-surface-hover)] p-1 rounded-[var(--radius-container)] border border-[var(--color-border)] flex flex-wrap sm:flex-nowrap gap-1">
         <button
@@ -1352,7 +1330,7 @@ export function GraphStudio({
                       : 'Saving...'
                     : edit
                       ? 'Update Definition Proposal'
-                      : 'Save Definition Proposal'}
+                      : 'Generate Widget'}
                 </span>
               </button>
               {edit && (
@@ -1619,302 +1597,6 @@ export function GraphStudio({
                 </div>
               )}
 
-              {/* Step 4 & 9: KPI Summary Cards Grid */}
-              {genAiDashboard.kpi_cards && genAiDashboard.kpi_cards.length > 0 && (
-                <div>
-                  <div className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider mb-2.5 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <span className="material-symbols-outlined text-[14px]">pin</span>
-                      <span>Executive KPI Metrics</span>
-                    </span>
-                    <span className="text-[11px] font-mono text-[var(--color-text-muted)] lowercase">
-                      {genAiDashboard.kpi_cards.filter(k => widgetStatuses[k.id] === 'approved' && executedGenAi[k.id]).length} of {genAiDashboard.kpi_cards.length} approved
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-                    {genAiDashboard.kpi_cards.map(kpi => {
-                      const status = widgetStatuses[kpi.id] || 'pending';
-                      return (
-                        <div
-                          key={kpi.id}
-                          className={`p-4 rounded-[var(--radius-container)] bg-[var(--color-surface)] border shadow-[var(--shadow-2xs)] space-y-2 transition-all ${
-                            status === 'rejected'
-                              ? 'opacity-60 border-[var(--color-danger-border)] bg-[var(--color-danger-subtle)]/10'
-                              : status === 'approved'
-                              ? 'border-[var(--color-success-border)] hover:border-[var(--color-success)]'
-                              : 'border-[var(--color-border)] hover:border-[var(--color-primary)]/40'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
-                            <span className="font-medium truncate max-w-[130px]">{kpi.title}</span>
-                            <div className="flex items-center gap-1">
-                              <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border uppercase ${
-                                status === 'approved'
-                                  ? 'bg-[var(--color-success-subtle)] text-[var(--color-success)] border-[var(--color-success-border)]'
-                                  : status === 'rejected'
-                                  ? 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)] border-[var(--color-danger-border)]'
-                                  : 'bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border-[var(--color-border)]'
-                              }`}>
-                                {status}
-                              </span>
-                              <span className="text-[10px] font-mono uppercase bg-[var(--color-surface-active)] px-1.5 py-0.5 rounded border border-[var(--color-border)]">
-                                {kpi.aggregation}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="text-2xl font-bold text-[var(--color-text-primary)] tracking-tight tabular-nums">
-                            {kpi.format === 'currency'
-                              ? `$${Number(kpi.value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                              : kpi.format === 'percent'
-                              ? `${kpi.value}%`
-                              : Number(kpi.value).toLocaleString()}
-                          </div>
-                          {kpi.subtitle && (
-                            <div className="text-[11px] text-[var(--color-text-muted)] truncate">
-                              {kpi.subtitle}
-                            </div>
-                          )}
-
-                          {/* Approve, Reject, Preview Live Buttons */}
-                          <div className="flex items-center gap-1.5 pt-2 border-t border-[var(--color-border)]">
-                            <button
-                              type="button"
-                              disabled={executingGenAi}
-                              onClick={() => void executeGenAiPreview({
-                                id: kpi.id,
-                                query_plan: kpi.query_plan,
-                                title: kpi.title,
-                                kind: 'kpi',
-                                metric: kpi.metric,
-                                aggregation: kpi.aggregation,
-                                format: kpi.format,
-                                value: kpi.value,
-                                subtitle: kpi.subtitle,
-                                sql_query: genAiDashboard.sql_info?.sql_query,
-                              })}
-                              className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] text-[10px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] transition-colors cursor-pointer"
-                              title="Preview Live Widget"
-                            >
-                              <span className="material-symbols-outlined text-[13px]">visibility</span>
-                              <span>Preview Live</span>
-                            </button>
-                            <button
-                              type="button"
-                              disabled={!executedGenAi[kpi.id]}
-                              onClick={() => setWidgetStatuses(prev => ({ ...prev, [kpi.id]: 'approved' }))}
-                              className={`px-2 py-1 rounded-[var(--radius-element)] text-[10px] font-medium border transition-colors cursor-pointer ${
-                                status === 'approved'
-                                  ? 'bg-[var(--color-success)] text-white border-[var(--color-success)]'
-                                  : 'bg-[var(--color-surface)] text-[var(--color-success)] border-[var(--color-success-border)] hover:bg-[var(--color-success-subtle)]'
-                              }`}
-                              title="Approve KPI"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setWidgetStatuses(prev => ({ ...prev, [kpi.id]: 'rejected' }))}
-                              className={`px-2 py-1 rounded-[var(--radius-element)] text-[10px] font-medium border transition-colors cursor-pointer ${
-                                status === 'rejected'
-                                  ? 'bg-[var(--color-danger)] text-white border-[var(--color-danger)]'
-                                  : 'bg-[var(--color-surface)] text-[var(--color-danger)] border-[var(--color-danger-border)] hover:bg-[var(--color-danger-subtle)]'
-                              }`}
-                              title="Reject KPI"
-                            >
-                              Reject
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Step 4 & 9 & 10: Dynamic Interactive Charts Grid */}
-              {genAiDashboard.charts && genAiDashboard.charts.length > 0 && (
-                <div>
-                  <div className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider mb-2.5 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <span className="material-symbols-outlined text-[14px]">bar_chart</span>
-                      <span>Interactive Analytical Charts</span>
-                    </span>
-                    <span className="text-[11px] font-mono text-[var(--color-text-muted)] lowercase">
-                      {genAiDashboard.charts.filter(c => widgetStatuses[c.id] === 'approved' && executedGenAi[c.id]).length} of {genAiDashboard.charts.length} approved
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {genAiDashboard.charts.map(chart => {
-                      const isTableView = chartViewModes[chart.id] === 'table';
-                      const status = widgetStatuses[chart.id] || 'pending';
-                      const maxVal = Math.max(...chart.data.map(d => d.value || 0), 1);
-                      return (
-                        <div
-                          key={chart.id}
-                          className={`p-4 rounded-[var(--radius-container)] bg-[var(--color-surface)] border shadow-[var(--shadow-2xs)] space-y-3 flex flex-col justify-between transition-all ${
-                            status === 'rejected'
-                              ? 'opacity-60 border-[var(--color-danger-border)] bg-[var(--color-danger-subtle)]/10'
-                              : status === 'approved'
-                              ? 'border-[var(--color-success-border)] hover:border-[var(--color-success)]'
-                              : 'border-[var(--color-border)] hover:border-[var(--color-primary)]/40'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between pb-2 border-b border-[var(--color-border)]">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <h4 className="text-xs font-semibold text-[var(--color-text-primary)] flex items-center gap-1.5">
-                                  <span className="material-symbols-outlined text-[16px] text-[var(--color-primary)]">
-                                    {chart.kind === 'donut' ? 'donut_large' : chart.kind === 'line' ? 'show_chart' : 'bar_chart'}
-                                  </span>
-                                  <span>{chart.title}</span>
-                                </h4>
-                                <span className={`text-[9px] font-semibold px-1.5 py-0.2 rounded border uppercase ${
-                                  status === 'approved'
-                                    ? 'bg-[var(--color-success-subtle)] text-[var(--color-success)] border-[var(--color-success-border)]'
-                                    : status === 'rejected'
-                                    ? 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)] border-[var(--color-danger-border)]'
-                                    : 'bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border-[var(--color-border)]'
-                                }`}>
-                                  {status}
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-                                {chart.aggregation} of {chart.metric} grouped by {chart.dimension}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => toggleChartViewMode(chart.id)}
-                              className="px-2 py-1 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] text-[10px] font-mono text-[var(--color-text-secondary)] border border-[var(--color-border)] transition-colors cursor-pointer"
-                              title="Toggle Chart / Table view"
-                            >
-                              {isTableView ? '📊 Chart View' : '📋 Table View'}
-                            </button>
-                          </div>
-
-                          {/* Chart or Table Rendering */}
-                          <div className="min-h-[220px] flex flex-col justify-center">
-                            {isTableView ? (
-                              <div className="overflow-x-auto max-h-[260px]">
-                                <table className="w-full text-left text-xs">
-                                  <thead>
-                                    <tr className="border-b border-[var(--color-border)] text-[var(--color-text-secondary)]">
-                                      <th className="py-1.5 px-2 font-medium">#</th>
-                                      <th className="py-1.5 px-2 font-medium">{chart.dimension}</th>
-                                      <th className="py-1.5 px-2 font-medium text-right">{chart.metric}</th>
-                                      <th className="py-1.5 px-2 font-medium text-right">Share</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {chart.data.map((row, rIdx) => {
-                                      const total = chart.data.reduce((acc, d) => acc + (d.value || 0), 0);
-                                      const share = total > 0 ? ((row.value / total) * 100).toFixed(1) : '0';
-                                      return (
-                                        <tr key={rIdx} className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-hover)]">
-                                          <td className="py-1.5 px-2 text-[var(--color-text-muted)] font-mono">{rIdx + 1}</td>
-                                          <td className="py-1.5 px-2 text-[var(--color-text-primary)] font-medium">{row.label}</td>
-                                          <td className="py-1.5 px-2 text-right font-mono tabular-nums text-[var(--color-text-primary)]">
-                                            {Number(row.value).toLocaleString()}
-                                          </td>
-                                          <td className="py-1.5 px-2 text-right font-mono text-[var(--color-text-secondary)]">
-                                            {share}%
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : (
-                              <div className="space-y-2 py-1">
-                                {chart.data.map((point, pIdx) => {
-                                  const pct = Math.max(Math.round((point.value / maxVal) * 100), 4);
-                                  return (
-                                    <div key={pIdx} className="space-y-0.5">
-                                      <div className="flex items-center justify-between text-[11px]">
-                                        <span className="font-medium text-[var(--color-text-primary)] truncate max-w-[200px]">
-                                          {point.label}
-                                        </span>
-                                        <span className="font-mono text-[var(--color-text-secondary)] tabular-nums">
-                                          {Number(point.value).toLocaleString()}
-                                        </span>
-                                      </div>
-                                      <div className="w-full bg-[var(--color-surface-hover)] rounded-full h-2 overflow-hidden border border-[var(--color-border)]/40">
-                                        <div
-                                          className="h-full rounded-full transition-all duration-500"
-                                          style={{
-                                            width: `${pct}%`,
-                                            backgroundColor: `hsl(${210 + pIdx * 18}, 75%, ${50 + (pIdx % 3) * 5}%)`
-                                          }}
-                                        />
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Approve, Reject, Preview Live Action Buttons */}
-                          <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--color-border)]">
-                            <button
-                              type="button"
-                              disabled={executingGenAi}
-                              onClick={() => void executeGenAiPreview({
-                                id: chart.id,
-                                query_plan: chart.query_plan,
-                                title: chart.title,
-                                kind: chart.kind,
-                                metric: chart.metric,
-                                dimension: chart.dimension,
-                                aggregation: chart.aggregation,
-                                data: chart.data,
-                                sql_query: genAiDashboard.sql_info?.sql_query,
-                              })}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-element)] bg-[var(--color-surface-hover)] hover:bg-[var(--color-surface-active)] text-[11px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] transition-colors cursor-pointer"
-                              title="Preview Live Widget"
-                            >
-                              <span className="material-symbols-outlined text-[14px]">visibility</span>
-                              <span>Preview Live</span>
-                            </button>
-
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                disabled={!executedGenAi[chart.id]}
-                                onClick={() => setWidgetStatuses(prev => ({ ...prev, [chart.id]: 'approved' }))}
-                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-element)] text-[11px] font-medium border transition-colors cursor-pointer ${
-                                  status === 'approved'
-                                    ? 'bg-[var(--color-success)] text-white border-[var(--color-success)]'
-                                    : 'bg-[var(--color-surface)] text-[var(--color-success)] border-[var(--color-success-border)] hover:bg-[var(--color-success-subtle)]'
-                                }`}
-                                title="Approve Chart"
-                              >
-                                <span className="material-symbols-outlined text-[13px]">check</span>
-                                <span>Approve</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setWidgetStatuses(prev => ({ ...prev, [chart.id]: 'rejected' }))}
-                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-element)] text-[11px] font-medium border transition-colors cursor-pointer ${
-                                  status === 'rejected'
-                                    ? 'bg-[var(--color-danger)] text-white border-[var(--color-danger)]'
-                                    : 'bg-[var(--color-surface)] text-[var(--color-danger)] border-[var(--color-danger-border)] hover:bg-[var(--color-danger-subtle)]'
-                                }`}
-                                title="Reject Chart"
-                              >
-                                <span className="material-symbols-outlined text-[13px]">close</span>
-                                <span>Reject</span>
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               {/* Step 5 & 10: Python Advanced Visualization Engine (Matplotlib / Seaborn) */}
               {genAiDashboard.python_visual && genAiDashboard.python_visual.image_base64 && (
                 <div className="border border-[var(--color-border)] rounded-[var(--radius-container)] overflow-hidden bg-[var(--color-surface)] p-4 space-y-3 shadow-[var(--shadow-2xs)]">
@@ -1962,7 +1644,7 @@ export function GraphStudio({
                         <span>Proactive AI Widget Recommendations (Analysis-First)</span>
                       </h4>
                       <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">
-                        Synthesized after completing analysis on actual query results. Click "+ Add to Dashboard" to insert directly.
+                        Preview the calculated result, then accept it to add it alongside your existing dashboard widgets.
                       </p>
                     </div>
                   </div>
@@ -1998,9 +1680,9 @@ export function GraphStudio({
                             className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-[var(--radius-element)] bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-[11px] font-medium shadow-[var(--shadow-2xs)] transition-all cursor-pointer disabled:opacity-50"
                           >
                             <span className={`material-symbols-outlined text-[14px] ${isAddingRecommendation[rec.id] ? 'animate-spin' : ''}`}>
-                              {isAddingRecommendation[rec.id] ? 'sync' : 'add'}
+                              {isAddingRecommendation[rec.id] ? 'sync' : 'visibility'}
                             </span>
-                            <span>{isAddingRecommendation[rec.id] ? 'Adding…' : 'Add to Dashboard'}</span>
+                            <span>{isAddingRecommendation[rec.id] ? 'Preparing Preview...' : 'Preview Output'}</span>
                           </button>
                           <button
                             type="button"
@@ -2042,36 +1724,6 @@ export function GraphStudio({
                 </button>
               </div>
 
-              {/* Publish to Executive Dashboard Deployment Action */}
-              <div className="p-4 rounded-[var(--radius-container)] bg-gradient-to-r from-[var(--color-surface-active)] to-[var(--color-surface)] border border-[var(--color-border)] flex flex-wrap items-center justify-between gap-3 shadow-[var(--shadow-2xs)]">
-                <div>
-                  <div className="text-xs font-semibold text-[var(--color-text-primary)] flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-[16px] text-[var(--color-success)]">cloud_upload</span>
-                    <span>Ready to deploy this AI-generated dashboard?</span>
-                  </div>
-                  <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">
-                    Publishes approved KPIs, charts, and metric summaries live to the Executive Dashboard for all platform stakeholders.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  disabled={isPublishingGenAi || ((genAiDashboard.kpi_cards?.filter(k => widgetStatuses[k.id] === 'approved' && executedGenAi[k.id]).length || 0) + (genAiDashboard.charts?.filter(c => widgetStatuses[c.id] === 'approved' && executedGenAi[c.id]).length || 0) === 0)}
-                  onClick={() => void handlePublishGenAiDashboard()}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[var(--radius-element)] bg-[var(--color-success)] hover:opacity-90 text-white font-medium text-xs shadow-[var(--shadow-2xs)] active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer"
-                >
-                  <span className={`material-symbols-outlined text-[16px] ${isPublishingGenAi ? 'animate-spin' : ''}`}>
-                    {isPublishingGenAi ? 'sync' : 'publish'}
-                  </span>
-                  <span>
-                    {isPublishingGenAi
-                      ? 'Publishing Dashboard…'
-                      : `Publish ${
-                          (genAiDashboard.kpi_cards?.filter(k => widgetStatuses[k.id] === 'approved' && executedGenAi[k.id]).length || 0) +
-                          (genAiDashboard.charts?.filter(c => widgetStatuses[c.id] === 'approved' && executedGenAi[c.id]).length || 0)
-                        } Approved Widgets to Executive Dashboard`}
-                  </span>
-                </button>
-              </div>
             </div>
           )}
 
@@ -2205,18 +1857,31 @@ export function GraphStudio({
                     <button
                       type="button"
                       onClick={() => {
+                        if (previewWidget.recommendationId) {
+                          const { recommendationId, ...widget } = previewWidget;
+                          stageGenAiWidget(widget, genAiDashboard?.context, genAiDashboard?.dashboard_id);
+                          setGenAiDashboard(prev => prev ? {
+                            ...prev,
+                            kpi_cards: widget.kind === 'kpi' ? [...prev.kpi_cards, widget as GenAIKpiCard] : prev.kpi_cards,
+                            charts: widget.kind !== 'kpi' ? [...prev.charts, widget as GenAIChart] : prev.charts,
+                          } : prev);
+                          setActiveRecommendations(prev => prev.filter(rec => rec.id !== recommendationId));
+                          setMessage(`Added "${widget.title}" to generated results. Select it below to publish.`);
+                          setPublishedSuccess(false);
+                        }
                         setWidgetStatuses(prev => ({ ...prev, [previewWidget.id]: 'approved' }));
                         setPreviewWidget(null);
                       }}
                       className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[var(--radius-element)] bg-[var(--color-success)] hover:opacity-90 text-white text-xs font-medium shadow-[var(--shadow-2xs)] transition-all cursor-pointer"
                     >
                       <span className="material-symbols-outlined text-[16px]">check_circle</span>
-                      <span>Approve Widget</span>
+                      <span>{previewWidget.recommendationId ? 'Accept Widget' : 'Approve Widget'}</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => {
-                        setWidgetStatuses(prev => ({ ...prev, [previewWidget.id]: 'rejected' }));
+                        if (previewWidget.recommendationId) handleDismissRecommendation(previewWidget.recommendationId);
+                        else setWidgetStatuses(prev => ({ ...prev, [previewWidget.id]: 'rejected' }));
                         setPreviewWidget(null);
                       }}
                       className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[var(--radius-element)] bg-[var(--color-danger)] hover:opacity-90 text-white text-xs font-medium shadow-[var(--shadow-2xs)] transition-all cursor-pointer"
@@ -2241,6 +1906,15 @@ export function GraphStudio({
             onSwitchDataset={handleSwitchDataset}
             model={model}
             existingItems={items}
+            onCreatedWidget={draft => addGenerated({
+              definition: { id: draft.id, title: draft.title, kind: draft.kind, revision: 1,
+                semantic_revision: model?.revision || 1, dataset_id: draft.datasetId,
+                dataset_name: datasets.find(d => d.id === draft.datasetId)?.name,
+                version: datasets.find(d => d.id === draft.datasetId)?.currentVersion || 1,
+                query_plan: { metric: draft.metric, dimension: draft.dimension, aggregation: draft.aggregation },
+                dependencies: [draft.metric, draft.dimension].filter(Boolean) as string[],
+                explanation: 'Created in the drag and drop builder.', status: 'proposed' }, result: draft.result,
+            })}
             onSavedDefinition={() => {
               void getRecommendations(true).then(setItems);
             }}
@@ -2249,8 +1923,20 @@ export function GraphStudio({
         </section>
       )}
 
+      </div>
+      {(!widgetsOnly || generatedWidgets.length > 0) && <GeneratedWidgetSections key={widgetsOnly ? 'library' : `${activeMode}:${selectedDatasetId}`} widgets={generatedWidgets.filter(widget =>
+        widgetsOnly || (widget.source === activeMode && (!selectedDatasetId || selectedDatasetId === 'all' || widget.definition.dataset_id === selectedDatasetId))
+      )} onPublished={ids => {
+        setGeneratedWidgets(prev => {
+          const next = prev.map(w => ids.includes(w.definition.id) ? { ...w, published: true } : w);
+          generatedWidgetCache = next;
+          return next;
+        });
+        void getRecommendations(true).then(setItems);
+      }} />}
+
       {/* CONFIGURED DEFINITIONS & WIDGETS STREAM: Visible only in Visual KPI Builder tab */}
-      {activeMode === 'visual' && (() => {
+      {widgetsOnly && (() => {
         // Collect all distinct files/datasets represented across items
         const fileMap = new Map<string, { id: string; name: string; count: number }>();
         items.forEach(it => {

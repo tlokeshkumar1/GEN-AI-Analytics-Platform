@@ -11,6 +11,7 @@ vi.mock('../services/api', () => ({
 }));
 
 beforeEach(() => {
+  window.dispatchEvent(new Event('neovatic_signed_out_event'));
   vi.resetAllMocks();
   localStorage.clear();
   sessionStorage.clear();
@@ -121,7 +122,7 @@ const MOCK_GENAI_RESPONSE = {
 };
 
 describe('Generative AI Dashboards (10-Step Analysis-First Workflow)', () => {
-  it('renders "1. Generative AI Dashboards" tab and executes complete analysis-first pipeline', async () => {
+  it.each(['accept', 'close', 'reject', 'error', 'empty', 'empty dashboard'])('executes analysis and handles recommendation preview: %s', async (action) => {
     vi.mocked(api.get).mockImplementation((url: string) => {
       if (url === '/datasets') return Promise.resolve({ data: [MOCK_DATASET] });
       if (url.includes('semantics')) {
@@ -143,11 +144,14 @@ describe('Generative AI Dashboards (10-Step Analysis-First Workflow)', () => {
       return Promise.resolve({ data: [] });
     });
 
+    let widgetExecutions = 0;
     vi.mocked(api.post).mockImplementation((url: string) => {
       if (url === '/graph/genai-dashboard/generate') {
         return Promise.resolve({ data: MOCK_GENAI_RESPONSE });
       }
       if (url === '/graph/genai-dashboard/execute-widget') {
+        if (action === 'error') return Promise.reject(new Error('Preview execution failed'));
+        if (action === 'empty') return Promise.resolve({ data: { kind: 'donut', widget: { data: [] } } });
         return Promise.resolve({
           data: {
             kind: 'donut',
@@ -171,7 +175,7 @@ describe('Generative AI Dashboards (10-Step Analysis-First Workflow)', () => {
 
     const ssePayload = [
       `data: ${JSON.stringify({ type: 'step', step: 1, name: 'Understand', detail: 'Understanding prompt...', timestamp: 10 })}\n\n`,
-      `data: ${JSON.stringify({ type: 'result', data: MOCK_GENAI_RESPONSE })}\n\n`,
+      `data: ${JSON.stringify({ type: 'result', data: action === 'empty dashboard' ? { ...MOCK_GENAI_RESPONSE, kpi_cards: [], charts: [] } : MOCK_GENAI_RESPONSE })}\n\n`,
     ].join('');
 
     const mockResponseStream = new ReadableStream({
@@ -202,6 +206,13 @@ describe('Generative AI Dashboards (10-Step Analysis-First Workflow)', () => {
     // Verify 10-step stepper is rendered
     expect(await screen.findByText('Mandatory 10-Step Analysis-First Execution Pipeline')).toBeTruthy();
 
+    if (action === 'empty dashboard') {
+      expect(await screen.findByText(/No widgets were generated/)).toBeTruthy();
+      expect(screen.queryByText(/Successfully generated Gen AI Dashboard/)).toBeNull();
+      expect(screen.queryByText('All 10 stages completed successfully.')).toBeNull();
+      return;
+    }
+
     // Wait for analysis results
     await waitFor(() => {
       expect(screen.getByText('Total Gross Revenue')).toBeTruthy();
@@ -215,29 +226,12 @@ describe('Generative AI Dashboards (10-Step Analysis-First Workflow)', () => {
     expect(screen.getByText(/North America generated 52.2% of total sales revenue/i)).toBeTruthy();
 
     // Verify Chart rendering
-    expect(screen.getByText('Revenue by Region')).toBeTruthy();
+    expect(screen.getAllByText('Revenue by Region').length).toBeGreaterThan(0);
     expect(screen.getByText('North America')).toBeTruthy();
 
-    // Verify Approve, Reject, and Preview Live buttons on generated widgets
-    const previewLiveBtns = screen.getAllByRole('button', { name: /Preview Live/i });
-    expect(previewLiveBtns.length).toBeGreaterThanOrEqual(2);
-
-    const approveBtns = screen.getAllByRole('button', { name: /Approve/i });
-    expect(approveBtns.length).toBeGreaterThanOrEqual(2);
-
-    const rejectBtns = screen.getAllByRole('button', { name: /Reject/i });
-    expect(rejectBtns.length).toBeGreaterThanOrEqual(2);
-
-    // Test Preview Live Modal
-    fireEvent.click(previewLiveBtns[0]);
-    expect(await screen.findByText('Live Preview & Verification Mode')).toBeTruthy();
-    expect(screen.getByText('Close Preview')).toBeTruthy();
-    fireEvent.click(screen.getByText('Close Preview'));
-    expect(screen.queryByText('Live Preview & Verification Mode')).toBeNull();
-
-    // Test Rejecting a widget
-    fireEvent.click(rejectBtns[0]);
-    expect(screen.getByText(/rejected/i)).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'KPI Generation' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Chart Generation' })).toBeTruthy();
+    expect(screen.getAllByRole('checkbox', { name: /for publishing/ })).toHaveLength(3);
 
     // Verify Python visual card
     expect(screen.getByText('Python Matplotlib / Seaborn Advanced Visualization')).toBeTruthy();
@@ -247,22 +241,34 @@ describe('Generative AI Dashboards (10-Step Analysis-First Workflow)', () => {
     expect(screen.getByText('Proactive AI Widget Recommendations (Analysis-First)')).toBeTruthy();
     expect(screen.getByText('Category Sales Composition')).toBeTruthy();
 
-    // Executed recommendations remain pending until preview and approval.
-    const addRecBtn = screen.getByRole('button', { name: /Add to Dashboard/i });
-    fireEvent.click(addRecBtn);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Executed "Category Sales Composition". Preview and approve it before publishing./i)).toBeTruthy();
-    });
-
-    const previewButtons = screen.getAllByRole('button', { name: /Preview Live/i });
-    fireEvent.click(previewButtons[0]);
-    await waitFor(() => {
-      expect(vi.mocked(api.post).mock.calls.some(([url]) => url === '/graph/genai-dashboard/execute-widget')).toBe(true);
-      expect(screen.getByText('Live Preview & Verification Mode')).toBeTruthy();
-    });
-    expect(screen.getByText(/Status: pending/i)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Approve Widget/i }));
+    // Execution opens a preview without changing the dashboard or publication count.
+    const originalWidgetCount = screen.getAllByRole('checkbox', { name: /for publishing/i }).length;
+    const publicationLabel = screen.getByRole('button', { name: /Publish Selected Widgets/i }).textContent;
+    fireEvent.click(screen.getByRole('button', { name: /Preview Output/i }));
+    if (action === 'error' || action === 'empty') {
+      expect(await screen.findByText(action === 'error' ? 'Preview execution failed' : /No data matched this recommendation/)).toBeTruthy();
+      expect(screen.queryByText('Live Preview & Verification Mode')).toBeNull();
+    } else {
+      expect(await screen.findByText('Live Preview & Verification Mode')).toBeTruthy();
+      expect(screen.getByText('Software')).toBeTruthy();
+      expect(screen.getByText('800,000')).toBeTruthy();
+      expect(screen.getAllByRole('checkbox', { name: /for publishing/i }).length).toBe(originalWidgetCount);
+      expect(screen.getByRole('button', { name: /Publish Selected Widgets/i }).textContent).toBe(publicationLabel);
+      if (action === 'accept') {
+        fireEvent.click(screen.getByRole('button', { name: /Accept Widget/i }));
+        expect(screen.getAllByRole('checkbox', { name: /for publishing/i }).length).toBe(originalWidgetCount + 1);
+        expect(screen.getByRole('region', { name: 'Chart Generation' })).toBeTruthy();
+        expect(screen.queryByRole('button', { name: /Preview Output/i })).toBeNull();
+      } else {
+        fireEvent.click(screen.getByRole('button', { name: action === 'close' ? /Close Preview/i : /Reject Widget/i }));
+        expect(screen.getAllByRole('checkbox', { name: /for publishing/i }).length).toBe(originalWidgetCount);
+        expect(screen.getByRole('button', { name: /Publish Selected Widgets/i }).textContent).toBe(publicationLabel);
+        expect(!!screen.queryByRole('button', { name: /Preview Output/i })).toBe(action === 'close');
+      }
+      expect(screen.queryByText('Live Preview & Verification Mode')).toBeNull();
+    }
+    expect(screen.getByText('Total Gross Revenue')).toBeTruthy();
+    expect(screen.getAllByText('Revenue by Region').length).toBeGreaterThan(0);
 
     // Verify SQL Inspector
     const inspectBtn = screen.getByRole('button', { name: /Inspect SQL & Join Plan/i });

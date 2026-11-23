@@ -29,6 +29,10 @@ def _create_http_session() -> requests.Session:
     return session
 
 
+class EmbeddingProviderError(RuntimeError):
+    """Actionable embedding failure safe to return to an authenticated caller."""
+
+
 class AICoreService:
     def __init__(self):
         self.auth_url = settings.AICORE_AUTH_URL
@@ -173,7 +177,7 @@ class AICoreService:
         api_key = settings.NVIDIA_API_KEY
         if not api_key:
             logger.error("NVIDIA API key not configured")
-            raise RuntimeError("NVIDIA API key is not configured in environment settings.")
+            raise EmbeddingProviderError("The embedding API key is not configured. Configure NVIDIA_API_KEY on the backend.")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -295,7 +299,7 @@ class AICoreService:
         api_key = settings.NVIDIA_API_KEY
         if not api_key:
             logger.error("NVIDIA API key not configured")
-            raise RuntimeError("NVIDIA API key is not configured in environment settings.")
+            raise EmbeddingProviderError("The embedding API key is not configured. Configure NVIDIA_API_KEY on the backend.")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -321,9 +325,23 @@ class AICoreService:
             if any(len(item["embedding"]) < 1536 for item in items):
                 raise ValueError("Embedding provider returned fewer dimensions than the configured index")
             return [item["embedding"][:1536] for item in items]
-        except Exception as e:
-            logger.error(f"NVIDIA Embedding request failed: {e}")
-            raise RuntimeError(f"NVIDIA Embedding request failed: {e}")
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            model = payload['model']
+            if status == 410:
+                message = (f"Embedding model '{model}' is no longer available (HTTP 410). "
+                           "Choose an available embedding model in System Management > AI Settings, then refresh embeddings.")
+            elif status in (401, 403):
+                message = "The embedding provider rejected authentication. Check NVIDIA_API_KEY and model access on the backend."
+            elif status == 429:
+                message = "The embedding provider rate limit was reached. Wait briefly, then refresh embeddings."
+            else:
+                message = f"The embedding provider rejected the request (HTTP {status}). Check the configured embedding model and endpoint."
+            logger.error(message)
+            raise EmbeddingProviderError(message) from exc
+        except Exception as exc:
+            logger.exception("NVIDIA embedding request failed")
+            raise EmbeddingProviderError("The embedding request failed. Check the backend provider connection and logs, then retry.") from exc
 
 
 ai_core_service = AICoreService()

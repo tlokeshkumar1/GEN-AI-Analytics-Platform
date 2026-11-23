@@ -5,6 +5,7 @@
 
 import { UploadResponse, UploadStageEvent } from './uploadService';
 import { getDatasetAgentActivity } from './datasetService';
+import { SIGNED_OUT_EVENT, SIGNED_OUT_KEY } from './authNavigation';
 
 export type IngestionStageStatus = 'queued' | 'running' | 'completed' | 'failed';
 
@@ -31,9 +32,11 @@ const STORE_CHANGE_EVENT = 'neovatic_agent_activity_store_change';
 let memoryRecords: AgentActivityRecord[] = [];
 let isModalOpen = false;
 let activeActivityId: string | null = null;
+let activityGeneration = 0;
 
 // Initialize from localStorage
 try {
+  if (localStorage.getItem(SIGNED_OUT_KEY) === 'true') localStorage.removeItem(STORAGE_KEY);
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
     memoryRecords = JSON.parse(raw);
@@ -66,6 +69,17 @@ function persist(syncStorage = false): void {
 }
 
 export const agentActivityStore = {
+  clear(): void {
+    activityGeneration += 1;
+    if (persistTimeout) clearTimeout(persistTimeout);
+    persistTimeout = null;
+    memoryRecords = [];
+    activeActivityId = null;
+    this.closeModal();
+    localStorage.removeItem(STORAGE_KEY);
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(STORE_CHANGE_EVENT));
+  },
+
   getActivities(): AgentActivityRecord[] {
     return [...memoryRecords];
   },
@@ -102,8 +116,9 @@ export const agentActivityStore = {
   },
 
   async loadDatasetActivity(datasetId: string, version?: number): Promise<AgentActivityRecord> {
+    const generation = activityGeneration;
     const raw = await getDatasetAgentActivity(datasetId, version);
-    this.recordActivity(raw);
+    if (generation === activityGeneration) this.recordActivity(raw);
     return raw;
   },
 
@@ -350,3 +365,11 @@ export const agentActivityStore = {
     return () => window.removeEventListener(MODAL_EVENT, handler);
   },
 };
+
+// Logout also clears records in an already-open cockpit and other tabs.
+if (typeof window !== 'undefined') {
+  window.addEventListener(SIGNED_OUT_EVENT, () => agentActivityStore.clear());
+  window.addEventListener('storage', event => {
+    if (event.key === SIGNED_OUT_KEY && event.newValue === 'true') agentActivityStore.clear();
+  });
+}

@@ -87,6 +87,15 @@ def _publish_recommended_charts(req: PublishRecommendedRequest):
         signature = widget_signature(candidate)
         if signature in known:
             original = known[signature]
+            if original.get('status') != 'approved':
+                validation = analytics_engine.execute(query_plan.model_dump(mode='json', exclude_none=True))
+                if not validation.success:
+                    raise HTTPException(422, validation.error or 'Widget calculation validation failed.')
+                key = f"{original['id']}:{original.get('revision', 1)}"
+                saved = semantic_registry.store.get(analytics_ns, key)
+                original = {**original, 'status': 'approved', 'reviewer': 'system', 'reviewed_at': now()}
+                semantic_registry.store.put(analytics_ns, key, original, expected_revision=saved['revision'])
+                known[signature] = original
             published_refs.append({'id': original['id'], 'revision': original.get('revision', 1)})
             continue
         collision = semantic_registry.store.get(analytics_ns, f'{item_id}:1')

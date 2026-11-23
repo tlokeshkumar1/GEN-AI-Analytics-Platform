@@ -653,3 +653,19 @@
   animation: fadeInContent 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+
+/* Executive Dashboard text, including chart labels and tooltips. */
+.executive-dashboard,
+.executive-dashboard * {
+  color: #000 !important;
+}
+
+.executive-dashboard svg text {
+  fill: #000 !important;
+}
+
+.executive-dashboard input::placeholder,
+.executive-dashboard textarea::placeholder {
+  color: #000 !important;
+  opacity: 1;
+}
