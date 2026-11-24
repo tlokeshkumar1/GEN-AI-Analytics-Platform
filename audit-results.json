@@ -65194,637 +65194,695 @@
   },
   "cleanup_note": "Four files are retained: the consolidated audit report, results JSON, traceability CSV and CI workflow. The separate remediation plan and runbook were removed at the user's request; recommendations and historical commands remain in the report/results. Supporting results, transcripts and audit script sources are embedded here. Historical source and commands may refer to files present during the original audit.",
   "ci_remediation": {
-    "date": "2026-11-24 (Asia/Calcutta)",
-    "scope": "Repair enterprise-local-ci.yml; no deployment or hosting change",
-    "baseline_commit": "6ca506beea9595ee105cd9967c03ffbb0aeb1d96",
-    "base_after_sync": "76c561d0d0a1915e419bdf133e5a686cb8650f48",
-    "baseline_runs": [
-      "https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45223411202",
-      "https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45225015183"
-    ],
-    "baseline_job_ids": {
-      "backend": 137869043915,
-      "python-quality": 137869044487,
-      "dependencies": 137869044535,
-      "frontend": 137869044554
+  "date": "2026-11-24 (Asia/Calcutta)",
+  "scope": "Repair enterprise-local-ci.yml; no deployment or hosting change",
+  "baseline_commit": "6ca506beea9595ee105cd9967c03ffbb0aeb1d96",
+  "base_after_sync": "76c561d0d0a1915e419bdf133e5a686cb8650f48",
+  "baseline_runs": [
+    "https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45223411202",
+    "https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45225015183"
+  ],
+  "baseline_job_ids": {
+    "backend": 137869043915,
+    "python-quality": 137869044487,
+    "dependencies": 137869044535,
+    "frontend": 137869044554
+  },
+  "root_causes": {
+    "backend": "Linux Matplotlib first-use font discovery invokes fc-list inside subprocess spy; initialize font manager before execution spy without weakening assertion.",
+    "frontend": "Five tests render the creation view instead of the Widgets library after navigation redesign. Use the same widgetsOnly prop as App.tsx. Preserve assertions.",
+    "dependencies": "Vulnerable lockfile resolutions, SAP App Router 16, and cryptography capped below all patched releases. Update compatible transitives, evaluate App Router 23.5 and Happy DOM 21, verify APIs/configuration and all suites.",
+    "python-quality": "No owned lint configuration; undefined retry logger, unused imports/bindings and unformatted Python. Pin Ruff, use explicit E4/E7/E9/F correctness checks and full formatting. Broader optional Ruff rule families are outside this configured gate; do not claim their findings fixed."
+  },
+  "local_environment": {
+    "os": "Windows",
+    "python": "3.12.10",
+    "node": "24.19.0",
+    "npm": "11.17.0",
+    "frontend_install": "Clean temporary copy: running Vite locks native modules in original checkout. npm ci executed in temporary directory."
+  },
+  "commands": [
+    {
+      "command": "python scripts/run_offline_tests.py --report ci-results/backend.json",
+      "exit_code": 0,
+      "result": {
+        "tests_run": 270,
+        "failures": [],
+        "errors": [],
+        "skipped": [],
+        "successful": true,
+        "scope": "offline; no live SAP or AI provider verification"
+      }
     },
-    "root_causes": {
-      "backend": "Linux Matplotlib first-use font discovery invokes fc-list inside subprocess spy; initialize font manager before execution spy without weakening assertion.",
-      "frontend": "Five tests render the creation view instead of the Widgets library after navigation redesign. Use the same widgetsOnly prop as App.tsx. Preserve assertions.",
-      "dependencies": "Vulnerable lockfile resolutions, SAP App Router 16, and cryptography capped below all patched releases. Update compatible transitives, evaluate App Router 23.5 and Happy DOM 21, verify APIs/configuration and all suites.",
-      "python-quality": "No owned lint configuration; undefined retry logger, unused imports/bindings and unformatted Python. Pin Ruff, use explicit E4/E7/E9/F correctness checks and full formatting. Broader optional Ruff rule families are outside this configured gate; do not claim their findings fixed."
+    {
+      "command": "python scripts/run_offline_tests.py --pattern test_ci_regressions.py --report ci-results/retry.json",
+      "exit_code": 0,
+      "result": {
+        "tests_run": 1,
+        "failures": [],
+        "errors": [],
+        "skipped": [],
+        "successful": true,
+        "scope": "offline; no live SAP or AI provider verification"
+      }
     },
-    "local_environment": {
-      "os": "Windows",
-      "python": "3.12.10",
-      "node": "24.19.0",
-      "npm": "11.17.0",
-      "frontend_install": "Clean temporary copy: running Vite locks native modules in original checkout. npm ci executed in temporary directory."
+    {
+      "command": "python -m ruff check backend/api backend/tests scripts",
+      "exit_code": 0
     },
-    "commands": [
+    {
+      "command": "python -m ruff format --check backend/api backend/tests scripts",
+      "exit_code": 0
+    },
+    {
+      "command": "python -m compileall -q backend/api scripts",
+      "exit_code": 0
+    },
+    {
+      "command": "npm ci (clean temporary frontend copy)",
+      "exit_code": 0
+    },
+    {
+      "command": "npm test -- --reporter=dot (clean frontend copy)",
+      "exit_code": 0,
+      "passed": 79,
+      "failed": 0,
+      "test_files": 17
+    },
+    {
+      "command": "npm run lint (clean frontend copy)",
+      "exit_code": 0
+    },
+    {
+      "command": "npm run build (clean frontend copy)",
+      "exit_code": 0
+    },
+    {
+      "command": "node --test router/test/*.test.cjs",
+      "exit_code": 0,
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "command": "npm audit --prefix frontend --audit-level=high",
+      "exit_code": 0,
+      "vulnerabilities": 0
+    },
+    {
+      "command": "npm audit --prefix router --audit-level=high",
+      "exit_code": 0,
+      "vulnerabilities": 0
+    },
+    {
+      "command": "npm audit --prefix backend/db --audit-level=high",
+      "exit_code": 0,
+      "vulnerabilities": 0
+    },
+    {
+      "command": "python -m pip_audit -r backend/requirements.txt -r backend/requirements-ci.txt --timeout 120 --format json",
+      "exit_code": 0,
+      "vulnerabilities": 0
+    },
+    {
+      "command": "python -m pip check",
+      "exit_code": 0,
+      "result": "No broken requirements found"
+    }
+  ],
+  "python_audit": {
+    "dependencies": [
       {
-        "command": "python scripts/run_offline_tests.py --report ci-results/backend.json",
-        "exit_code": 0,
-        "result": {
-          "tests_run": 270,
-          "failures": [],
-          "errors": [],
-          "skipped": [],
-          "successful": true,
-          "scope": "offline; no live SAP or AI provider verification"
-        }
+        "name": "httpx",
+        "version": "0.28.1",
+        "vulns": []
       },
       {
-        "command": "python scripts/run_offline_tests.py --pattern test_ci_regressions.py --report ci-results/retry.json",
-        "exit_code": 0,
-        "result": {
-          "tests_run": 1,
-          "failures": [],
-          "errors": [],
-          "skipped": [],
-          "successful": true,
-          "scope": "offline; no live SAP or AI provider verification"
-        }
+        "name": "ruff",
+        "version": "0.17.6",
+        "vulns": []
       },
       {
-        "command": "python -m ruff check backend/api backend/tests scripts",
-        "exit_code": 0
+        "name": "pip-audit",
+        "version": "2.10.1",
+        "vulns": []
       },
       {
-        "command": "python -m ruff format --check backend/api backend/tests scripts",
-        "exit_code": 0
+        "name": "fastapi",
+        "version": "0.165.0",
+        "vulns": []
       },
       {
-        "command": "python -m compileall -q backend/api scripts",
-        "exit_code": 0
+        "name": "uvicorn",
+        "version": "0.54.0",
+        "vulns": []
       },
       {
-        "command": "npm ci (clean temporary frontend copy)",
-        "exit_code": 0
+        "name": "python-dotenv",
+        "version": "1.2.4",
+        "vulns": []
       },
       {
-        "command": "npm test -- --reporter=dot (clean frontend copy)",
-        "exit_code": 0,
-        "passed": 79,
-        "failed": 0,
-        "test_files": 17
+        "name": "pydantic",
+        "version": "2.14.4",
+        "vulns": []
       },
       {
-        "command": "npm run lint (clean frontend copy)",
-        "exit_code": 0
+        "name": "pydantic-core",
+        "version": "2.50.5",
+        "vulns": []
       },
       {
-        "command": "npm run build (clean frontend copy)",
-        "exit_code": 0
+        "name": "pydantic-settings",
+        "version": "2.16.3",
+        "vulns": []
       },
       {
-        "command": "node --test router/test/*.test.cjs",
-        "exit_code": 0,
-        "passed": 3,
-        "failed": 0
+        "name": "pandas",
+        "version": "2.3.3",
+        "vulns": []
       },
       {
-        "command": "npm audit --prefix frontend --audit-level=high",
-        "exit_code": 0,
-        "vulnerabilities": 0
+        "name": "openpyxl",
+        "version": "3.1.5",
+        "vulns": []
       },
       {
-        "command": "npm audit --prefix router --audit-level=high",
-        "exit_code": 0,
-        "vulnerabilities": 0
+        "name": "xlrd",
+        "version": "2.0.2",
+        "vulns": []
       },
       {
-        "command": "npm audit --prefix backend/db --audit-level=high",
-        "exit_code": 0,
-        "vulnerabilities": 0
+        "name": "matplotlib",
+        "version": "3.11.2",
+        "vulns": []
       },
       {
-        "command": "python -m pip_audit -r backend/requirements.txt -r backend/requirements-ci.txt --timeout 120 --format json",
-        "exit_code": 0,
-        "vulnerabilities": 0
+        "name": "seaborn",
+        "version": "0.13.2",
+        "vulns": []
+      },
+      {
+        "name": "requests",
+        "version": "2.34.2",
+        "vulns": []
+      },
+      {
+        "name": "hdbcli",
+        "version": "2.30.32",
+        "vulns": []
+      },
+      {
+        "name": "python-multipart",
+        "version": "0.0.34",
+        "vulns": []
+      },
+      {
+        "name": "numpy",
+        "version": "2.5.5",
+        "vulns": []
+      },
+      {
+        "name": "sap-xssec",
+        "version": "4.5.0",
+        "vulns": []
+      },
+      {
+        "name": "cryptography",
+        "version": "50.0.2",
+        "vulns": []
+      },
+      {
+        "name": "pyjwt",
+        "version": "2.15.1",
+        "vulns": []
+      },
+      {
+        "name": "boto3",
+        "version": "1.44.10",
+        "vulns": []
+      },
+      {
+        "name": "google-cloud-storage",
+        "version": "2.19.0",
+        "vulns": []
+      },
+      {
+        "name": "azure-storage-blob",
+        "version": "12.31.1",
+        "vulns": []
+      },
+      {
+        "name": "azure-identity",
+        "version": "1.27.0",
+        "vulns": []
+      },
+      {
+        "name": "zeep",
+        "version": "4.3.3",
+        "vulns": []
+      },
+      {
+        "name": "botocore",
+        "version": "1.44.10",
+        "vulns": []
+      },
+      {
+        "name": "charset-normalizer",
+        "version": "3.5.3",
+        "vulns": []
+      },
+      {
+        "name": "cyclonedx-python-lib",
+        "version": "11.12.0",
+        "vulns": []
+      },
+      {
+        "name": "google-api-core",
+        "version": "2.44.0",
+        "vulns": []
+      },
+      {
+        "name": "google-auth",
+        "version": "2.63.1",
+        "vulns": []
+      },
+      {
+        "name": "google-cloud-core",
+        "version": "2.8.0",
+        "vulns": []
+      },
+      {
+        "name": "google-crc32c",
+        "version": "1.9.0",
+        "vulns": []
+      },
+      {
+        "name": "googleapis-common-protos",
+        "version": "1.76.0",
+        "vulns": []
+      },
+      {
+        "name": "httpcore",
+        "version": "1.0.9",
+        "vulns": []
+      },
+      {
+        "name": "idna",
+        "version": "3.20",
+        "vulns": []
+      },
+      {
+        "name": "jmespath",
+        "version": "1.1.0",
+        "vulns": []
+      },
+      {
+        "name": "license-expression",
+        "version": "30.4.4",
+        "vulns": []
+      },
+      {
+        "name": "opentelemetry-api",
+        "version": "1.45.2",
+        "vulns": []
+      },
+      {
+        "name": "packageurl-python",
+        "version": "0.17.6",
+        "vulns": []
+      },
+      {
+        "name": "proto-plus",
+        "version": "1.29.0",
+        "vulns": []
+      },
+      {
+        "name": "protobuf",
+        "version": "7.36.2",
+        "vulns": []
+      },
+      {
+        "name": "py-serializable",
+        "version": "2.2.0",
+        "vulns": []
+      },
+      {
+        "name": "defusedxml",
+        "version": "0.7.1",
+        "vulns": []
+      },
+      {
+        "name": "python-dateutil",
+        "version": "2.9.0.post0",
+        "vulns": []
+      },
+      {
+        "name": "s3transfer",
+        "version": "0.19.3",
+        "vulns": []
+      },
+      {
+        "name": "sortedcontainers",
+        "version": "2.4.0",
+        "vulns": []
+      },
+      {
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "vulns": []
+      },
+      {
+        "name": "urllib3",
+        "version": "2.8.0",
+        "vulns": []
+      },
+      {
+        "name": "annotated-doc",
+        "version": "0.0.7",
+        "vulns": []
+      },
+      {
+        "name": "annotated-types",
+        "version": "0.8.0",
+        "vulns": []
+      },
+      {
+        "name": "anyio",
+        "version": "4.16.0",
+        "vulns": []
+      },
+      {
+        "name": "attrs",
+        "version": "26.1.0",
+        "vulns": []
+      },
+      {
+        "name": "azure-core",
+        "version": "1.41.0",
+        "vulns": []
+      },
+      {
+        "name": "boolean-py",
+        "version": "5.0",
+        "vulns": []
+      },
+      {
+        "name": "cachecontrol",
+        "version": "0.15.0",
+        "vulns": []
+      },
+      {
+        "name": "msgpack",
+        "version": "1.2.4",
+        "vulns": []
+      },
+      {
+        "name": "cachetools",
+        "version": "8.0.2",
+        "vulns": []
+      },
+      {
+        "name": "certifi",
+        "version": "2026.11.20",
+        "vulns": []
+      },
+      {
+        "name": "cffi",
+        "version": "2.1.1",
+        "vulns": []
+      },
+      {
+        "name": "click",
+        "version": "8.5.1",
+        "vulns": []
+      },
+      {
+        "name": "contourpy",
+        "version": "1.4.0",
+        "vulns": []
+      },
+      {
+        "name": "cycler",
+        "version": "0.12.1",
+        "vulns": []
+      },
+      {
+        "name": "filelock",
+        "version": "4.3.1",
+        "vulns": []
+      },
+      {
+        "name": "fonttools",
+        "version": "4.68.0",
+        "vulns": []
+      },
+      {
+        "name": "google-resumable-media",
+        "version": "2.11.0",
+        "vulns": []
+      },
+      {
+        "name": "h11",
+        "version": "0.16.0",
+        "vulns": []
+      },
+      {
+        "name": "httptools",
+        "version": "0.9.0",
+        "vulns": []
+      },
+      {
+        "name": "isodate",
+        "version": "0.7.2",
+        "vulns": []
+      },
+      {
+        "name": "kiwisolver",
+        "version": "1.5.1",
+        "vulns": []
+      },
+      {
+        "name": "lxml",
+        "version": "6.1.3",
+        "vulns": []
+      },
+      {
+        "name": "msal",
+        "version": "1.39.0",
+        "vulns": []
+      },
+      {
+        "name": "msal-extensions",
+        "version": "1.3.1",
+        "vulns": []
+      },
+      {
+        "name": "pillow",
+        "version": "13.0.0",
+        "vulns": []
+      },
+      {
+        "name": "pip-api",
+        "version": "0.0.35",
+        "vulns": []
+      },
+      {
+        "name": "pip-requirements-parser",
+        "version": "32.0.1",
+        "vulns": []
+      },
+      {
+        "name": "platformdirs",
+        "version": "4.14.8",
+        "vulns": []
+      },
+      {
+        "name": "pyasn1-modules",
+        "version": "0.4.2",
+        "vulns": []
+      },
+      {
+        "name": "pyasn1",
+        "version": "0.6.5",
+        "vulns": []
+      },
+      {
+        "name": "pyparsing",
+        "version": "3.3.3",
+        "vulns": []
+      },
+      {
+        "name": "pytz",
+        "version": "2026.6",
+        "vulns": []
+      },
+      {
+        "name": "pyyaml",
+        "version": "6.0.4",
+        "vulns": []
+      },
+      {
+        "name": "requests-file",
+        "version": "3.0.1",
+        "vulns": []
+      },
+      {
+        "name": "requests-toolbelt",
+        "version": "1.0.0",
+        "vulns": []
+      },
+      {
+        "name": "rich",
+        "version": "15.0.0",
+        "vulns": []
+      },
+      {
+        "name": "pygments",
+        "version": "2.21.0",
+        "vulns": []
+      },
+      {
+        "name": "markdown-it-py",
+        "version": "4.3.0",
+        "vulns": []
+      },
+      {
+        "name": "mdurl",
+        "version": "0.1.2",
+        "vulns": []
+      },
+      {
+        "name": "six",
+        "version": "1.17.0",
+        "vulns": []
+      },
+      {
+        "name": "starlette",
+        "version": "1.10.0",
+        "vulns": []
+      },
+      {
+        "name": "tomli",
+        "version": "2.5.0",
+        "vulns": []
+      },
+      {
+        "name": "tomli-w",
+        "version": "1.2.0",
+        "vulns": []
+      },
+      {
+        "name": "typing-inspection",
+        "version": "0.4.5",
+        "vulns": []
+      },
+      {
+        "name": "tzdata",
+        "version": "2026.6",
+        "vulns": []
+      },
+      {
+        "name": "watchfiles",
+        "version": "1.3.0",
+        "vulns": []
+      },
+      {
+        "name": "websockets",
+        "version": "17.4",
+        "vulns": []
+      },
+      {
+        "name": "et-xmlfile",
+        "version": "2.0.0",
+        "vulns": []
+      },
+      {
+        "name": "pycparser",
+        "version": "3.12",
+        "vulns": []
       }
     ],
-    "python_audit": {
-      "dependencies": [
-        {
-          "name": "httpx",
-          "version": "0.28.1",
-          "vulns": []
-        },
-        {
-          "name": "ruff",
-          "version": "0.17.6",
-          "vulns": []
-        },
-        {
-          "name": "pip-audit",
-          "version": "2.10.1",
-          "vulns": []
-        },
-        {
-          "name": "fastapi",
-          "version": "0.165.0",
-          "vulns": []
-        },
-        {
-          "name": "uvicorn",
-          "version": "0.54.0",
-          "vulns": []
-        },
-        {
-          "name": "python-dotenv",
-          "version": "1.2.4",
-          "vulns": []
-        },
-        {
-          "name": "pydantic",
-          "version": "2.14.4",
-          "vulns": []
-        },
-        {
-          "name": "pydantic-core",
-          "version": "2.50.5",
-          "vulns": []
-        },
-        {
-          "name": "pydantic-settings",
-          "version": "2.16.3",
-          "vulns": []
-        },
-        {
-          "name": "pandas",
-          "version": "2.3.3",
-          "vulns": []
-        },
-        {
-          "name": "openpyxl",
-          "version": "3.1.5",
-          "vulns": []
-        },
-        {
-          "name": "xlrd",
-          "version": "2.0.2",
-          "vulns": []
-        },
-        {
-          "name": "matplotlib",
-          "version": "3.11.2",
-          "vulns": []
-        },
-        {
-          "name": "seaborn",
-          "version": "0.13.2",
-          "vulns": []
-        },
-        {
-          "name": "requests",
-          "version": "2.34.2",
-          "vulns": []
-        },
-        {
-          "name": "hdbcli",
-          "version": "2.30.32",
-          "vulns": []
-        },
-        {
-          "name": "python-multipart",
-          "version": "0.0.34",
-          "vulns": []
-        },
-        {
-          "name": "numpy",
-          "version": "2.5.5",
-          "vulns": []
-        },
-        {
-          "name": "sap-xssec",
-          "version": "4.5.0",
-          "vulns": []
-        },
-        {
-          "name": "cryptography",
-          "version": "50.0.2",
-          "vulns": []
-        },
-        {
-          "name": "pyjwt",
-          "version": "2.15.1",
-          "vulns": []
-        },
-        {
-          "name": "boto3",
-          "version": "1.44.10",
-          "vulns": []
-        },
-        {
-          "name": "google-cloud-storage",
-          "version": "2.19.0",
-          "vulns": []
-        },
-        {
-          "name": "azure-storage-blob",
-          "version": "12.31.1",
-          "vulns": []
-        },
-        {
-          "name": "azure-identity",
-          "version": "1.27.0",
-          "vulns": []
-        },
-        {
-          "name": "zeep",
-          "version": "4.3.3",
-          "vulns": []
-        },
-        {
-          "name": "botocore",
-          "version": "1.44.10",
-          "vulns": []
-        },
-        {
-          "name": "charset-normalizer",
-          "version": "3.5.3",
-          "vulns": []
-        },
-        {
-          "name": "cyclonedx-python-lib",
-          "version": "11.12.0",
-          "vulns": []
-        },
-        {
-          "name": "google-api-core",
-          "version": "2.44.0",
-          "vulns": []
-        },
-        {
-          "name": "google-auth",
-          "version": "2.63.1",
-          "vulns": []
-        },
-        {
-          "name": "google-cloud-core",
-          "version": "2.8.0",
-          "vulns": []
-        },
-        {
-          "name": "google-crc32c",
-          "version": "1.9.0",
-          "vulns": []
-        },
-        {
-          "name": "googleapis-common-protos",
-          "version": "1.76.0",
-          "vulns": []
-        },
-        {
-          "name": "httpcore",
-          "version": "1.0.9",
-          "vulns": []
-        },
-        {
-          "name": "idna",
-          "version": "3.20",
-          "vulns": []
-        },
-        {
-          "name": "jmespath",
-          "version": "1.1.0",
-          "vulns": []
-        },
-        {
-          "name": "license-expression",
-          "version": "30.4.4",
-          "vulns": []
-        },
-        {
-          "name": "opentelemetry-api",
-          "version": "1.45.2",
-          "vulns": []
-        },
-        {
-          "name": "packageurl-python",
-          "version": "0.17.6",
-          "vulns": []
-        },
-        {
-          "name": "proto-plus",
-          "version": "1.29.0",
-          "vulns": []
-        },
-        {
-          "name": "protobuf",
-          "version": "7.36.2",
-          "vulns": []
-        },
-        {
-          "name": "py-serializable",
-          "version": "2.2.0",
-          "vulns": []
-        },
-        {
-          "name": "defusedxml",
-          "version": "0.7.1",
-          "vulns": []
-        },
-        {
-          "name": "python-dateutil",
-          "version": "2.9.0.post0",
-          "vulns": []
-        },
-        {
-          "name": "s3transfer",
-          "version": "0.19.3",
-          "vulns": []
-        },
-        {
-          "name": "sortedcontainers",
-          "version": "2.4.0",
-          "vulns": []
-        },
-        {
-          "name": "typing-extensions",
-          "version": "4.16.0",
-          "vulns": []
-        },
-        {
-          "name": "urllib3",
-          "version": "2.8.0",
-          "vulns": []
-        },
-        {
-          "name": "annotated-doc",
-          "version": "0.0.7",
-          "vulns": []
-        },
-        {
-          "name": "annotated-types",
-          "version": "0.8.0",
-          "vulns": []
-        },
-        {
-          "name": "anyio",
-          "version": "4.16.0",
-          "vulns": []
-        },
-        {
-          "name": "attrs",
-          "version": "26.1.0",
-          "vulns": []
-        },
-        {
-          "name": "azure-core",
-          "version": "1.41.0",
-          "vulns": []
-        },
-        {
-          "name": "boolean-py",
-          "version": "5.0",
-          "vulns": []
-        },
-        {
-          "name": "cachecontrol",
-          "version": "0.15.0",
-          "vulns": []
-        },
-        {
-          "name": "msgpack",
-          "version": "1.2.4",
-          "vulns": []
-        },
-        {
-          "name": "cachetools",
-          "version": "8.0.2",
-          "vulns": []
-        },
-        {
-          "name": "certifi",
-          "version": "2026.11.20",
-          "vulns": []
-        },
-        {
-          "name": "cffi",
-          "version": "2.1.1",
-          "vulns": []
-        },
-        {
-          "name": "click",
-          "version": "8.5.1",
-          "vulns": []
-        },
-        {
-          "name": "contourpy",
-          "version": "1.4.0",
-          "vulns": []
-        },
-        {
-          "name": "cycler",
-          "version": "0.12.1",
-          "vulns": []
-        },
-        {
-          "name": "filelock",
-          "version": "4.3.1",
-          "vulns": []
-        },
-        {
-          "name": "fonttools",
-          "version": "4.68.0",
-          "vulns": []
-        },
-        {
-          "name": "google-resumable-media",
-          "version": "2.11.0",
-          "vulns": []
-        },
-        {
-          "name": "h11",
-          "version": "0.16.0",
-          "vulns": []
-        },
-        {
-          "name": "httptools",
-          "version": "0.9.0",
-          "vulns": []
-        },
-        {
-          "name": "isodate",
-          "version": "0.7.2",
-          "vulns": []
-        },
-        {
-          "name": "kiwisolver",
-          "version": "1.5.1",
-          "vulns": []
-        },
-        {
-          "name": "lxml",
-          "version": "6.1.3",
-          "vulns": []
-        },
-        {
-          "name": "msal",
-          "version": "1.39.0",
-          "vulns": []
-        },
-        {
-          "name": "msal-extensions",
-          "version": "1.3.1",
-          "vulns": []
-        },
-        {
-          "name": "pillow",
-          "version": "13.0.0",
-          "vulns": []
-        },
-        {
-          "name": "pip-api",
-          "version": "0.0.35",
-          "vulns": []
-        },
-        {
-          "name": "pip-requirements-parser",
-          "version": "32.0.1",
-          "vulns": []
-        },
-        {
-          "name": "platformdirs",
-          "version": "4.14.8",
-          "vulns": []
-        },
-        {
-          "name": "pyasn1-modules",
-          "version": "0.4.2",
-          "vulns": []
-        },
-        {
-          "name": "pyasn1",
-          "version": "0.6.5",
-          "vulns": []
-        },
-        {
-          "name": "pyparsing",
-          "version": "3.3.3",
-          "vulns": []
-        },
-        {
-          "name": "pytz",
-          "version": "2026.6",
-          "vulns": []
-        },
-        {
-          "name": "pyyaml",
-          "version": "6.0.4",
-          "vulns": []
-        },
-        {
-          "name": "requests-file",
-          "version": "3.0.1",
-          "vulns": []
-        },
-        {
-          "name": "requests-toolbelt",
-          "version": "1.0.0",
-          "vulns": []
-        },
-        {
-          "name": "rich",
-          "version": "15.0.0",
-          "vulns": []
-        },
-        {
-          "name": "pygments",
-          "version": "2.21.0",
-          "vulns": []
-        },
-        {
-          "name": "markdown-it-py",
-          "version": "4.3.0",
-          "vulns": []
-        },
-        {
-          "name": "mdurl",
-          "version": "0.1.2",
-          "vulns": []
-        },
-        {
-          "name": "six",
-          "version": "1.17.0",
-          "vulns": []
-        },
-        {
-          "name": "starlette",
-          "version": "1.10.0",
-          "vulns": []
-        },
-        {
-          "name": "tomli",
-          "version": "2.5.0",
-          "vulns": []
-        },
-        {
-          "name": "tomli-w",
-          "version": "1.2.0",
-          "vulns": []
-        },
-        {
-          "name": "typing-inspection",
-          "version": "0.4.5",
-          "vulns": []
-        },
-        {
-          "name": "tzdata",
-          "version": "2026.6",
-          "vulns": []
-        },
-        {
-          "name": "watchfiles",
-          "version": "1.3.0",
-          "vulns": []
-        },
-        {
-          "name": "websockets",
-          "version": "17.4",
-          "vulns": []
-        },
-        {
-          "name": "et-xmlfile",
-          "version": "2.0.0",
-          "vulns": []
-        },
-        {
-          "name": "pycparser",
-          "version": "3.12",
-          "vulns": []
-        }
-      ],
-      "fixes": []
-    },
-    "finding_statuses": {
-      "F01": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F02": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F03": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F04": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F05": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F06": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F07": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F08": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F09": "FIXED (scanned dependencies)",
-      "F10": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F11": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F12": "FIXED (current CI failures)",
-      "F13": "FIXED",
-      "F14": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F15": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F16": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F17": "OPEN (original audit finding retained; not remediated by CI repair)",
-      "F18": "PARTIALLY FIXED (configured CI checks only)"
-    },
-    "hosted_verification": "PENDING: remediation branch has not yet run",
-    "limitations": [
-      "No live HANA, XSUAA, connector, LLM, deployment or load verification.",
-      "SAP BTP Cloud Foundry remains the only application deployment/hosting target.",
-      "Original audit results and findings remain historical evidence; local CI success does not establish enterprise readiness.",
-      "Initial pip-audit attempt timed out contacting PyPI; retry with 120s timeout succeeded."
+    "fixes": []
+  },
+  "finding_statuses": {
+    "F01": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F02": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F03": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F04": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F05": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F06": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F07": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F08": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F09": "FIXED (scanned dependencies)",
+    "F10": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F11": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F12": "FIXED (current CI failures)",
+    "F13": "FIXED",
+    "F14": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F15": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F16": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F17": "OPEN (original audit finding retained; not remediated by CI repair)",
+    "F18": "PARTIALLY FIXED (configured CI checks only)"
+  },
+  "hosted_verification": {
+    "status": "PASS",
+    "run_id": 45331541221,
+    "url": "https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45331541221",
+    "commit": "515b2435dc1f98e19d3a289be66c96303bc80870",
+    "jobs": [
+      {
+        "name": "backend (ubuntu-latest)",
+        "job_id": 138233678708,
+        "conclusion": "success",
+        "tests_passed": 270,
+        "tests_failed": 0
+      },
+      {
+        "name": "backend (windows-latest)",
+        "job_id": 138233678767,
+        "conclusion": "success",
+        "tests_passed": 270,
+        "tests_failed": 0
+      },
+      {
+        "name": "frontend (ubuntu-latest)",
+        "job_id": 138233678625,
+        "conclusion": "success",
+        "tests_passed": 79,
+        "tests_failed": 0,
+        "typecheck": "PASS",
+        "build": "PASS"
+      },
+      {
+        "name": "frontend (windows-latest)",
+        "job_id": 138233678385,
+        "conclusion": "success",
+        "tests_passed": 79,
+        "tests_failed": 0,
+        "typecheck": "PASS",
+        "build": "PASS"
+      },
+      {
+        "name": "python-quality",
+        "job_id": 138233678613,
+        "conclusion": "success",
+        "format_files": 143
+      },
+      {
+        "name": "dependencies",
+        "job_id": 138233678592,
+        "conclusion": "success",
+        "npm_vulnerabilities": 0,
+        "python_vulnerabilities": 0,
+        "router_tests_passed": 3
+      }
     ]
-  }
+  },
+  "limitations": [
+    "No live HANA, XSUAA, connector, LLM, deployment or load verification.",
+    "SAP BTP Cloud Foundry remains the only application deployment/hosting target.",
+    "Original audit results and findings remain historical evidence; local CI success does not establish enterprise readiness.",
+    "Initial pip-audit attempt timed out contacting PyPI; retry with 120s timeout succeeded."
+  ]
+}
 }

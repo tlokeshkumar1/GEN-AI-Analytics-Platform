@@ -235,7 +235,7 @@ Prioritized remediation is consolidated here; recorded commands and embedded aud
 The current evidence supports **local implemented functionality with material defects**. It does not support enterprise deployment, compliance claims, unrestricted domain independence or proven production scalability. Unverified work is explicitly retained in the matrix rather than converted into a mock-backed success.
 
 
-## 16. CI failure remediation ? 24 November 2026
+## 16. CI failure remediation - 24 November 2026
 
 Scope: the four jobs in `.github/workflows/enterprise-local-ci.yml`. Original audit findings and historical evidence above remain unchanged. The actual failed runs were [45223411202](https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45223411202) and [45225015183](https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45225015183). The checkout began at `6ca506beea9595ee105cd9967c03ffbb0aeb1d96` and was synchronized with the documentation-only `76c561d` update.
 
@@ -248,7 +248,7 @@ App Router migration: the installed SAP changelog drops Node 20 in v21 and suppo
 
 Workflow: backend and frontend execute on Ubuntu and Windows with Python 3.12/Node 22. Backend JSON and frontend JUnit artifacts preserve evidence on failure. All jobs remain CI/testing/quality/security/build validation only. No deployment steps, production credentials, hosting changes, suppressed advisories or continue-on-error were added. SAP BTP Cloud Foundry deployment remains unchanged.
 
-Local command outcomes, complete Python dependency scan and finding statuses are recorded under `ci_remediation` in `audit-results.json`. Frontend commands ran in a clean temporary copy because the existing Vite development server locks native modules on Windows; that server was left running. Hosted verification: **PENDING** until the remediation commit completes Actions.
+Local command outcomes, complete Python dependency scan and finding statuses are recorded under `ci_remediation` in `audit-results.json`. Frontend commands ran in a clean temporary copy because the existing Vite development server locks native modules on Windows; that server was left running. Hosted verification: **PASS** in [run 45331541221](https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45331541221) at commit `515b2435dc1f98e19d3a289be66c96303bc80870`. All six executions of the four jobs passed: backend 270/270 and frontend 79/79 on both Ubuntu and Windows, Python lint/formatting, all dependency scans, and three SAP router compatibility tests. No tests were skipped.
 
 | Finding | Scoped remediation status |
 |---|---|
@@ -256,6 +256,6 @@ Local command outcomes, complete Python dependency scan and finding statuses are
 | F12 | FIXED for the current frontend CI failures; 79/79 pass |
 | F13 | FIXED; isolated failure-path regression passes |
 | F18 | PARTIALLY FIXED; maintained checks pass, broader maintainability findings remain |
-| F01?F08, F10?F11, F14?F17 | OPEN; original findings retained, not reassessed as fixed by this CI repair |
+| F01-F08, F10-F11, F14-F17 | OPEN; original findings retained, not reassessed as fixed by this CI repair |
 
 The enterprise readiness assessment remains **NO GO** pending the original security/data findings and live integration gates. Next SAP validation must use an explicitly authorized disposable HANA schema and test tenant, verify versioned joins and isolation, exercise real XSUAA token rejection and SAP logout, and then perform a manual Cloud Foundry build/deployment validation through the existing process. No cloud deployment was executed here.
