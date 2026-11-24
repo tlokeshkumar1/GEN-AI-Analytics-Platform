@@ -10,7 +10,7 @@ import re
 import copy
 import os
 from decimal import Decimal, localcontext
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple
 import pandas as pd
 
 from api.utils.logger import get_logger
@@ -24,7 +24,9 @@ class PreprocessingAgent:
     normalizes headers, and coerces types conservatively.
     """
 
-    def clean(self, df: pd.DataFrame, parsing_options=None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    def clean(
+        self, df: pd.DataFrame, parsing_options=None
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """
         Run the complete cleaning pipeline.
         Returns:
@@ -37,7 +39,7 @@ class PreprocessingAgent:
                 "duplicates_removed": 0,
                 "null_values_cleaned": 0,
                 "columns_cleaned": 0,
-                "message": "Empty or null DataFrame provided."
+                "message": "Empty or null DataFrame provided.",
             }
 
         df = df.copy(deep=True)
@@ -52,7 +54,9 @@ class PreprocessingAgent:
         df = df.dropna(how="all")
         df = df.dropna(axis=1, how="all")
         if df.attrs.get("columns"):
-            df.attrs["columns"] = [c for c in df.attrs["columns"] if c["name"] in df.columns]
+            df.attrs["columns"] = [
+                c for c in df.attrs["columns"] if c["name"] in df.columns
+            ]
 
         # Step 3: Remove duplicate rows
         duplicates_before = len(df)
@@ -84,7 +88,7 @@ class PreprocessingAgent:
             "null_values_cleaned": nulls_cleaned_count,
             "null_fixes_by_column": col_null_fixes,
             "status": "success",
-            "message": f"Sanitized {rows_after} rows. Removed {total_duplicates_removed} duplicate rows and sanitized {nulls_cleaned_count} cells."
+            "message": f"Sanitized {rows_after} rows. Removed {total_duplicates_removed} duplicate rows and sanitized {nulls_cleaned_count} cells.",
         }
 
         logger.info(f"[PreprocessingAgent] Finished: {audit['message']}")
@@ -98,9 +102,9 @@ class PreprocessingAgent:
         for col in df.columns:
             name = str(col).strip()
             # Replace spaces and punctuation with underscores
-            clean_name = re.sub(r'[\s\-\/\.]+', '_', name)
-            clean_name = re.sub(r'[^\w_]', '', clean_name)
-            clean_name = re.sub(r'_+', '_', clean_name).strip('_')
+            clean_name = re.sub(r"[\s\-\/\.]+", "_", name)
+            clean_name = re.sub(r"[^\w_]", "", clean_name)
+            clean_name = re.sub(r"_+", "_", clean_name).strip("_")
             if not clean_name:
                 clean_name = "Column"
 
@@ -127,16 +131,29 @@ class PreprocessingAgent:
             df.attrs["columns"] = columns
         return df
 
-    def _normalize_formatted_numbers(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    def _normalize_formatted_numbers(
+        self, df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, int]:
         """Convert string numbers formatted with currency symbols, commas, or percent signs to numeric."""
         cleaned_cells = 0
         declared = {c["name"]: c["type"] for c in df.attrs.get("columns", [])}
-        explicit = df.attrs.get("transformation_plan", {}).get("parsing", {}).get("column_types", {})
+        explicit = (
+            df.attrs.get("transformation_plan", {})
+            .get("parsing", {})
+            .get("column_types", {})
+        )
         # Commas are thousands separators only when their grouping is unambiguous.
-        pattern = re.compile(r"^[\$\u20ac\u00a3\u00a5\u20b9]?\s*[-+]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?%?$")
+        pattern = re.compile(
+            r"^[\$\u20ac\u00a3\u00a5\u20b9]?\s*[-+]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?%?$"
+        )
         for col in df.columns:
             source_name = df.attrs.get("source_column_names", {}).get(col, col)
-            if declared.get(col) in ("identifier", "date", "boolean", "decimal") or explicit.get(source_name) in ("string", "identifier"):
+            if declared.get(col) in (
+                "identifier",
+                "date",
+                "boolean",
+                "decimal",
+            ) or explicit.get(source_name) in ("string", "identifier"):
                 continue
             if not (df[col].dtype == object or pd.api.types.is_string_dtype(df[col])):
                 continue
@@ -148,6 +165,7 @@ class PreprocessingAgent:
                 continue  # Leading zeros carry identifier meaning.
             if not texts.map(lambda v: bool(pattern.fullmatch(v))).all():
                 continue  # Never replace unparseable source values with invented nulls.
+
             def parse(value):
                 if pd.isna(value):
                     return None
@@ -158,7 +176,10 @@ class PreprocessingAgent:
                 with localcontext() as context:
                     context.prec = max(38, len(number.as_tuple().digits))
                     return number / Decimal(100) if percent else number
-            df[col] = pd.Series([parse(v) for v in df[col]], index=df.index, dtype=object)
+
+            df[col] = pd.Series(
+                [parse(v) for v in df[col]], index=df.index, dtype=object
+            )
             for column in df.attrs.get("columns", []):
                 if column["name"] == col:
                     column["type"] = "decimal"
@@ -171,9 +192,19 @@ class PreprocessingAgent:
 
         declared = {c["name"]: c["type"] for c in df.attrs.get("columns", [])}
         for col in df.columns:
-            if declared.get(col) in ("identifier", "decimal", "integer", "number", "date", "boolean"):
+            if declared.get(col) in (
+                "identifier",
+                "decimal",
+                "integer",
+                "number",
+                "date",
+                "boolean",
+            ):
                 continue
-            if os.getenv("PLATFORM_CATEGORICAL_NULL_POLICY", "label").lower() == "preserve":
+            if (
+                os.getenv("PLATFORM_CATEGORICAL_NULL_POLICY", "label").lower()
+                == "preserve"
+            ):
                 continue
             null_count = int(df[col].isna().sum())
 
@@ -185,7 +216,9 @@ class PreprocessingAgent:
 
             # If column is categorical / string: normalize empty whitespace and nulls to "Unassigned"
             elif pd.api.types.is_string_dtype(df[col]) or df[col].dtype == object:
-                empty_mask = df[col].isna() | df[col].astype(str).str.strip().isin(["", "nan", "NaN", "None", "null"])
+                empty_mask = df[col].isna() | df[col].astype(str).str.strip().isin(
+                    ["", "nan", "NaN", "None", "null"]
+                )
                 cleaned_in_col = int(empty_mask.sum())
                 if cleaned_in_col > 0:
                     df.loc[empty_mask, col] = "Unassigned"

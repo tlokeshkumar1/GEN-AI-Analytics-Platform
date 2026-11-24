@@ -15,15 +15,9 @@ Implements the 10-step Custom Graph Generation workflow:
   Step 10 – Each request is fully stateless; no script re-use
 """
 
-import os
 import re
 import sys
-import uuid
-import json
-import time
-import base64
 import tempfile
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -42,28 +36,28 @@ logger = get_logger("services.python_graph_agent")
 # ──────────────────────────────────────────────────────────────────────────────
 
 _CHART_KEYWORDS: Dict[str, str] = {
-    "funnel":      "funnel",
-    "waterfall":   "waterfall",
-    "treemap":     "treemap",
-    "tree map":    "treemap",
-    "heatmap":     "heatmap",
-    "heat map":    "heatmap",
+    "funnel": "funnel",
+    "waterfall": "waterfall",
+    "treemap": "treemap",
+    "tree map": "treemap",
+    "heatmap": "heatmap",
+    "heat map": "heatmap",
     "correlation": "heatmap",
-    "matrix":      "heatmap",
-    "stacked":     "stacked_bar",
-    "donut":       "donut",
-    "doughnut":    "donut",
-    "pie":         "pie",
-    "violin":      "violin",
-    "box":         "box",
-    "boxplot":     "box",
-    "scatter":     "scatter",
-    "bubble":      "scatter",
-    "area":        "area",
-    "line":        "line",
-    "trend":       "line",
+    "matrix": "heatmap",
+    "stacked": "stacked_bar",
+    "donut": "donut",
+    "doughnut": "donut",
+    "pie": "pie",
+    "violin": "violin",
+    "box": "box",
+    "boxplot": "box",
+    "scatter": "scatter",
+    "bubble": "scatter",
+    "area": "area",
+    "line": "line",
+    "trend": "line",
     "time series": "line",
-    "bar":         "bar",
+    "bar": "bar",
 }
 
 # Aggregation function mapping
@@ -80,7 +74,23 @@ _AGG_MAP = {
 
 def _is_currency_hint(col: str) -> bool:
     low = str(col).lower()
-    return any(k in low for k in ("usd", "eur", "inr", "revenue", "sales", "salary", "cost", "price", "margin", "amount", "budget", "profit"))
+    return any(
+        k in low
+        for k in (
+            "usd",
+            "eur",
+            "inr",
+            "revenue",
+            "sales",
+            "salary",
+            "cost",
+            "price",
+            "margin",
+            "amount",
+            "budget",
+            "profit",
+        )
+    )
 
 
 def _is_pct_hint(col: str) -> bool:
@@ -106,6 +116,7 @@ class PythonGraphAgent:
             return excel_dataset_service.get_fast_dataset_path()
         except Exception:
             import tempfile
+
             return Path(tempfile.gettempdir()) / "HANA_ACTIVE_DATASET.pkl"
 
     def _get_schema_summary(self, df: Optional[pd.DataFrame] = None) -> str:
@@ -147,10 +158,17 @@ class PythonGraphAgent:
     def _get_active_semantic_model(self):
         try:
             from api.models.execution_context import current_selection
+
             sel = current_selection.get()
             if sel and sel.entry:
                 from api.platform.semantic import semantic_registry
-                return semantic_registry.get(sel.entry, sel.context.version, sel.context.semantic_revision, approved=False)
+
+                return semantic_registry.get(
+                    sel.entry,
+                    sel.context.version,
+                    sel.context.semantic_revision,
+                    approved=False,
+                )
         except Exception:
             pass
         return None
@@ -161,31 +179,48 @@ class PythonGraphAgent:
         if target_df is None:
             try:
                 from api.services.data_service import data_service
+
                 target_df = data_service.get_dataframe()
             except Exception:
                 pass
 
         model = self._get_active_semantic_model()
         if model and model.fields:
-            for f in [f for f in model.fields if f.role in ("dimension", "time", "identifier")]:
-                candidates = [f.name.lower(), f.semantic_name.lower()] + [a.lower() for a in (f.aliases or [])]
-                if any(re.search(r"\b" + re.escape(c) + r"\b", p) for c in candidates if c):
+            for f in [
+                f for f in model.fields if f.role in ("dimension", "time", "identifier")
+            ]:
+                candidates = [f.name.lower(), f.semantic_name.lower()] + [
+                    a.lower() for a in (f.aliases or [])
+                ]
+                if any(
+                    re.search(r"\b" + re.escape(c) + r"\b", p) for c in candidates if c
+                ):
                     return f.name
 
         if target_df is not None and not target_df.empty:
-            cats = [c for c in target_df.columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            cats = [
+                c
+                for c in target_df.columns
+                if not str(c).lower().endswith(("id", "code", "key"))
+            ]
             for col in cats:
                 clean = str(col).lower()
-                if clean in p or clean.replace('_', ' ') in p:
+                if clean in p or clean.replace("_", " ") in p:
                     return col
-            m_by = re.search(r'\b(?:by|per|across|for each|split by|group by)\s+([a-zA-Z0-9_]+)', p)
+            m_by = re.search(
+                r"\b(?:by|per|across|for each|split by|group by)\s+([a-zA-Z0-9_]+)", p
+            )
             if m_by:
                 word = m_by.group(1).lower()
                 for col in target_df.columns:
                     if word in str(col).lower():
                         return col
 
-            str_cats = [c for c in target_df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            str_cats = [
+                c
+                for c in target_df.select_dtypes(include=["object", "string"]).columns
+                if not str(c).lower().endswith(("id", "code", "key"))
+            ]
             if str_cats:
                 return str_cats[0]
             if len(target_df.columns) > 0:
@@ -199,6 +234,7 @@ class PythonGraphAgent:
         if target_df is None:
             try:
                 from api.services.data_service import data_service
+
                 target_df = data_service.get_dataframe()
             except Exception:
                 pass
@@ -206,24 +242,34 @@ class PythonGraphAgent:
         model = self._get_active_semantic_model()
         if model and model.fields:
             for f in [f for f in model.fields if f.role == "measure"]:
-                candidates = [f.name.lower(), f.semantic_name.lower()] + [a.lower() for a in (f.aliases or [])]
-                if any(re.search(r"\b" + re.escape(c) + r"\b", p) for c in candidates if c):
+                candidates = [f.name.lower(), f.semantic_name.lower()] + [
+                    a.lower() for a in (f.aliases or [])
+                ]
+                if any(
+                    re.search(r"\b" + re.escape(c) + r"\b", p) for c in candidates if c
+                ):
                     return f.name
 
         if target_df is not None and not target_df.empty:
             nums = [
-                c for c in target_df.select_dtypes(include=['number']).columns
-                if not str(c).lower().endswith(('id', 'code', 'key'))
-                and str(c).lower() not in ('year', 'month', 'monthnum', 'quarter', 'day', 'week')
+                c
+                for c in target_df.select_dtypes(include=["number"]).columns
+                if not str(c).lower().endswith(("id", "code", "key"))
+                and str(c).lower()
+                not in ("year", "month", "monthnum", "quarter", "day", "week")
             ]
             for col in nums:
                 clean = str(col).lower()
-                clean_no_curr = re.sub(r'(?:usd|eur|inr|gbp)$', '', clean)
-                if clean in p or (clean_no_curr and clean_no_curr in p) or clean.replace('_', ' ') in p:
+                clean_no_curr = re.sub(r"(?:usd|eur|inr|gbp)$", "", clean)
+                if (
+                    clean in p
+                    or (clean_no_curr and clean_no_curr in p)
+                    or clean.replace("_", " ") in p
+                ):
                     return col
             if nums:
                 return nums[0]
-            all_nums = target_df.select_dtypes(include=['number']).columns.tolist()
+            all_nums = target_df.select_dtypes(include=["number"]).columns.tolist()
             if all_nums:
                 return str(all_nums[0])
             if len(target_df.columns) > 0:
@@ -235,7 +281,9 @@ class PythonGraphAgent:
     # NEW: Deterministic Pre-Computation & Reconciliation
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _apply_filters(self, df: pd.DataFrame, filters: List[Dict], date_filter: Optional[Dict]) -> pd.DataFrame:
+    def _apply_filters(
+        self, df: pd.DataFrame, filters: List[Dict], date_filter: Optional[Dict]
+    ) -> pd.DataFrame:
         """Apply query plan filters to the dataframe with strict type coercion."""
         filtered = df.copy()
 
@@ -283,7 +331,11 @@ class PythonGraphAgent:
                     elif op == "<=":
                         filtered = filtered[filtered[col] <= c_val]
                     elif op == "CONTAINS":
-                        filtered = filtered[filtered[col].astype(str).str.contains(str(val), case=False, na=False)]
+                        filtered = filtered[
+                            filtered[col]
+                            .astype(str)
+                            .str.contains(str(val), case=False, na=False)
+                        ]
             except Exception as e:
                 logger.warning(f"[PreCompute] Could not apply filter {f}: {e}")
 
@@ -296,25 +348,41 @@ class PythonGraphAgent:
                     col_dtype = filtered[col].dtype
                     if from_val is not None and str(from_val).strip():
                         if np.issubdtype(col_dtype, np.number):
-                            year_match = re.search(r'\b(20[12]\d)\b', str(from_val))
-                            f_num = int(year_match.group(1)) if year_match else float(from_val)
+                            year_match = re.search(r"\b(20[12]\d)\b", str(from_val))
+                            f_num = (
+                                int(year_match.group(1))
+                                if year_match
+                                else float(from_val)
+                            )
                             filtered = filtered[filtered[col] >= f_num]
                         else:
-                            filtered = filtered[filtered[col].astype(str) >= str(from_val)]
+                            filtered = filtered[
+                                filtered[col].astype(str) >= str(from_val)
+                            ]
 
                     if to_val is not None and str(to_val).strip():
                         if np.issubdtype(col_dtype, np.number):
-                            year_match = re.search(r'\b(20[12]\d)\b', str(to_val))
-                            t_num = int(year_match.group(1)) if year_match else float(to_val)
+                            year_match = re.search(r"\b(20[12]\d)\b", str(to_val))
+                            t_num = (
+                                int(year_match.group(1))
+                                if year_match
+                                else float(to_val)
+                            )
                             filtered = filtered[filtered[col] <= t_num]
                         else:
-                            filtered = filtered[filtered[col].astype(str) <= str(to_val)]
+                            filtered = filtered[
+                                filtered[col].astype(str) <= str(to_val)
+                            ]
                 except Exception as e:
-                    logger.warning(f"[PreCompute] Could not apply date filter {date_filter}: {e}")
+                    logger.warning(
+                        f"[PreCompute] Could not apply date filter {date_filter}: {e}"
+                    )
 
         # Safety fallback: if filters over-filtered dataset to 0 rows, fall back to unfiltered df
         if len(filtered) == 0 and len(df) > 0:
-            logger.warning("[PreCompute] Filters resulted in 0 records! Falling back to full dataset.")
+            logger.warning(
+                "[PreCompute] Filters resulted in 0 records! Falling back to full dataset."
+            )
             return df.copy()
 
         return filtered
@@ -364,31 +432,60 @@ class PythonGraphAgent:
 
         # Dynamically resolve fallback dim/measure if empty
         if not measure and filtered is not None and not filtered.empty:
-            nums = [c for c in filtered.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            nums = [
+                c
+                for c in filtered.select_dtypes(include=["number"]).columns
+                if not str(c).lower().endswith(("id", "code", "key"))
+            ]
             measure = nums[0] if nums else str(filtered.columns[0])
         if not dim and filtered is not None and not filtered.empty:
-            cats = [c for c in filtered.select_dtypes(include=['object', 'string']).columns if c != measure and not str(c).lower().endswith(('id', 'code', 'key'))]
+            cats = [
+                c
+                for c in filtered.select_dtypes(include=["object", "string"]).columns
+                if c != measure and not str(c).lower().endswith(("id", "code", "key"))
+            ]
             dim = cats[0] if cats else str(filtered.columns[0])
 
         # For heatmap/correlation:
         if chart_type == "heatmap":
             sec_dim = None
-            if dim and dim in filtered.columns and measure and measure in filtered.columns:
-                cats = [c for c in filtered.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
+            if (
+                dim
+                and dim in filtered.columns
+                and measure
+                and measure in filtered.columns
+            ):
+                cats = [
+                    c
+                    for c in filtered.select_dtypes(
+                        include=["object", "string"]
+                    ).columns
+                    if c != dim and not str(c).lower().endswith(("id", "code", "key"))
+                ]
                 if cats:
                     sec_dim = cats[0]
 
             if sec_dim and dim and measure:
-                pivot = filtered.pivot_table(index=dim, columns=sec_dim, values=measure, aggfunc=_AGG_MAP.get(aggregation, "sum"), fill_value=0)
+                pivot = filtered.pivot_table(
+                    index=dim,
+                    columns=sec_dim,
+                    values=measure,
+                    aggfunc=_AGG_MAP.get(aggregation, "sum"),
+                    fill_value=0,
+                )
                 if len(pivot) > 12:
                     top_idx = filtered.groupby(dim)[measure].sum().nlargest(12).index
                     pivot = pivot.loc[pivot.index.isin(top_idx)]
                 return pivot
 
-            num_cols = [c for c in filtered.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            num_cols = [
+                c
+                for c in filtered.select_dtypes(include=["number"]).columns
+                if not str(c).lower().endswith(("id", "code", "key"))
+            ]
             if len(num_cols) >= 2:
                 return filtered[num_cols].corr()
-            return filtered.select_dtypes(include=['number']).corr()
+            return filtered.select_dtypes(include=["number"]).corr()
 
         # For scatter charts, return a sampled raw dataset (no aggregation needed)
         if chart_type == "scatter":
@@ -409,8 +506,16 @@ class PythonGraphAgent:
             dim_parts = [d.strip() for d in dim.split(",")]
             for part in dim_parts:
                 if part not in filtered.columns:
-                    logger.warning(f"[PreCompute] Composite dim part '{part}' not in columns, falling back")
-                    cats = [c for c in filtered.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+                    logger.warning(
+                        f"[PreCompute] Composite dim part '{part}' not in columns, falling back"
+                    )
+                    cats = [
+                        c
+                        for c in filtered.select_dtypes(
+                            include=["object", "string"]
+                        ).columns
+                        if not str(c).lower().endswith(("id", "code", "key"))
+                    ]
                     dim = cats[0] if cats else str(filtered.columns[0])
                     is_composite = False
                     break
@@ -421,13 +526,28 @@ class PythonGraphAgent:
 
             # Chronological sorting
             if "Year" in dim_parts and "Quarter" in dim_parts:
-                agg["_qnum"] = agg["Quarter"].astype(str).str.extract(r'(\d+)').fillna(0).astype(int)
+                agg["_qnum"] = (
+                    agg["Quarter"]
+                    .astype(str)
+                    .str.extract(r"(\d+)")
+                    .fillna(0)
+                    .astype(int)
+                )
                 agg = agg.sort_values(["Year", "_qnum"]).drop(columns=["_qnum"])
             elif "Year" in dim_parts and "MonthName" in dim_parts:
                 month_order = {
-                    "January": 1, "February": 2, "March": 3, "April": 4,
-                    "May": 5, "June": 6, "July": 7, "August": 8,
-                    "September": 9, "October": 10, "November": 11, "December": 12,
+                    "January": 1,
+                    "February": 2,
+                    "March": 3,
+                    "April": 4,
+                    "May": 5,
+                    "June": 6,
+                    "July": 7,
+                    "August": 8,
+                    "September": 9,
+                    "October": 10,
+                    "November": 11,
+                    "December": 12,
                 }
                 agg["_mnum"] = agg["MonthName"].map(month_order).fillna(0).astype(int)
                 agg = agg.sort_values(["Year", "_mnum"]).drop(columns=["_mnum"])
@@ -437,19 +557,29 @@ class PythonGraphAgent:
 
             # Add combined label column
             label_col = " ".join(dim_parts)
-            agg[label_col] = agg.apply(lambda row: " ".join(str(row[p]) for p in dim_parts), axis=1)
+            agg[label_col] = agg.apply(
+                lambda row: " ".join(str(row[p]) for p in dim_parts), axis=1
+            )
 
             return agg
 
         if chart_type == "stacked_bar":
-            sec_dims = [c for c in filtered.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
+            sec_dims = [
+                c
+                for c in filtered.select_dtypes(include=["object", "string"]).columns
+                if c != dim and not str(c).lower().endswith(("id", "code", "key"))
+            ]
             if not sec_dims:
                 sec_dims = [c for c in filtered.columns if c != dim and c != measure]
             sec_dim = sec_dims[0] if sec_dims else dim
             if sec_dim == dim:
                 agg = filtered.groupby(dim)[measure].agg(agg_func).reset_index()
             else:
-                agg = filtered.groupby([dim, sec_dim])[measure].agg(agg_func).reset_index()
+                agg = (
+                    filtered.groupby([dim, sec_dim])[measure]
+                    .agg(agg_func)
+                    .reset_index()
+                )
         else:
             agg = filtered.groupby(dim)[measure].agg(agg_func).reset_index()
 
@@ -509,10 +639,18 @@ class PythonGraphAgent:
         if df is None:
             df = excel_dataset_service.get_df()
         if not measure and df is not None and not df.empty:
-            nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            nums = [
+                c
+                for c in df.select_dtypes(include=["number"]).columns
+                if not str(c).lower().endswith(("id", "code", "key"))
+            ]
             measure = nums[0] if nums else str(df.columns[0])
         if not dim and df is not None and not df.empty:
-            cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if c != measure and not str(c).lower().endswith(('id', 'code', 'key'))]
+            cats = [
+                c
+                for c in df.select_dtypes(include=["object", "string"]).columns
+                if c != measure and not str(c).lower().endswith(("id", "code", "key"))
+            ]
             dim = cats[0] if cats else str(df.columns[0])
 
         # Skip reconciliation for chart types that don't aggregate
@@ -540,7 +678,10 @@ class PythonGraphAgent:
             # Compare only the keys present in primary (which may be limited)
             common_keys = primary_totals.index.intersection(check.index)
             if len(common_keys) == 0:
-                return {"verified": False, "discrepancy": "No common keys between primary and reconciliation results"}
+                return {
+                    "verified": False,
+                    "discrepancy": "No common keys between primary and reconciliation results",
+                }
 
             primary_vals = primary_totals.loc[common_keys].values.astype(float)
             check_vals = check.loc[common_keys].values.astype(float)
@@ -578,7 +719,8 @@ class PythonGraphAgent:
             if clean_ds.endswith(".json")
             else f'pd.read_pickle(r"{clean_ds}")'
             if clean_ds.endswith(".pkl")
-            else f'pd.read_csv(r"{clean_ds}")' if clean_ds.lower().endswith(".csv")
+            else f'pd.read_csv(r"{clean_ds}")'
+            if clean_ds.lower().endswith(".csv")
             else f'pd.read_excel(r"{clean_ds}")'
         )
 
@@ -672,50 +814,80 @@ Generate complete Python code only. No explanation."""
             return False
 
         import ast
+
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            logger.warning("[Graph Agent] Code validation failed: SyntaxError in generated script.")
+            logger.warning(
+                "[Graph Agent] Code validation failed: SyntaxError in generated script."
+            )
             return False
 
         FORBIDDEN_MODULES = {
-            "os", "sys", "subprocess", "shutil", "socket", "urllib", "requests",
-            "http", "posix", "nt", "pty", "commands", "builtins",
-            "importlib", "pickle", "shelve", "ftplib", "smtplib", "multiprocessing"
+            "os",
+            "sys",
+            "subprocess",
+            "shutil",
+            "socket",
+            "urllib",
+            "requests",
+            "http",
+            "posix",
+            "nt",
+            "pty",
+            "commands",
+            "builtins",
+            "importlib",
+            "pickle",
+            "shelve",
+            "ftplib",
+            "smtplib",
+            "multiprocessing",
         }
-        FORBIDDEN_CALLS = {
-            "eval", "exec", "__import__", "compile", "open", "input"
-        }
+        FORBIDDEN_CALLS = {"eval", "exec", "__import__", "compile", "open", "input"}
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     root_mod = alias.name.split(".")[0].lower()
                     if root_mod in FORBIDDEN_MODULES:
-                        logger.warning(f"[Graph Agent] Security sandbox blocked import: {alias.name}")
+                        logger.warning(
+                            f"[Graph Agent] Security sandbox blocked import: {alias.name}"
+                        )
                         return False
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
                     root_mod = node.module.split(".")[0].lower()
                     if root_mod in FORBIDDEN_MODULES:
-                        logger.warning(f"[Graph Agent] Security sandbox blocked from-import: {node.module}")
+                        logger.warning(
+                            f"[Graph Agent] Security sandbox blocked from-import: {node.module}"
+                        )
                         return False
             elif isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
                     if node.func.id in FORBIDDEN_CALLS:
-                        logger.warning(f"[Graph Agent] Security sandbox blocked call: {node.func.id}")
+                        logger.warning(
+                            f"[Graph Agent] Security sandbox blocked call: {node.func.id}"
+                        )
                         return False
                 elif isinstance(node.func, ast.Attribute):
                     if node.func.attr in ("system", "popen", "spawn", "exec", "eval"):
-                        logger.warning(f"[Graph Agent] Security sandbox blocked attribute call: {node.func.attr}")
+                        logger.warning(
+                            f"[Graph Agent] Security sandbox blocked attribute call: {node.func.attr}"
+                        )
                         return False
 
         return True
 
     def _generate_python_code(
-        self, prompt: str, output_img_path: str, fallback_mode: bool = False,
+        self,
+        prompt: str,
+        output_img_path: str,
+        fallback_mode: bool = False,
         df_agg: Optional[pd.DataFrame] = None,
-        chart_type: str = "bar", dim: str = "", measure: str = "",
+        chart_type: str = "bar",
+        dim: str = "",
+        measure: str = "",
         df: Optional[pd.DataFrame] = None,
     ) -> str:
         """
@@ -730,7 +902,8 @@ Generate complete Python code only. No explanation."""
             if clean_ds.endswith(".json")
             else f'df = pd.read_pickle(r"{clean_ds}")'
             if clean_ds.endswith(".pkl")
-            else f'df = pd.read_csv(r"{clean_ds}")' if clean_ds.lower().endswith(".csv")
+            else f'df = pd.read_csv(r"{clean_ds}")'
+            if clean_ds.lower().endswith(".csv")
             else f'df = pd.read_excel(r"{clean_ds}")'
         )
 
@@ -738,8 +911,13 @@ Generate complete Python code only. No explanation."""
         if not fallback_mode:
             try:
                 system_prompt = self._build_system_prompt(
-                    prompt, clean_ds, clean_out,
-                    df_agg=df_agg, chart_type=chart_type, dim=dim, measure=measure,
+                    prompt,
+                    clean_ds,
+                    clean_out,
+                    df_agg=df_agg,
+                    chart_type=chart_type,
+                    dim=dim,
+                    measure=measure,
                 )
                 raw = ai_core_service.generate_aicore_completion(system_prompt)
                 if raw and not raw.startswith(("AI Insight", "Simulated Response")):
@@ -751,14 +929,23 @@ Generate complete Python code only. No explanation."""
                 logger.warning(f"[Graph Agent] SAP AI Core skipped: {exc}")
 
         # ── Deterministic fallback ───────────────────────────────────────────
-        logger.info(f"[Graph Agent] Deterministic fallback → chart={chart_type}, dim={dim}, measure={measure}")
-        return self._deterministic_code(chart_type, dim, measure, clean_ds, clean_out, read_stmt, df_agg, df=df)
+        logger.info(
+            f"[Graph Agent] Deterministic fallback → chart={chart_type}, dim={dim}, measure={measure}"
+        )
+        return self._deterministic_code(
+            chart_type, dim, measure, clean_ds, clean_out, read_stmt, df_agg, df=df
+        )
 
     # ── Deterministic code templates ──────────────────────────────────────────
 
     def _deterministic_code(
-        self, chart_type: str, dim: str, measure: str,
-        clean_ds: str, clean_out: str, read_stmt: str,
+        self,
+        chart_type: str,
+        dim: str,
+        measure: str,
+        clean_ds: str,
+        clean_out: str,
+        read_stmt: str,
         df_agg: Optional[pd.DataFrame] = None,
         df: Optional[pd.DataFrame] = None,
     ) -> str:
@@ -786,8 +973,12 @@ agg = agg.sort_values("{measure}", ascending=False).head(10)
 '''
 
         # If pre-computed data is available, embed it as CSV and read from that
-        if df_agg is not None and chart_type not in ("heatmap", "scatter", "box", "violin"):
-            csv_escaped = df_agg.to_csv(index=False).replace("\\", "\\\\").replace('"', '\\"')
+        if df_agg is not None and chart_type not in (
+            "heatmap",
+            "scatter",
+            "box",
+            "violin",
+        ):
             agg_read = f'''import io
 agg = pd.read_csv(io.StringIO("""{df_agg.to_csv(index=False)}"""))
 '''
@@ -795,7 +986,12 @@ agg = pd.read_csv(io.StringIO("""{df_agg.to_csv(index=False)}"""))
             agg_read = None
 
         # Only load raw dataset if pre-computed data is missing or chart requires raw rows
-        needs_raw = agg_read is None or chart_type in ("heatmap", "scatter", "box", "violin")
+        needs_raw = agg_read is None or chart_type in (
+            "heatmap",
+            "scatter",
+            "box",
+            "violin",
+        )
         ds_load = read_stmt if needs_raw else ""
 
         header = f"""import pandas as pd
@@ -840,7 +1036,9 @@ print(r"{clean_out}")
         # ── Funnel ────────────────────────────────────────────────────────────
         if chart_type == "funnel":
             agg_src = agg_block()
-            return header + f"""
+            return (
+                header
+                + f"""
 {agg_src}
 total = agg["{measure}"].sum()
 agg["pct"] = agg["{measure}"] / total * 100
@@ -863,18 +1061,33 @@ ax.set_xlabel("{measure}", fontsize=11, fontweight="bold", color="#1e293b")
 ax.set_title(f"Funnel: {measure} by {label_col}", fontsize=14, fontweight="bold", pad=15, color="#0f172a")
 for spine in ["top", "right", "left"]:
     ax.spines[spine].set_visible(False)
-""" + save
+"""
+                + save
+            )
 
         # ── Heatmap / Correlation ─────────────────────────────────────────────
         if chart_type == "heatmap":
             sec_dim = None
-            if source_df is not None and not source_df.empty and dim in source_df.columns and measure in source_df.columns:
-                cats = [c for c in source_df.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
+            if (
+                source_df is not None
+                and not source_df.empty
+                and dim in source_df.columns
+                and measure in source_df.columns
+            ):
+                cats = [
+                    c
+                    for c in source_df.select_dtypes(
+                        include=["object", "string"]
+                    ).columns
+                    if c != dim and not str(c).lower().endswith(("id", "code", "key"))
+                ]
                 if cats:
                     sec_dim = cats[0]
 
             if sec_dim:
-                return header + f"""
+                return (
+                    header
+                    + f"""
 top_dims = df.groupby("{dim}")["{measure}"].sum().nlargest(10).index
 filtered_data = df[df["{dim}"].isin(top_dims)]
 pivot = filtered_data.pivot_table(index="{dim}", columns="{sec_dim}", values="{measure}", aggfunc="sum", fill_value=0)
@@ -884,29 +1097,43 @@ ax.set_title(f"Heatmap: {measure} across {dim} & {sec_dim}",
              fontsize=14, fontweight="bold", pad=15, color="#0f172a")
 plt.xticks(rotation=30, ha="right")
 plt.yticks(rotation=0)
-""" + save
+"""
+                    + save
+                )
             else:
-                return header + f"""
+                return (
+                    header
+                    + """
 num_cols = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
 corr = df[num_cols].corr() if len(num_cols) >= 2 else df.select_dtypes(include=['number']).corr()
 fig, ax = plt.subplots(figsize=(10, 7), dpi=300)
 sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", linewidths=0.5,
-            annot_kws={{"size": 8, "weight": "bold"}}, ax=ax)
+            annot_kws={"size": 8, "weight": "bold"}, ax=ax)
 ax.set_title("Correlation Matrix — Numeric Metrics",
              fontsize=14, fontweight="bold", pad=15, color="#0f172a")
 plt.xticks(rotation=30, ha="right")
 plt.yticks(rotation=0)
-""" + save
+"""
+                    + save
+                )
 
         # ── Stacked Bar ───────────────────────────────────────────────────────
         if chart_type == "stacked_bar":
             sec_dim = None
             if df_agg is not None and not df_agg.empty:
-                other_cols = [c for c in df_agg.columns if c not in (dim, label_col, measure)]
+                other_cols = [
+                    c for c in df_agg.columns if c not in (dim, label_col, measure)
+                ]
                 if other_cols:
                     sec_dim = other_cols[0]
             if not sec_dim and source_df is not None and not source_df.empty:
-                cats = [c for c in source_df.select_dtypes(include=['object', 'string']).columns if c != dim and not str(c).lower().endswith(('id', 'code', 'key'))]
+                cats = [
+                    c
+                    for c in source_df.select_dtypes(
+                        include=["object", "string"]
+                    ).columns
+                    if c != dim and not str(c).lower().endswith(("id", "code", "key"))
+                ]
                 sec_dim = cats[0] if cats else dim
             sec_dim = sec_dim or dim
             if agg_read:
@@ -919,7 +1146,9 @@ pivot = agg.pivot_table(index="{label_col}" if "{label_col}" in agg.columns else
 top_idx = df.groupby({p_dim})["{measure}"].sum().nlargest(8).index
 pivot = pivot.loc[pivot.index.isin(top_idx)]
 """
-            return header + f"""
+            return (
+                header
+                + f"""
 {pivot_src}
 fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
 pivot.plot(kind="bar", stacked=True, ax=ax, colormap="tab10",
@@ -930,13 +1159,21 @@ ax.set_xlabel("{label_col}", fontsize=11, fontweight="bold", color="#334155")
 ax.set_ylabel("Total {measure}", fontsize=11, fontweight="bold", color="#334155")
 plt.xticks(rotation=30, ha="right")
 plt.legend(title="{sec_dim}", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
-""" + save
+"""
+                + save
+            )
 
         # ── Donut / Pie ───────────────────────────────────────────────────────
         if chart_type in ("donut", "pie"):
-            wedge = 'dict(width=0.42, edgecolor=\'white\')' if chart_type == "donut" else 'dict(edgecolor=\'white\')'
+            wedge = (
+                "dict(width=0.42, edgecolor='white')"
+                if chart_type == "donut"
+                else "dict(edgecolor='white')"
+            )
             agg_src = agg_block()
-            return header + f"""
+            return (
+                header
+                + f"""
 {agg_src}
 fig, ax = plt.subplots(figsize=(8, 7), dpi=300)
 colors = sns.color_palette("Spectral", len(agg))
@@ -951,16 +1188,24 @@ for at in autotexts:
     at.set_fontsize(8)
 ax.set_title(f"Share of {measure} by {label_col}",
              fontsize=14, fontweight="bold", pad=20, color="#0f172a")
-""" + save
+"""
+                + save
+            )
 
         # ── Line / Area ───────────────────────────────────────────────────────
         if chart_type in ("line", "area"):
             line_x_col = label_col if is_composite_dim else dim
             agg_src = agg_block(f'''agg = df.groupby("{line_x_col}")["{measure}"].sum().reset_index()
 ''')
-            fill = f"ax.fill_between(range(len(agg)), agg['{measure}'], color='#38bdf8', alpha=0.3)" if chart_type == "area" else ""
+            fill = (
+                f"ax.fill_between(range(len(agg)), agg['{measure}'], color='#38bdf8', alpha=0.3)"
+                if chart_type == "area"
+                else ""
+            )
             is_curr = _is_currency_hint(measure)
-            return header + f"""
+            return (
+                header
+                + f"""
 {agg_src}
 fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
 x_series = agg["{line_x_col}"] if "{line_x_col}" in agg.columns else agg.iloc[:, 0]
@@ -976,12 +1221,16 @@ plt.xticks(rotation=20, ha="right")
 ax.yaxis.set_major_formatter(mticker.FuncFormatter(
     lambda x, _: f"${{x/1e6:.1f}}M" if {is_curr} and x >= 1e6 else f"{{x:,.0f}}"
 ))
-""" + save
+"""
+                + save
+            )
 
         # ── Waterfall ─────────────────────────────────────────────────────────
         if chart_type == "waterfall":
             agg_src = agg_block()
-            return header + f"""
+            return (
+                header
+                + f"""
 {agg_src}
 lbl_col = "{label_col}" if "{label_col}" in agg.columns else agg.columns[0]
 agg["cumulative"] = agg["{measure}"].cumsum()
@@ -1002,12 +1251,16 @@ for bar, b in zip(bars, bottoms):
                 xy=(bar.get_x() + bar.get_width()/2, b + h),
                 xytext=(0, 4), textcoords="offset points",
                 ha="center", va="bottom", fontsize=7.5, fontweight="bold")
-""" + save
+"""
+                + save
+            )
 
         # ── Treemap (horizontal bar substitute) ───────────────────────────────
         if chart_type == "treemap":
             agg_src = agg_block()
-            return header + f"""
+            return (
+                header
+                + f"""
 {agg_src}
 lbl_col = "{label_col}" if "{label_col}" in agg.columns else agg.columns[0]
 fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
@@ -1023,13 +1276,17 @@ for bar in bars:
             fmt_val(w, "{measure}"), ha="right", va="center",
             color="white", fontsize=8, fontweight="bold")
 ax.invert_yaxis()
-""" + save
+"""
+                + save
+            )
 
         # ── Box / Violin ──────────────────────────────────────────────────────
         if chart_type in ("box", "violin"):
             plot_fn = "sns.violinplot" if chart_type == "violin" else "sns.boxplot"
             b_dim = dim_parts[0] if is_composite_dim else dim
-            return header + f"""
+            return (
+                header
+                + f"""
 top_dims = df["{b_dim}"].value_counts().head(8).index
 sub = df[df["{b_dim}"].isin(top_dims)]
 fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
@@ -1039,20 +1296,26 @@ ax.set_title(f"Distribution of {measure} by {b_dim}",
 ax.set_xlabel("{b_dim}", fontsize=11, fontweight="bold", color="#334155")
 ax.set_ylabel("{measure}", fontsize=11, fontweight="bold", color="#334155")
 plt.xticks(rotation=30, ha="right")
-""" + save
+"""
+                + save
+            )
 
         # ── Scatter ───────────────────────────────────────────────────────────
         if chart_type == "scatter":
             sec = None
             if source_df is not None and not source_df.empty:
                 other_nums = [
-                    c for c in source_df.select_dtypes(include=['number']).columns
-                    if c != measure and not str(c).lower().endswith(('id', 'code', 'key'))
+                    c
+                    for c in source_df.select_dtypes(include=["number"]).columns
+                    if c != measure
+                    and not str(c).lower().endswith(("id", "code", "key"))
                 ]
                 sec = other_nums[0] if other_nums else measure
             sec = sec or measure
             s_dim = dim_parts[0] if is_composite_dim else dim
-            return header + f"""
+            return (
+                header
+                + f"""
 sample = df.sample(n=min(1200, len(df)), random_state=42)
 fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
 sns.scatterplot(data=sample, x="{sec}", y="{measure}",
@@ -1060,14 +1323,18 @@ sns.scatterplot(data=sample, x="{sec}", y="{measure}",
 ax.set_title(f"Scatter: {sec} vs {measure}",
              fontsize=14, fontweight="bold", pad=15, color="#0f172a")
 plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
-""" + save
+"""
+                + save
+            )
 
         # ── Default: Bar chart / Grouped Bar chart ────────────────────────────
         agg_src = agg_block()
         x_col = label_col
         is_curr = _is_currency_hint(measure)
 
-        return header + f"""
+        return (
+            header
+            + f"""
 {agg_src}
 # Determine x-axis column
 x_col = "{x_col}"
@@ -1095,7 +1362,9 @@ for bar in bars:
                 xy=(bar.get_x() + bar.get_width()/2, h),
                 xytext=(0, 4), textcoords="offset points",
                 ha="center", va="bottom", fontsize=7.5, fontweight="bold")
-""" + save
+"""
+            + save
+        )
 
     # ── Step 7: venv-aware Python executable ──────────────────────────────────
 
@@ -1112,9 +1381,22 @@ for bar in bars:
 
     # ── Step 8 + cleanup insights ─────────────────────────────────────────────
 
-    def _build_insights(self, prompt: str, chart_type: str, dim: str, measure: str, script_name: str, verified: bool = True, dataset_name: Optional[str] = None) -> str:
+    def _build_insights(
+        self,
+        prompt: str,
+        chart_type: str,
+        dim: str,
+        measure: str,
+        script_name: str,
+        verified: bool = True,
+        dataset_name: Optional[str] = None,
+    ) -> str:
         chart_label = chart_type.replace("_", " ").title()
-        verification_note = "✅ Data verified" if verified else "⚠️ Verification failed — using deterministic fallback"
+        verification_note = (
+            "✅ Data verified"
+            if verified
+            else "⚠️ Verification failed — using deterministic fallback"
+        )
         ds_label = dataset_name or "Active Dataset"
         return (
             f"• **AI Graph Agent** generated a **{chart_label} Chart** for your request.\n"
@@ -1125,32 +1407,57 @@ for bar in bars:
 
     # ── Step 3–10: Main entry point ───────────────────────────────────────────
 
-    def generate_custom_graph(self, prompt: str, query_plan: Optional[Dict[str, Any]] = None,
-                              prepared_frame=None) -> Dict[str, Any]:
+    def generate_custom_graph(
+        self,
+        prompt: str,
+        query_plan: Optional[Dict[str, Any]] = None,
+        prepared_frame=None,
+    ) -> Dict[str, Any]:
         """Render validated specifications with application-owned Matplotlib/Seaborn templates."""
         from api.platform.chart_templates import render_frame
         from api.services.intent_engine import intent_engine
+
         plan = dict(query_plan or intent_engine.classify(prompt))
         kind = plan.get("chart_type") or self._infer_chart_type(prompt)
         if plan.get("joins") and prepared_frame is None:
-            raise ValueError("Generate joined charts through the dashboard so the joined data can be validated first.")
-        frame = prepared_frame if prepared_frame is not None else excel_dataset_service.get_df()
+            raise ValueError(
+                "Generate joined charts through the dashboard so the joined data can be validated first."
+            )
+        frame = (
+            prepared_frame
+            if prepared_frame is not None
+            else excel_dataset_service.get_df()
+        )
         if frame is None or frame.empty:
             raise ValueError("There are no matching records to chart.")
         # Apply the same validated filters as routine analytics; never replace an empty
         # filtered result with the unfiltered source.
         from api.models.query_plan import Filter
-        filters = [Filter.model_validate(f).model_dump(by_alias=True) for f in plan.get("filters", [])]
+
+        filters = [
+            Filter.model_validate(f).model_dump(by_alias=True)
+            for f in plan.get("filters", [])
+        ]
         filtered = frame
         if filters or plan.get("date_filter"):
             from api.services.analytics_engine import analytics_engine
-            filtered = analytics_engine._apply_filters(frame, {"filters": filters, "date_filter": plan.get("date_filter")})
+
+            filtered = analytics_engine._apply_filters(
+                frame, {"filters": filters, "date_filter": plan.get("date_filter")}
+            )
         data_uri = render_frame(filtered, kind, plan, prompt)
-        return {"status": "success", "prompt": prompt, "image_base64": data_uri,
-                "chart_type": kind, "insights": "Rendered from validated data using Matplotlib and Seaborn templates.",
-                "message": "Chart rendered successfully.", "records_matched": len(filtered),
-                "records_in_source": len(frame), "verified": True,
-                "execution_backend": "matplotlib_seaborn_templates"}
+        return {
+            "status": "success",
+            "prompt": prompt,
+            "image_base64": data_uri,
+            "chart_type": kind,
+            "insights": "Rendered from validated data using Matplotlib and Seaborn templates.",
+            "message": "Chart rendered successfully.",
+            "records_matched": len(filtered),
+            "records_in_source": len(frame),
+            "verified": True,
+            "execution_backend": "matplotlib_seaborn_templates",
+        }
 
 
 python_graph_agent = PythonGraphAgent()

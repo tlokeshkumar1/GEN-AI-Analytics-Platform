@@ -7,6 +7,7 @@ Usage:
     python scripts/gc_objects.py --dry-run
     python scripts/gc_objects.py --apply
 """
+
 import argparse
 import json
 import os
@@ -44,7 +45,9 @@ def _is_missing_object_error(exc: Exception) -> bool:
     return False
 
 
-def collect_referenced_hashes(store=None, objects=None, local_dir=None, incomplete_errors=None):
+def collect_referenced_hashes(
+    store=None, objects=None, local_dir=None, incomplete_errors=None
+):
     """
     Collect all content hashes referenced by active catalogs, snapshots, and documents.
     Recursively inspects snapshot manifests to find transitive data and index hashes.
@@ -59,11 +62,17 @@ def collect_referenced_hashes(store=None, objects=None, local_dir=None, incomple
     # 1. Inspect all documents in PLATFORM_DOCUMENTS
     try:
         with store.transaction() as cursor:
-            cursor.execute("SELECT NAMESPACE, DOCUMENT_ID, PAYLOAD FROM PLATFORM_DOCUMENTS")
+            cursor.execute(
+                "SELECT NAMESPACE, DOCUMENT_ID, PAYLOAD FROM PLATFORM_DOCUMENTS"
+            )
             rows = cursor.fetchall()
             for row in rows:
                 payload_raw = row[2]
-                payload_str = payload_raw.read() if hasattr(payload_raw, "read") else str(payload_raw)
+                payload_str = (
+                    payload_raw.read()
+                    if hasattr(payload_raw, "read")
+                    else str(payload_raw)
+                )
                 for match in OBJECT_HASH_REGEX.finditer(payload_str):
                     referenced.add(match.group(1).lower())
     except Exception as exc:
@@ -71,7 +80,13 @@ def collect_referenced_hashes(store=None, objects=None, local_dir=None, incomple
         print(f"[GC] Warning: Could not query PLATFORM_DOCUMENTS ({exc}).")
 
     # 2. Inspect local catalog files if present
-    output_dir = Path(local_dir or os.getenv("PLATFORM_OUTPUT_DIR", str(Path(__file__).resolve().parents[1] / "preprocessing" / "output")))
+    output_dir = Path(
+        local_dir
+        or os.getenv(
+            "PLATFORM_OUTPUT_DIR",
+            str(Path(__file__).resolve().parents[1] / "preprocessing" / "output"),
+        )
+    )
     catalog_file = output_dir / "datasets.json"
     if catalog_file.exists():
         try:
@@ -117,7 +132,9 @@ def collect_referenced_hashes(store=None, objects=None, local_dir=None, incomple
             else:
                 # Transient cloud error, timeout, permission error, etc.
                 incomplete_errors.append(f"{key}: {exc}")
-                print(f"[GC] Warning: Transient error reading {key} ({exc}); reference scan is incomplete.")
+                print(
+                    f"[GC] Warning: Transient error reading {key} ({exc}); reference scan is incomplete."
+                )
 
     return referenced
 
@@ -146,7 +163,9 @@ def collect_stored_objects(objects=None):
         try:
             if objects.backend == "s3":
                 paginator = client.get_paginator("list_objects_v2")
-                for page in paginator.paginate(Bucket=objects.bucket, Prefix="objects/"):
+                for page in paginator.paginate(
+                    Bucket=objects.bucket, Prefix="objects/"
+                ):
                     for obj in page.get("Contents", []):
                         key = obj["Key"]
                         if key.startswith("objects/") and len(key) == 72:
@@ -181,7 +200,9 @@ def collect_stored_objects(objects=None):
     return stored
 
 
-def run_garbage_collection(dry_run=True, store=None, objects=None, local_dir=None, min_age_seconds=None):
+def run_garbage_collection(
+    dry_run=True, store=None, objects=None, local_dir=None, min_age_seconds=None
+):
     """
     Execute object garbage collection.
     Fails closed when reference discovery is incomplete.
@@ -202,12 +223,17 @@ def run_garbage_collection(dry_run=True, store=None, objects=None, local_dir=Non
     print("[GC] Scanning live references from catalog and metadata storage...")
     incomplete_errors = []
     live_hashes = collect_referenced_hashes(
-        store=store, objects=objects, local_dir=local_dir, incomplete_errors=incomplete_errors
+        store=store,
+        objects=objects,
+        local_dir=local_dir,
+        incomplete_errors=incomplete_errors,
     )
     print(f"[GC] Found {len(live_hashes)} referenced content hashes.")
 
     if incomplete_errors:
-        print(f"\n[GC] WARNING: Reference discovery was incomplete ({len(incomplete_errors)} errors):")
+        print(
+            f"\n[GC] WARNING: Reference discovery was incomplete ({len(incomplete_errors)} errors):"
+        )
         for err in incomplete_errors:
             print(f"  - {err}")
         if not dry_run:
@@ -242,14 +268,16 @@ def run_garbage_collection(dry_run=True, store=None, objects=None, local_dir=Non
 
     for h in sorted(orphaned_hashes):
         entry = stored_objects[h]
-        path_or_key = entry[0]
+        entry[0]
         size = entry[1]
         total_reclaimable_bytes += size
-        orphaned_details.append({
-            "hash": h,
-            "key": f"objects/{h}",
-            "size_bytes": size,
-        })
+        orphaned_details.append(
+            {
+                "hash": h,
+                "key": f"objects/{h}",
+                "size_bytes": size,
+            }
+        )
 
     report = {
         "dry_run": dry_run,
@@ -269,20 +297,28 @@ def run_garbage_collection(dry_run=True, store=None, objects=None, local_dir=Non
     print("\n" + "=" * 60)
     print("OBJECT STORAGE GARBAGE COLLECTION REPORT")
     print("=" * 60)
-    print(f"Mode: {'DRY RUN (No files modified)' if dry_run else 'APPLY (Deleting orphaned objects)'}")
+    print(
+        f"Mode: {'DRY RUN (No files modified)' if dry_run else 'APPLY (Deleting orphaned objects)'}"
+    )
     print(f"Total Stored Objects : {report['total_stored_objects']}")
     print(f"Live Referenced      : {report['live_referenced_objects']}")
     print(f"Unreferenced Total   : {report['unreferenced_count']}")
     if min_age_seconds > 0:
-        print(f"Protected (Age < {min_age_seconds / 3600:.1f}h): {report['protected_count']}")
+        print(
+            f"Protected (Age < {min_age_seconds / 3600:.1f}h): {report['protected_count']}"
+        )
     print(f"Eligible for Deletion: {report['orphaned_count']}")
-    print(f"Reclaimable Storage  : {report['reclaimable_bytes']:,} bytes ({report['reclaimable_bytes'] / (1024*1024):.2f} MB)")
+    print(
+        f"Reclaimable Storage  : {report['reclaimable_bytes']:,} bytes ({report['reclaimable_bytes'] / (1024 * 1024):.2f} MB)"
+    )
     if incomplete_errors:
         print(f"Incomplete Reference : YES ({len(incomplete_errors)} errors)")
     print("=" * 60)
 
     if protected_young_hashes:
-        print(f"\n[GC] Note: {len(protected_young_hashes)} unreferenced objects are younger than {min_age_seconds / 3600:.1f}h grace period; skipped.")
+        print(
+            f"\n[GC] Note: {len(protected_young_hashes)} unreferenced objects are younger than {min_age_seconds / 3600:.1f}h grace period; skipped."
+        )
 
     if orphaned_details:
         print("\nIdentified Orphaned Objects:")
@@ -332,20 +368,32 @@ def run_garbage_collection(dry_run=True, store=None, objects=None, local_dir=Non
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Garbage collect unreferenced content-addressed objects.")
-    parser.add_argument("--dry-run", action="store_true", default=True, help="Preview orphaned objects without deleting (default).")
-    parser.add_argument("--apply", action="store_true", default=False, help="Permanently delete identified orphaned objects.")
+    parser = argparse.ArgumentParser(
+        description="Garbage collect unreferenced content-addressed objects."
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Preview orphaned objects without deleting (default).",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        default=False,
+        help="Permanently delete identified orphaned objects.",
+    )
     parser.add_argument(
         "--min-age-hours",
         type=float,
         default=None,
-        help="Minimum age in hours before an unreferenced object is considered orphaned for deletion (default: 24, or GC_MIN_AGE_SECONDS / GC_MIN_AGE_HOURS)."
+        help="Minimum age in hours before an unreferenced object is considered orphaned for deletion (default: 24, or GC_MIN_AGE_SECONDS / GC_MIN_AGE_HOURS).",
     )
     parser.add_argument(
         "--min-age-seconds",
         type=int,
         default=None,
-        help="Minimum age in seconds before an unreferenced object is considered orphaned for deletion."
+        help="Minimum age in seconds before an unreferenced object is considered orphaned for deletion.",
     )
     args = parser.parse_args()
 

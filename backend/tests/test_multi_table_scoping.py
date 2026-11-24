@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -45,10 +46,14 @@ class MultiTableScopingTests(unittest.TestCase):
     @patch("api.database.hana_client.hana_client")
     @patch("api.platform.datasets_metadata_repository.datasets_metadata_repo")
     @patch("api.services.dataset_service.dataset_service")
-    def test_data_service_cross_table_record_fallback(self, mock_dataset_svc, mock_meta_repo, mock_hana):
+    def test_data_service_cross_table_record_fallback(
+        self, mock_dataset_svc, mock_meta_repo, mock_hana
+    ):
         """When record is not found in active Table B, it should search and find it in Table A."""
         # Active table is TABLE_B, which returns empty
-        mock_meta_repo._resolve_physical_table.side_effect = lambda hint: "TABLE_B" if hint == "table_b" else "TABLE_A"
+        mock_meta_repo._resolve_physical_table.side_effect = lambda hint: (
+            "TABLE_B" if hint == "table_b" else "TABLE_A"
+        )
         mock_dataset_svc._catalog.return_value = {
             "datasets": {
                 "ds_b": {"name": "Table B", "physical_table_name": "table_b"},
@@ -61,7 +66,13 @@ class MultiTableScopingTests(unittest.TestCase):
             if '"TABLE_B"' in sql:
                 return []
             if '"TABLE_A"' in sql:
-                return [{"ORDERID": "SO-106760", "CUSTOMERNAME": "Acme Corp", "NETREVENUEUSD": 15000.0}]
+                return [
+                    {
+                        "ORDERID": "SO-106760",
+                        "CUSTOMERNAME": "Acme Corp",
+                        "NETREVENUEUSD": 15000.0,
+                    }
+                ]
             return []
 
         mock_hana.execute_query.side_effect = fake_query
@@ -78,7 +89,12 @@ class MultiTableScopingTests(unittest.TestCase):
         """When dataset_id is 'all' or empty, search_dataset_version must use wildcard pattern '%'."""
         vc = HANAVectorClient()
         mock_hana.execute_query.return_value = [
-            {"ID": "ds_a:v1:0", "TEXT_CHUNK": "Table A chunk", "SCORE": 0.95, "METADATA": "{}"}
+            {
+                "ID": "ds_a:v1:0",
+                "TEXT_CHUNK": "Table A chunk",
+                "SCORE": 0.95,
+                "METADATA": "{}",
+            }
         ]
 
         # Case 1: dataset_id='all'
@@ -92,7 +108,12 @@ class MultiTableScopingTests(unittest.TestCase):
         # Case 2: specific dataset_id='ds_a'
         mock_hana.reset_mock()
         mock_hana.execute_query.return_value = [
-            {"ID": "ds_a:v1:0", "TEXT_CHUNK": "Table A chunk", "SCORE": 0.95, "METADATA": "{}"}
+            {
+                "ID": "ds_a:v1:0",
+                "TEXT_CHUNK": "Table A chunk",
+                "SCORE": 0.95,
+                "METADATA": "{}",
+            }
         ]
         vc.search_dataset_version("ds_a", 1, [0.1] * 10, top_k=5)
         pattern_arg = mock_hana.execute_query.call_args_list[-1][0][1][1]
@@ -100,13 +121,26 @@ class MultiTableScopingTests(unittest.TestCase):
 
     @patch("api.database.vector_client.vector_client.search_dataset_version")
     @patch("api.services.embedding_service.embedding_service.get_embedding")
-    def test_dataset_service_search_global_when_no_dataset_id(self, mock_get_embedding, mock_search_version):
+    def test_dataset_service_search_global_when_no_dataset_id(
+        self, mock_get_embedding, mock_search_version
+    ):
         """When dataset_id is None, dataset_service.search must pass scoped_id=None to search globally across all embeddings."""
         from api.services.dataset_service import dataset_service
+
         mock_get_embedding.return_value = [0.1] * 10
         mock_search_version.return_value = [
-            {"ID": "table_a:v1:0", "TEXT_CHUNK": "Table A content", "SCORE": 0.92, "METADATA": '{"source": "Table A"}'},
-            {"ID": "table_b:v1:0", "TEXT_CHUNK": "Table B content", "SCORE": 0.88, "METADATA": '{"source": "Table B"}'},
+            {
+                "ID": "table_a:v1:0",
+                "TEXT_CHUNK": "Table A content",
+                "SCORE": 0.92,
+                "METADATA": '{"source": "Table A"}',
+            },
+            {
+                "ID": "table_b:v1:0",
+                "TEXT_CHUNK": "Table B content",
+                "SCORE": 0.88,
+                "METADATA": '{"source": "Table B"}',
+            },
         ]
 
         # Call search without specifying dataset_id
@@ -122,9 +156,17 @@ class MultiTableScopingTests(unittest.TestCase):
     @patch("api.services.analytics_engine.analytics_engine.execute")
     @patch("api.services.intent_engine.intent_engine.classify")
     @patch("api.platform.ai_settings.ai_settings")
-    def test_pipeline_reports_structured_failure_without_chunk_totals(self, mock_ai_settings, mock_classify, mock_execute, mock_retrieve, mock_generate):
+    def test_pipeline_reports_structured_failure_without_chunk_totals(
+        self,
+        mock_ai_settings,
+        mock_classify,
+        mock_execute,
+        mock_retrieve,
+        mock_generate,
+    ):
         """Numerical failures must not turn sample records into successful aggregate answers."""
         from api.rag.pipeline import rag_pipeline
+
         mock_ai_settings.return_value = {"llm_model": "gpt-4"}
         mock_classify.return_value = {
             "intent": "analytical",
@@ -142,7 +184,12 @@ class MultiTableScopingTests(unittest.TestCase):
 
         # Mock vector chunks found in embeddings
         mock_retrieve.return_value = [
-            {"ID": "table_a:v1:0", "TEXT_CHUNK": "Region A Revenue is 500k", "SCORE": 0.89, "METADATA": '{"source": "Table A"}'}
+            {
+                "ID": "table_a:v1:0",
+                "TEXT_CHUNK": "Region A Revenue is 500k",
+                "SCORE": 0.89,
+                "METADATA": '{"source": "Table A"}',
+            }
         ]
         mock_generate.return_value = "Region A Revenue is 500k according to Table A."
 

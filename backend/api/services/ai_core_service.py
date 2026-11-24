@@ -1,8 +1,7 @@
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from typing import List, Dict, Any, Optional
-import threading
+from typing import List, Optional
 import time
 from api.config import settings
 from api.utils.logger import get_logger
@@ -17,12 +16,10 @@ def _create_http_session() -> requests.Session:
         total=2,
         backoff_factor=1.0,
         status_forcelist=[429, 502, 503, 504],
-        allowed_methods=["GET"]
+        allowed_methods=["GET"],
     )
     adapter = HTTPAdapter(
-        pool_connections=10,
-        pool_maxsize=20,
-        max_retries=retry_strategy
+        pool_connections=10, pool_maxsize=20, max_retries=retry_strategy
     )
     session.mount("https://", adapter)
     session.mount("http://", adapter)
@@ -48,13 +45,13 @@ class AICoreService:
         if not self.auth_url or not self.client_id:
             logger.error("AICore credentials not configured.")
             return None
-        
+
         try:
             response = self.session.post(
                 self.auth_url,
                 data={"grant_type": "client_credentials"},
                 auth=(self.client_id, self.client_secret),
-                timeout=10
+                timeout=10,
             )
             response.raise_for_status()
             self.token = response.json().get("access_token")
@@ -63,22 +60,30 @@ class AICoreService:
             logger.error(f"Failed to fetch SAP AI Core OAuth token: {e}")
             return None
 
-    def _request_with_retry(self, url: str, headers: dict, payload: dict, timeout: int, max_retries: int = 1) -> requests.Response:
+    def _request_with_retry(
+        self, url: str, headers: dict, payload: dict, timeout: int, max_retries: int = 1
+    ) -> requests.Response:
         """Make HTTP request with exponential backoff retry using connection pool."""
         last_exception = None
         for attempt in range(max_retries + 1):
             try:
-                res = self.session.post(url, json=payload, headers=headers, timeout=timeout)
+                res = self.session.post(
+                    url, json=payload, headers=headers, timeout=timeout
+                )
                 res.raise_for_status()
                 return res
             except requests.exceptions.Timeout as e:
                 last_exception = e
                 if attempt < max_retries:
-                    wait_time = (2 ** attempt) * 1  # 1s, 2s
-                    logger.warning(f"Request timeout (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                    wait_time = (2**attempt) * 1  # 1s, 2s
+                    logger.warning(
+                        f"Request timeout (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s..."
+                    )
                     time.sleep(wait_time)
                 else:
-                    logger.error(f"Request failed after {max_retries + 1} attempts: {e}")
+                    logger.error(
+                        f"Request failed after {max_retries + 1} attempts: {e}"
+                    )
                     raise
             except Exception as e:
                 last_exception = e
@@ -102,7 +107,9 @@ class AICoreService:
         base_url = settings.AICORE_BASE_URL
 
         if not (deploy_id or deploy_url) or not self.auth_url or not self.client_id:
-            logger.warning("[AI Core] Credentials or AICORE_DEPLOYMENT_ID not configured for Graph generation.")
+            logger.warning(
+                "[AI Core] Credentials or AICORE_DEPLOYMENT_ID not configured for Graph generation."
+            )
             return None
 
         token = self.get_token()
@@ -119,19 +126,19 @@ class AICoreService:
         headers = {
             "Authorization": f"Bearer {token}",
             "AI-Resource-Group": self.resource_group or "default",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         payload = {
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2 if temperature is None else temperature,
             "max_tokens": 1500 if max_tokens is None else max_tokens,
         }
 
         try:
-            logger.info(f"[AI Core] Sending graph code generation request to SAP AI Core: {url}")
+            logger.info(
+                f"[AI Core] Sending graph code generation request to SAP AI Core: {url}"
+            )
             t_start = time.perf_counter()
             res = self.session.post(url, json=payload, headers=headers, timeout=timeout)
             elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
@@ -142,25 +149,32 @@ class AICoreService:
                     content = choices[0]["message"].get("content", "")
                     if content and content.strip():
                         self.last_used_model = f"sap-aicore-{deploy_id or 'default'}"
-                        logger.info(f"[AI Core] Successfully received graph script from SAP AI Core (model: {deploy_id or 'default'})")
+                        logger.info(
+                            f"[AI Core] Successfully received graph script from SAP AI Core (model: {deploy_id or 'default'})"
+                        )
                         usage = data.get("usage", {})
                         p_tokens = usage.get("prompt_tokens", 0)
                         c_tokens = usage.get("completion_tokens", 0)
                         if p_tokens or c_tokens:
                             try:
-                                from api.utils.calculate_token_usage import record_token_usage
+                                from api.utils.calculate_token_usage import (
+                                    record_token_usage,
+                                )
+
                                 record_token_usage(
                                     "AI Core Graph",
                                     f"gpt-4o-mini ({deploy_id or 'default'})",
                                     p_tokens,
                                     c_tokens,
-                                    latency_ms=elapsed_ms
+                                    latency_ms=elapsed_ms,
                                 )
                             except Exception:
                                 pass
                         return content
             else:
-                logger.warning(f"[AI Core] SAP AI Core returned status {res.status_code}: {res.text[:200]}")
+                logger.warning(
+                    f"[AI Core] SAP AI Core returned status {res.status_code}: {res.text[:200]}"
+                )
         except Exception as e:
             logger.warning(f"[AI Core] SAP AI Core request failed: {e}")
 
@@ -177,14 +191,17 @@ class AICoreService:
         api_key = settings.NVIDIA_API_KEY
         if not api_key:
             logger.error("NVIDIA API key not configured")
-            raise EmbeddingProviderError("The embedding API key is not configured. Configure NVIDIA_API_KEY on the backend.")
+            raise EmbeddingProviderError(
+                "The embedding API key is not configured. Configure NVIDIA_API_KEY on the backend."
+            )
 
         headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         from api.platform.ai_settings import ai_settings
+
         config = ai_settings()
 
         primary_model = config["llm_model"]
@@ -203,8 +220,12 @@ class AICoreService:
             payload = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": config["temperature"] if temperature is None else temperature,
-                "max_tokens": config["max_tokens"] if max_tokens is None else max_tokens,
+                "temperature": config["temperature"]
+                if temperature is None
+                else temperature,
+                "max_tokens": config["max_tokens"]
+                if max_tokens is None
+                else max_tokens,
             }
             try:
                 t_start = time.perf_counter()
@@ -212,7 +233,7 @@ class AICoreService:
                     settings.NVIDIA_LLM_URL,
                     json=payload,
                     headers=headers,
-                    timeout=timeout
+                    timeout=timeout,
                 )
                 elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
                 if res.status_code == 200:
@@ -220,24 +241,33 @@ class AICoreService:
                     result = data["choices"][0]["message"]["content"]
                     if result and result.strip():
                         try:
-                            from api.utils.calculate_token_usage import record_token_usage
+                            from api.utils.calculate_token_usage import (
+                                record_token_usage,
+                            )
+
                             record_token_usage(
                                 "Intent Engine",
                                 model_name,
                                 data.get("usage", {}).get("prompt_tokens", 0),
                                 data.get("usage", {}).get("completion_tokens", 0),
-                                latency_ms=elapsed_ms
+                                latency_ms=elapsed_ms,
                             )
                         except Exception:
                             pass
                         self.last_used_model = model_name
                         if idx == 0:
-                            logger.info(f"[NVIDIA RAG] Model {model_name} completed successfully.")
+                            logger.info(
+                                f"[NVIDIA RAG] Model {model_name} completed successfully."
+                            )
                         else:
-                            logger.info(f"[NVIDIA RAG] Fallback model {model_name} completed successfully.")
+                            logger.info(
+                                f"[NVIDIA RAG] Fallback model {model_name} completed successfully."
+                            )
                         return result
                 else:
-                    logger.warning(f"[NVIDIA RAG] Model {model_name} returned {res.status_code}: {res.text[:100]}")
+                    logger.warning(
+                        f"[NVIDIA RAG] Model {model_name} returned {res.status_code}: {res.text[:100]}"
+                    )
             except Exception as e:
                 logger.warning(f"[NVIDIA RAG] Model {model_name} failed: {e}")
 
@@ -295,42 +325,47 @@ class AICoreService:
     def generate_embedding(self, text: str) -> List[float]:
         return self.generate_embeddings([text], input_type="query")[0]
 
-    def generate_embeddings(self, texts: List[str], input_type="passage") -> List[List[float]]:
+    def generate_embeddings(
+        self, texts: List[str], input_type="passage"
+    ) -> List[List[float]]:
         api_key = settings.NVIDIA_API_KEY
         if not api_key:
             logger.error("NVIDIA API key not configured")
-            raise EmbeddingProviderError("The embedding API key is not configured. Configure NVIDIA_API_KEY on the backend.")
+            raise EmbeddingProviderError(
+                "The embedding API key is not configured. Configure NVIDIA_API_KEY on the backend."
+            )
 
         headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         from api.platform.ai_settings import ai_settings
+
         payload = {
             "model": ai_settings()["embedding_model"],
             "input": texts,
-            "input_type": input_type
+            "input_type": input_type,
         }
         try:
             res = self._request_with_retry(
-                settings.NVIDIA_API_URL,
-                headers,
-                payload,
-                timeout=30,
-                max_retries=2
+                settings.NVIDIA_API_URL, headers, payload, timeout=30, max_retries=2
             )
             items = sorted(res.json()["data"], key=lambda item: item.get("index", 0))
             if len(items) != len(texts):
                 raise ValueError("Embedding provider returned an incomplete batch")
             if any(len(item["embedding"]) < 1536 for item in items):
-                raise ValueError("Embedding provider returned fewer dimensions than the configured index")
+                raise ValueError(
+                    "Embedding provider returned fewer dimensions than the configured index"
+                )
             return [item["embedding"][:1536] for item in items]
         except requests.exceptions.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
-            model = payload['model']
+            model = payload["model"]
             if status == 410:
-                message = (f"Embedding model '{model}' is no longer available (HTTP 410). "
-                           "Choose an available embedding model in System Management > AI Settings, then refresh embeddings.")
+                message = (
+                    f"Embedding model '{model}' is no longer available (HTTP 410). "
+                    "Choose an available embedding model in System Management > AI Settings, then refresh embeddings."
+                )
             elif status in (401, 403):
                 message = "The embedding provider rejected authentication. Check NVIDIA_API_KEY and model access on the backend."
             elif status == 429:
@@ -341,7 +376,9 @@ class AICoreService:
             raise EmbeddingProviderError(message) from exc
         except Exception as exc:
             logger.exception("NVIDIA embedding request failed")
-            raise EmbeddingProviderError("The embedding request failed. Check the backend provider connection and logs, then retry.") from exc
+            raise EmbeddingProviderError(
+                "The embedding request failed. Check the backend provider connection and logs, then retry."
+            ) from exc
 
 
 ai_core_service = AICoreService()

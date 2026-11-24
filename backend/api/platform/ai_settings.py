@@ -1,4 +1,5 @@
 """Workspace AI settings pinned per request/job; credentials remain environment-owned."""
+
 import copy
 import threading
 import time
@@ -31,13 +32,25 @@ def ai_settings():
     if pinned is not None:
         return pinned
     from api.config import settings
-    value = dict(llm_model=settings.NVIDIA_LLM_MODEL, embedding_model=settings.NVIDIA_EMBEDDING_MODEL,
-                 max_tokens=1500, temperature=0.2)
+
+    value = dict(
+        llm_model=settings.NVIDIA_LLM_MODEL,
+        embedding_model=settings.NVIDIA_EMBEDDING_MODEL,
+        max_tokens=1500,
+        temperature=0.2,
+    )
     identity = current_identity.get()
     if identity is not None:
         from api.platform.store import metadata_store
+
         store = metadata_store()
-        cache_key = (identity["workspace_id"], id(store), getattr(store, "backend", None), str(getattr(store, "path", "")), getattr(store, "_write_seq", 0))
+        cache_key = (
+            identity["workspace_id"],
+            id(store),
+            getattr(store, "backend", None),
+            str(getattr(store, "path", "")),
+            getattr(store, "_write_seq", 0),
+        )
         now = time.monotonic()
         with _AI_SETTINGS_LOCK:
             cached = _AI_SETTINGS_CACHE.get(cache_key)

@@ -1,4 +1,5 @@
 """Zero-hardcode verification across SchemaService, DataService, DashboardService, IntentEngine, PythonGraphAgent, and JobService."""
+
 import sys
 import tempfile
 import unittest
@@ -29,14 +30,18 @@ AI = dict(llm_model="test", embedding_model="test", temperature=0.2, max_tokens=
 
 class ZeroHardcodeDynamicTests(unittest.TestCase):
     def setUp(self):
-        self.agri_df = pd.DataFrame({
-            "FieldID": ["FLD-101", "FLD-102", "FLD-103", "FLD-104"],
-            "HarvestDate": pd.to_datetime(["2025-01-15", "2025-01-20", "2025-02-10", "2025-02-18"]),
-            "CropType": ["Soybean", "Wheat", "Soybean", "Corn"],
-            "RegionName": ["North", "South", "North", "West"],
-            "YieldTons": [120.5, 95.0, 140.0, 210.0],
-            "SoilMoisturePct": [24.5, 19.0, 26.2, 22.8],
-        })
+        self.agri_df = pd.DataFrame(
+            {
+                "FieldID": ["FLD-101", "FLD-102", "FLD-103", "FLD-104"],
+                "HarvestDate": pd.to_datetime(
+                    ["2025-01-15", "2025-01-20", "2025-02-10", "2025-02-18"]
+                ),
+                "CropType": ["Soybean", "Wheat", "Soybean", "Corn"],
+                "RegionName": ["North", "South", "North", "West"],
+                "YieldTons": [120.5, 95.0, 140.0, 210.0],
+                "SoilMoisturePct": [24.5, 19.0, 26.2, 22.8],
+            }
+        )
 
     def test_schema_service_classifies_arbitrary_domain_without_hardcoding(self):
         schema = SchemaService()
@@ -51,15 +56,20 @@ class ZeroHardcodeDynamicTests(unittest.TestCase):
         self.assertTrue(meta["CropType"].is_dimension)
 
         schema._metadata = meta
-        with patch("api.services.data_service.data_service.get_dataframe", return_value=self.agri_df):
+        with patch(
+            "api.services.data_service.data_service.get_dataframe",
+            return_value=self.agri_df,
+        ):
             self.assertEqual(schema.resolve_column("yieldtons"), "YieldTons")
             self.assertIsNone(schema.resolve_column("NetRevenueUSD"))
 
     def test_dashboard_and_data_service_dynamic_on_non_sales_dataframe(self):
         ds = DataService()
         dash = DashboardService()
-        with patch.object(ds, "get_dataframe", return_value=self.agri_df), \
-             patch("api.services.dashboard_service.data_service", ds):
+        with (
+            patch.object(ds, "get_dataframe", return_value=self.agri_df),
+            patch("api.services.dashboard_service.data_service", ds),
+        ):
             result = dash.get_dashboard_data()
             titles = [k["title"] for k in result["kpis"]]
             self.assertFalse(any("Revenue" in t or "Countries" in t for t in titles))
@@ -78,10 +88,18 @@ class ZeroHardcodeDynamicTests(unittest.TestCase):
             {"name": "CARGO_TONNAGE", "type": "DECIMAL"},
             {"name": "ARRIVAL_DATE", "type": "DATE"},
         ]
-        with patch.object(ds, "get_dataframe", return_value=pd.DataFrame()), \
-             patch.object(ds, "_resolve_target_table", return_value="DS_MARITIME_V1"), \
-             patch("api.database.hana_table_service.hana_table_service.get_table_columns", return_value=fake_cols), \
-             patch("api.database.hana_client.hana_client.execute_query", return_value=[{"M1": 5000.0, "M2": 10, "M_AVG": 500.0, "D1": 4}]) as mock_exec:
+        with (
+            patch.object(ds, "get_dataframe", return_value=pd.DataFrame()),
+            patch.object(ds, "_resolve_target_table", return_value="DS_MARITIME_V1"),
+            patch(
+                "api.database.hana_table_service.hana_table_service.get_table_columns",
+                return_value=fake_cols,
+            ),
+            patch(
+                "api.database.hana_client.hana_client.execute_query",
+                return_value=[{"M1": 5000.0, "M2": 10, "M_AVG": 500.0, "D1": 4}],
+            ) as mock_exec,
+        ):
             kpis = ds.get_kpis()
             self.assertEqual(kpis["total_revenue"], 5000.0)
             executed_sql = mock_exec.call_args.args[0]
@@ -96,9 +114,17 @@ class ZeroHardcodeDynamicTests(unittest.TestCase):
         token_sel = current_selection.set(None)
         self.addCleanup(current_selection.reset, token_sel)
 
-        with patch("api.services.data_service.data_service.get_dataframe", return_value=self.agri_df), \
-             patch("api.services.intent_engine.schema_service", schema), \
-             patch("api.services.excel_dataset_service.excel_dataset_service.get_df", return_value=self.agri_df):
+        with (
+            patch(
+                "api.services.data_service.data_service.get_dataframe",
+                return_value=self.agri_df,
+            ),
+            patch("api.services.intent_engine.schema_service", schema),
+            patch(
+                "api.services.excel_dataset_service.excel_dataset_service.get_df",
+                return_value=self.agri_df,
+            ),
+        ):
             engine = IntentEngine()
             plan = engine.classify("Total YieldTons by CropType")
             self.assertEqual(plan["metric"], "YieldTons")
@@ -106,9 +132,21 @@ class ZeroHardcodeDynamicTests(unittest.TestCase):
             self.assertNotEqual(plan["metric"], "NetRevenueUSD")
 
             agent = PythonGraphAgent()
-            self.assertEqual(agent._infer_measure("Show YieldTons chart", self.agri_df), "YieldTons")
-            self.assertEqual(agent._infer_dim("Show YieldTons by CropType", self.agri_df), "CropType")
-            insights = agent._build_insights("prompt", "bar", "CropType", "YieldTons", "tmp.py", verified=True, dataset_name="AgriHarvest.csv")
+            self.assertEqual(
+                agent._infer_measure("Show YieldTons chart", self.agri_df), "YieldTons"
+            )
+            self.assertEqual(
+                agent._infer_dim("Show YieldTons by CropType", self.agri_df), "CropType"
+            )
+            insights = agent._build_insights(
+                "prompt",
+                "bar",
+                "CropType",
+                "YieldTons",
+                "tmp.py",
+                verified=True,
+                dataset_name="AgriHarvest.csv",
+            )
             self.assertIn("AgriHarvest.csv", insights)
             self.assertNotIn("SAC_Sales_Preprocessed", insights)
 
@@ -119,26 +157,60 @@ class ZeroHardcodeDynamicTests(unittest.TestCase):
             repo = DatasetRepository(store, objects, "w")
             datasets = DatasetService(Path(directory) / "cache", False, repo)
             self.addCleanup(datasets.wait_for_idle)
-            t_id = current_identity.set({"workspace_id": "w", "user_id": "admin", "roles": ["Admin"]})
+            t_id = current_identity.set(
+                {"workspace_id": "w", "user_id": "admin", "roles": ["Admin"]}
+            )
             t_ai = current_ai_settings.set(AI)
             self.addCleanup(current_identity.reset, t_id)
             self.addCleanup(current_ai_settings.reset, t_ai)
 
-            store.put("w:bindings", "b1", dict(name="MaritimeFeed", connection_id="c1", source="Vessels", mode="replace", checkpoint={}))
+            store.put(
+                "w:bindings",
+                "b1",
+                dict(
+                    name="MaritimeFeed",
+                    connection_id="c1",
+                    source="Vessels",
+                    mode="replace",
+                    checkpoint={},
+                ),
+            )
             connector = Mock()
-            connector.extract.return_value = iter([Batch(records=[
-                {"VesselID": "V-101", "PortName": "Rotterdam", "CargoTons": "4500.5"},
-                {"VesselID": "V-102", "PortName": "Singapore", "CargoTons": "6200.0"},
-            ], checkpoint={"cursor": "2"})])
+            connector.extract.return_value = iter(
+                [
+                    Batch(
+                        records=[
+                            {
+                                "VesselID": "V-101",
+                                "PortName": "Rotterdam",
+                                "CargoTons": "4500.5",
+                            },
+                            {
+                                "VesselID": "V-102",
+                                "PortName": "Singapore",
+                                "CargoTons": "6200.0",
+                            },
+                        ],
+                        checkpoint={"cursor": "2"},
+                    )
+                ]
+            )
             connections = Mock()
+
             @contextmanager
             def opened(*args):
                 yield connector
+
             connections.open = opened
 
-            with patch.object(datasets, "_index", return_value=([], "Ready")), \
-                 patch.object(datasets, "_submit_indexing", return_value=None), \
-                 patch("api.services.ai_core_service.ai_core_service.generate_nvidia_completion", return_value=""):
+            with (
+                patch.object(datasets, "_index", return_value=([], "Ready")),
+                patch.object(datasets, "_submit_indexing", return_value=None),
+                patch(
+                    "api.services.ai_core_service.ai_core_service.generate_nvidia_completion",
+                    return_value="",
+                ),
+            ):
                 jobs = JobService(store, datasets, connections)
                 job = jobs.enqueue("sync", {"binding_id": "b1"}, "sync-maritime-1")
                 jobs.run_next("w")
@@ -154,4 +226,3 @@ class ZeroHardcodeDynamicTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

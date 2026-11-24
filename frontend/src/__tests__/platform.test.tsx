@@ -63,7 +63,7 @@ describe('Platform correctness and navigation', () => {
       return Promise.resolve({ data: [] });
     }) as any);
 
-    render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'User', roles: ['User'] }} />);
+    render(<GraphStudio widgetsOnly onNavigate={vi.fn()} user={{ role: 'User', roles: ['User'] }} />);
     expect(await screen.findByText('Monthly Net Revenue')).toBeTruthy();
     expect(screen.getByText('Include on Dashboard')).toBeTruthy();
   });
@@ -89,7 +89,7 @@ describe('Platform correctness and navigation', () => {
       return Promise.resolve({ data: [] });
     }) as any);
 
-    render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'Admin+User', roles: ['Admin', 'Member'] }} />);
+    render(<GraphStudio widgetsOnly onNavigate={vi.fn()} user={{ role: 'Admin+User', roles: ['Admin', 'Member'] }} />);
     expect(await screen.findByText('Monthly Net Revenue')).toBeTruthy();
     expect(screen.getByText('Include on Dashboard')).toBeTruthy();
     expect(screen.queryByText('Publishing (Admin Only)')).toBeNull();
@@ -263,7 +263,7 @@ describe('Platform correctness and navigation', () => {
       return Promise.resolve({ data: {} });
     }) as any);
 
-    render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'Admin', roles: ['Admin'] }} />);
+    render(<GraphStudio widgetsOnly onNavigate={vi.fn()} user={{ role: 'Admin', roles: ['Admin'] }} />);
     expect(await screen.findByText('Total Revenue')).toBeTruthy();
     expect(screen.getByText('Revenue by Region')).toBeTruthy();
 
@@ -310,7 +310,7 @@ describe('Platform correctness and navigation', () => {
       return Promise.resolve({ data: { items: [] } });
     }) as any);
 
-    render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'Admin', roles: ['Admin'] }} />);
+    render(<GraphStudio widgetsOnly onNavigate={vi.fn()} user={{ role: 'Admin', roles: ['Admin'] }} />);
     expect(await screen.findByText('Pending Revenue')).toBeTruthy();
 
     // Preview Live spinner
@@ -377,7 +377,7 @@ describe('Platform correctness and navigation', () => {
       return Promise.resolve({ data: { items: [] } });
     }) as any);
 
-    render(<GraphStudio onNavigate={vi.fn()} user={{ role: 'Admin', roles: ['Admin'] }} />);
+    render(<GraphStudio widgetsOnly onNavigate={vi.fn()} user={{ role: 'Admin', roles: ['Admin'] }} />);
     expect(await screen.findByText('Metric Alpha')).toBeTruthy();
     expect(screen.getByText('Metric Beta')).toBeTruthy();
 

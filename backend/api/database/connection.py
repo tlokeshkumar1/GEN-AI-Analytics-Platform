@@ -1,4 +1,3 @@
-import logging
 import queue
 import threading
 import time
@@ -10,10 +9,13 @@ logger = get_logger("database.connection")
 
 try:
     from hdbcli import dbapi
+
     HDBCLI_AVAILABLE = True
 except ImportError:
     HDBCLI_AVAILABLE = False
-    logger.warning("hdbcli module not available. SAP HANA database integration is disabled.")
+    logger.warning(
+        "hdbcli module not available. SAP HANA database integration is disabled."
+    )
 
 
 class HANAConnectionManager:
@@ -25,7 +27,9 @@ class HANAConnectionManager:
         self.schema = settings.HANA_SCHEMA
         self._max_pool_size = settings.HANA_POOL_SIZE
         if self._max_pool_size <= 0:
-            raise ValueError(f"HANA_POOL_SIZE must be greater than 0, got {self._max_pool_size}")
+            raise ValueError(
+                f"HANA_POOL_SIZE must be greater than 0, got {self._max_pool_size}"
+            )
         self._pool_timeout = getattr(settings, "HANA_POOL_TIMEOUT", 30.0)
         self._health_check_interval = 30.0
         self._pool = queue.Queue(maxsize=self._max_pool_size)
@@ -42,7 +46,9 @@ class HANAConnectionManager:
                 user=self.user,
                 password=self.password,
                 encrypt="true",
-                sslValidateCertificate="true" if settings.HANA_VALIDATE_CERT else "false"
+                sslValidateCertificate="true"
+                if settings.HANA_VALIDATE_CERT
+                else "false",
             )
             if self.schema:
                 cursor = conn.cursor()
@@ -58,7 +64,10 @@ class HANAConnectionManager:
                     conn.close()
                 except Exception:
                     pass
-            logger.error("Failed to connect to the configured SAP HANA schema (%s).", type(e).__name__)
+            logger.error(
+                "Failed to connect to the configured SAP HANA schema (%s).",
+                type(e).__name__,
+            )
             return None
 
     def get_connection(self, timeout: Optional[float] = None, validate: bool = False):
@@ -95,7 +104,10 @@ class HANAConnectionManager:
                     is_conn_fn = getattr(conn, "isconnected", None)
                     if callable(is_conn_fn) and is_conn_fn() is False:
                         raise RuntimeError("Connection closed")
-                    if validate or (time.monotonic() - last_used) >= self._health_check_interval:
+                    if (
+                        validate
+                        or (time.monotonic() - last_used) >= self._health_check_interval
+                    ):
                         cursor = conn.cursor()
                         cursor.execute("SELECT 1 FROM DUMMY")
                         cursor.close()
@@ -148,4 +160,3 @@ class HANAConnectionManager:
 
 
 db_manager = HANAConnectionManager()
-

@@ -63,9 +63,19 @@ def _sanitize_source_title(name: Optional[str]) -> str:
     # Replace underscores, dashes, dots with spaces
     text = re.sub(r"[_\-\.]+", " ", text).strip()
     # Strip leading noise: Copy (of), Backup (of), Export (of), Draft, etc.
-    text = re.sub(r"^(?:copy(?:\s*\(\d+\))?\s*(?:of)?|backup\s*(?:of)?|export\s*(?:of)?|draft\s*(?:of)?)\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(
+        r"^(?:copy(?:\s*\(\d+\))?\s*(?:of)?|backup\s*(?:of)?|export\s*(?:of)?|draft\s*(?:of)?)\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
     # Strip file artifact words like final, tracker, sheet, raw, version numbers, digits
-    text = re.sub(r"\b(?:final|draft|v\d+|rev\d+|\d+|tracker|export|data|raw|sample|clean|cleaned|processed|sheet\s*\d*)\b", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(
+        r"\b(?:final|draft|v\d+|rev\d+|\d+|tracker|export|data|raw|sample|clean|cleaned|processed|sheet\s*\d*)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -75,8 +85,18 @@ def _sanitize_domain_name(domain: Optional[str]) -> str:
     if not domain:
         return ""
     text = str(domain).strip()
-    text = re.sub(r"^(?:copy(?:\s*\(\d+\))?\s*(?:of)?|backup\s*(?:of)?|export\s*(?:of)?|draft\s*(?:of)?)\s*", "", text, flags=re.IGNORECASE).strip()
-    text = re.sub(r"\b(?:final|draft|v\d+|rev\d+|\d+|tracker|export|data|raw|sample|clean|cleaned|processed|sheet\s*\d*)\b", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(
+        r"^(?:copy(?:\s*\(\d+\))?\s*(?:of)?|backup\s*(?:of)?|export\s*(?:of)?|draft\s*(?:of)?)\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    text = re.sub(
+        r"\b(?:final|draft|v\d+|rev\d+|\d+|tracker|export|data|raw|sample|clean|cleaned|processed|sheet\s*\d*)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
     text = re.sub(r"[_\-\.]+", " ", text).strip()
     text = re.sub(r"\s+", " ", text).strip()
     words = text.split()
@@ -88,11 +108,15 @@ def _sanitize_domain_name(domain: Optional[str]) -> str:
         if not dedup_words or dedup_words[-1].lower() != w.lower():
             dedup_words.append(w)
     formatted = " ".join(
-        "SAP" if w.upper() == "SAP" else
-        "IT" if w.upper() == "IT" else
-        "EPM" if w.upper() == "EPM" else
-        "KPI" if w.upper() == "KPI" else
-        w.capitalize()
+        "SAP"
+        if w.upper() == "SAP"
+        else "IT"
+        if w.upper() == "IT"
+        else "EPM"
+        if w.upper() == "EPM"
+        else "KPI"
+        if w.upper() == "KPI"
+        else w.capitalize()
         for w in dedup_words
     )
     return formatted
@@ -124,9 +148,15 @@ def _inspect_numeric_series(series: pd.Series) -> Tuple[bool, bool]:
     if non_null.empty:
         return False, False
 
-    if all(isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) for v in non_null):
+    if all(
+        isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)
+        for v in non_null
+    ):
         has_decimal = any(
-            isinstance(v, Decimal) and (v % 1 != 0) or isinstance(v, float) and not v.is_integer()
+            isinstance(v, Decimal)
+            and (v % 1 != 0)
+            or isinstance(v, float)
+            and not v.is_integer()
             for v in non_null
         )
         return True, has_decimal
@@ -138,7 +168,14 @@ def _inspect_numeric_series(series: pd.Series) -> Tuple[bool, bool]:
         txt = str(val).strip()
         if not txt:
             continue
-        cleaned = txt.replace(",", "").replace("$", "").replace("€", "").replace("£", "").rstrip("%").strip()
+        cleaned = (
+            txt.replace(",", "")
+            .replace("$", "")
+            .replace("€", "")
+            .replace("£", "")
+            .rstrip("%")
+            .strip()
+        )
         try:
             num = float(cleaned)
             parsed_count += 1
@@ -158,13 +195,40 @@ def _looks_like_date_series(series: pd.Series, tokens: List[str]) -> bool:
     if non_null.empty:
         return False
 
-    date_tokens = {"date", "datetime", "timestamp", "created", "updated", "month", "quarter", "year", "week"}
-    duration_or_actor_tokens = {"days", "hours", "minutes", "seconds", "years", "months", "by", "downtime", "leadtime", "tenure", "age", "rate"}
+    date_tokens = {
+        "date",
+        "datetime",
+        "timestamp",
+        "created",
+        "updated",
+        "month",
+        "quarter",
+        "year",
+        "week",
+    }
+    duration_or_actor_tokens = {
+        "days",
+        "hours",
+        "minutes",
+        "seconds",
+        "years",
+        "months",
+        "by",
+        "downtime",
+        "leadtime",
+        "tenure",
+        "age",
+        "rate",
+    }
     token_set = set(tokens)
-    has_date_token = bool(token_set & date_tokens) or ("time" in token_set and not (token_set & duration_or_actor_tokens))
+    has_date_token = bool(token_set & date_tokens) or (
+        "time" in token_set and not (token_set & duration_or_actor_tokens)
+    )
     if token_set & {"updated", "created"} and "by" in token_set:
         return False
-    if token_set & duration_or_actor_tokens and not (token_set & {"date", "datetime", "timestamp"}):
+    if token_set & duration_or_actor_tokens and not (
+        token_set & {"date", "datetime", "timestamp"}
+    ):
         return False
 
     is_num, is_float = _inspect_numeric_series(non_null)
@@ -183,7 +247,9 @@ def _looks_like_date_series(series: pd.Series, tokens: List[str]) -> bool:
         return False
     parsed = pd.to_datetime(sample, errors="coerce", format="mixed")
     valid_ratio = float(parsed.notna().mean())
-    if valid_ratio >= 0.8 and (has_date_token or bool(sample.str.contains(r"[-/:T]", regex=True).mean() >= 0.8)):
+    if valid_ratio >= 0.8 and (
+        has_date_token or bool(sample.str.contains(r"[-/:T]", regex=True).mean() >= 0.8)
+    ):
         return True
     return has_date_token and valid_ratio >= 0.5
 
@@ -223,14 +289,24 @@ class DomainClassifierAgent:
         for col in columns:
             series = df[col]
             is_num, is_float = _inspect_numeric_series(series)
-            dtype = "decimal" if (is_num and is_float) else "integer" if is_num else str(series.dtype)
+            dtype = (
+                "decimal"
+                if (is_num and is_float)
+                else "integer"
+                if is_num
+                else str(series.dtype)
+            )
             nunique = int(series.nunique())
             samples = [str(r.get(col)) for r in sample_rows]
-            col_profiles.append(f"- {col} (type: {dtype}, distinct: {nunique}, samples: {samples[:3]})")
+            col_profiles.append(
+                f"- {col} (type: {dtype}, distinct: {nunique}, samples: {samples[:3]})"
+            )
         columns_summary = "\n".join(col_profiles)
 
         # 3. Call Open-Domain Zero-Shot LLM Reasoning with sanitized title
-        llm_result = self._query_open_domain_llm(columns_summary, sample_rows, dataset_name=dataset_name)
+        llm_result = self._query_open_domain_llm(
+            columns_summary, sample_rows, dataset_name=dataset_name
+        )
 
         domain = ""
         grain = "Single record"
@@ -245,17 +321,32 @@ class DomainClassifierAgent:
                 annotations = raw_ann
 
         # Replace generic/empty domain names with a meaningful name inferred from source name & columns
-        if not domain or domain.lower() in ("unknown", "generic", "dataset", "enterprise", "general", "n/a"):
+        if not domain or domain.lower() in (
+            "unknown",
+            "generic",
+            "dataset",
+            "enterprise",
+            "general",
+            "n/a",
+        ):
             domain = self._fallback_domain_name(columns, dataset_name)
 
         # Case-insensitive annotation lookup map
-        annotations_lower = {str(k).strip().lower(): v for k, v in annotations.items() if isinstance(v, dict)}
+        annotations_lower = {
+            str(k).strip().lower(): v
+            for k, v in annotations.items()
+            if isinstance(v, dict)
+        }
 
         # 4. Construct SemanticFields by combining LLM annotations with physical value checks
         fields: List[SemanticField] = []
         for col in columns:
             series = df[col]
-            ann = annotations.get(col) or annotations_lower.get(str(col).strip().lower()) or {}
+            ann = (
+                annotations.get(col)
+                or annotations_lower.get(str(col).strip().lower())
+                or {}
+            )
             if not isinstance(ann, dict):
                 ann = {}
             field = self._build_semantic_field(col, series, ann, sample_rows)
@@ -287,14 +378,20 @@ class DomainClassifierAgent:
         try:
             sample_json = json.dumps(sample_rows[:5], indent=2, default=str)
             clean_title = _sanitize_source_title(dataset_name)
-            source_label = f"{clean_title} ({dataset_name})" if dataset_name and clean_title != dataset_name else (clean_title or dataset_name or "Uploaded Dataset")
+            source_label = (
+                f"{clean_title} ({dataset_name})"
+                if dataset_name and clean_title != dataset_name
+                else (clean_title or dataset_name or "Uploaded Dataset")
+            )
             prompt = OPEN_DOMAIN_SYSTEM_PROMPT.format(
                 dataset_name=source_label,
                 columns_summary=columns_summary,
                 sample_rows_json=sample_json,
             )
 
-            response = ai_core_service.generate_structured_completion(prompt, max_tokens=1800, temperature=0.1, timeout=12)
+            response = ai_core_service.generate_structured_completion(
+                prompt, max_tokens=1800, temperature=0.1, timeout=12
+            )
             if not response or not response.strip():
                 return None
 
@@ -307,7 +404,9 @@ class DomainClassifierAgent:
     @staticmethod
     def _parse_json_response(response: str) -> Optional[Dict[str, Any]]:
         """Strip reasoning tags/markdown fences and parse the first valid JSON object."""
-        text = re.sub(r"<think>[\s\S]*?</think>", "", response, flags=re.IGNORECASE).strip()
+        text = re.sub(
+            r"<think>[\s\S]*?</think>", "", response, flags=re.IGNORECASE
+        ).strip()
         try:
             parsed = json.loads(text)
             if isinstance(parsed, dict):
@@ -349,24 +448,42 @@ class DomainClassifierAgent:
         llm_role = str(ann.get("role") or "").strip().lower()
 
         is_numeric, is_float = _inspect_numeric_series(series)
-        is_date = _looks_like_date_series(series, tokens) or (llm_role == "time" and not (is_numeric and is_float))
+        is_date = _looks_like_date_series(series, tokens) or (
+            llm_role == "time" and not (is_numeric and is_float)
+        )
 
         id_end_tokens = {"id", "uuid", "guid", "code", "key", "sku"}
-        has_id_token = bool(tokens and tokens[-1] in id_end_tokens) or col_lower in ("id", "key", "code")
+        has_id_token = bool(tokens and tokens[-1] in id_end_tokens) or col_lower in (
+            "id",
+            "key",
+            "code",
+        )
         non_null = series.dropna()
         high_uniqueness_text = (
             not is_numeric
             and len(non_null) >= 3
             and (non_null.nunique() / len(non_null)) >= 0.98
         )
-        is_id = not is_date and (
-            has_id_token
-            or (llm_role == "identifier" and not (is_numeric and is_float))
-            or (high_uniqueness_text and (llm_role == "identifier" or has_id_token or len(tokens) <= 2))
-        ) and col_lower not in ("month_num", "monthnum", "quarter_num")
+        is_id = (
+            not is_date
+            and (
+                has_id_token
+                or (llm_role == "identifier" and not (is_numeric and is_float))
+                or (
+                    high_uniqueness_text
+                    and (llm_role == "identifier" or has_id_token or len(tokens) <= 2)
+                )
+            )
+            and col_lower not in ("month_num", "monthnum", "quarter_num")
+        )
 
         # Respect LLM marking low-cardinality numeric codes/tiers as dimensions
-        llm_prefers_dimension = llm_role == "dimension" and is_numeric and not is_float and series.nunique() <= 20
+        llm_prefers_dimension = (
+            llm_role == "dimension"
+            and is_numeric
+            and not is_float
+            and series.nunique() <= 20
+        )
 
         if is_date:
             col_type = "date"
@@ -381,7 +498,18 @@ class DomainClassifierAgent:
         elif is_numeric and not llm_prefers_dimension:
             col_type = "decimal" if is_float else "integer"
             role = "measure"
-            rate_tokens = {"percent", "percentage", "pct", "ratio", "rate", "margin", "avg", "mean", "score", "rating"}
+            rate_tokens = {
+                "percent",
+                "percentage",
+                "pct",
+                "ratio",
+                "rate",
+                "margin",
+                "avg",
+                "mean",
+                "score",
+                "rating",
+            }
             is_rate = bool(token_set & rate_tokens) or ann.get("unit") == "%"
             llm_agg = str(ann.get("default_aggregation") or "").upper()
             if llm_agg in ("SUM", "AVG", "MIN", "MAX", "COUNT"):
@@ -404,14 +532,34 @@ class DomainClassifierAgent:
             default_agg = None
 
         # Display name & description
-        raw_pretty = " ".join(t.title() for t in tokens) if tokens else col.replace("_", " ").title()
+        raw_pretty = (
+            " ".join(t.title() for t in tokens)
+            if tokens
+            else col.replace("_", " ").title()
+        )
         display_name = str(ann.get("semantic_name") or raw_pretty).strip()
         description = str(ann.get("description") or f"{display_name} ({role})").strip()
 
         # Physical unit & currency
-        unit = ann.get("unit") or ("%" if (token_set & {"percent", "percentage", "pct", "rate"}) else None)
+        unit = ann.get("unit") or (
+            "%" if (token_set & {"percent", "percentage", "pct", "rate"}) else None
+        )
         currency = ann.get("currency") or (
-            "USD" if (token_set & {"usd", "price", "revenue", "cost", "salary", "amount", "sales", "profit"}) else None
+            "USD"
+            if (
+                token_set
+                & {
+                    "usd",
+                    "price",
+                    "revenue",
+                    "cost",
+                    "salary",
+                    "amount",
+                    "sales",
+                    "profit",
+                }
+            )
+            else None
         )
 
         # Dynamic Synonyms
@@ -434,28 +582,53 @@ class DomainClassifierAgent:
             evidence=f"Inferred from 5-row sample: {samples[:3]}",
         )
 
-    def _fallback_domain_name(self, columns: List[str], dataset_name: Optional[str] = None) -> str:
+    def _fallback_domain_name(
+        self, columns: List[str], dataset_name: Optional[str] = None
+    ) -> str:
         """Derive clean, concise executive domain name from dataset name or column names if LLM is unavailable."""
         if dataset_name:
             cleaned = _sanitize_source_title(dataset_name)
             if cleaned:
                 formatted = _sanitize_domain_name(cleaned)
-                if formatted and formatted.lower() not in ("dataset", "data", "file", "upload", "uploaded dataset", "sheet"):
+                if formatted and formatted.lower() not in (
+                    "dataset",
+                    "data",
+                    "file",
+                    "upload",
+                    "uploaded dataset",
+                    "sheet",
+                ):
                     words = formatted.split()
-                    if len(words) <= 2 and not any(k in formatted.lower() for k in ("management", "portfolio", "operations", "tracking", "analytics")):
+                    if len(words) <= 2 and not any(
+                        k in formatted.lower()
+                        for k in (
+                            "management",
+                            "portfolio",
+                            "operations",
+                            "tracking",
+                            "analytics",
+                        )
+                    ):
                         return f"{formatted} Operations"
                     return formatted
         tokens = []
         for col in columns[:3]:
             words = _split_identifier_tokens(col)
             for w in words:
-                if w not in ("id", "key", "code", "date", "name", "num", "idx", "seq") and w not in tokens:
+                if (
+                    w not in ("id", "key", "code", "date", "name", "num", "idx", "seq")
+                    and w not in tokens
+                ):
                     tokens.append(w)
                 if len(tokens) >= 2:
                     break
             if len(tokens) >= 2:
                 break
-        return f"{' '.join(t.title() for t in tokens)} Analytics" if tokens else "Enterprise Operations"
+        return (
+            f"{' '.join(t.title() for t in tokens)} Analytics"
+            if tokens
+            else "Enterprise Operations"
+        )
 
 
 domain_classifier_agent = DomainClassifierAgent()

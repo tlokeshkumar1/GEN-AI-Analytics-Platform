@@ -1,6 +1,5 @@
-import os
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import pandas as pd
 from api.config import settings
@@ -20,6 +19,7 @@ class ExcelDatasetService:
         self._loaded_table: Optional[str] = None
         self._loaded_dataset_id: Optional[str] = None
         import tempfile
+
         self._default_path = Path(tempfile.gettempdir()) / "HANA_ACTIVE_DATASET.pkl"
 
     def clear_cache(self):
@@ -35,9 +35,12 @@ class ExcelDatasetService:
 
     def _resolve_dataset_path(self) -> Path:
         import tempfile
+
         return Path(tempfile.gettempdir()) / "HANA_ACTIVE_DATASET.pkl"
 
-    def _needs_reload(self, target_table: Optional[str] = None, dataset_id: Optional[str] = None) -> bool:
+    def _needs_reload(
+        self, target_table: Optional[str] = None, dataset_id: Optional[str] = None
+    ) -> bool:
         """Determine whether the dataset should be reloaded from SAP HANA Cloud."""
         if self._df is None or self._df.empty:
             return True
@@ -46,18 +49,23 @@ class ExcelDatasetService:
         if dataset_id is not None and self._loaded_dataset_id != dataset_id:
             return True
         if self._last_load_time is not None:
-            elapsed = (datetime.now(timezone.utc) - self._last_load_time).total_seconds()
+            elapsed = (
+                datetime.now(timezone.utc) - self._last_load_time
+            ).total_seconds()
             refresh_seconds = settings.DATA_REFRESH_INTERVAL_MINUTES * 60
             if elapsed >= refresh_seconds:
                 return True
         return False
 
-    def _load_dataset(self, target_table: Optional[str] = None, dataset_id: Optional[str] = None) -> pd.DataFrame:
+    def _load_dataset(
+        self, target_table: Optional[str] = None, dataset_id: Optional[str] = None
+    ) -> pd.DataFrame:
         """Load dataset directly from SAP HANA Cloud as the single source of truth."""
         try:
             from api.database.hana_client import hana_client
             from api.platform.datasets_metadata_repository import datasets_metadata_repo
             from api.models.execution_context import current_selection
+
             sel = current_selection.get()
             if not target_table:
                 hint = None
@@ -68,28 +76,42 @@ class ExcelDatasetService:
                 dataset_id = sel.entry.get("id")
 
             # Query actual total count safely from HANA
-            cnt_rows = hana_client.execute_query(f'SELECT COUNT(*) AS CNT FROM "{target_table}"')
+            cnt_rows = hana_client.execute_query(
+                f'SELECT COUNT(*) AS CNT FROM "{target_table}"'
+            )
             self._records_count = int(cnt_rows[0].get("CNT") or 0) if cnt_rows else None
 
             # This frame feeds calculations. Schema-only callers use metadata reflection.
             from api.platform.data_resolution import quote_identifier
-            rows = hana_client.execute_query(f"SELECT * FROM {quote_identifier(target_table)}", native_types=True)
+
+            rows = hana_client.execute_query(
+                f"SELECT * FROM {quote_identifier(target_table)}", native_types=True
+            )
             if rows is not None:
                 self._df = pd.DataFrame(rows)
-                if self._records_count is not None and len(self._df) != self._records_count:
-                    raise RuntimeError("HANA data changed while loading. Retry against a stable dataset version.")
+                if (
+                    self._records_count is not None
+                    and len(self._df) != self._records_count
+                ):
+                    raise RuntimeError(
+                        "HANA data changed while loading. Retry against a stable dataset version."
+                    )
                 self._loaded_path = None
                 self._loaded_table = target_table
                 self._loaded_dataset_id = dataset_id
                 self._file_mtime = None
                 self._data_as_of = datetime.now(timezone.utc)
                 self._last_load_time = datetime.now(timezone.utc)
-                logger.info(f"Loaded schema sample of {len(self._df)} rows (Total: {self._records_count}) from SAP HANA Cloud table '{target_table}'.")
+                logger.info(
+                    f"Loaded schema sample of {len(self._df)} rows (Total: {self._records_count}) from SAP HANA Cloud table '{target_table}'."
+                )
                 return self._df
         except Exception as e:
             logger.warning(f"Could not load directly from SAP HANA Cloud: {e}")
             if dataset_id:
-                raise RuntimeError("The complete selected dataset could not be loaded from HANA.") from e
+                raise RuntimeError(
+                    "The complete selected dataset could not be loaded from HANA."
+                ) from e
 
         logger.warning("Returning empty DataFrame until active in SAP HANA Cloud.")
         self._df = pd.DataFrame()
@@ -107,16 +129,26 @@ class ExcelDatasetService:
         Guarantees freshness within DATA_REFRESH_INTERVAL_MINUTES.
         """
         from api.models.execution_context import current_selection
+
         selection = current_selection.get()
         if selection is not None:
             rows = selection.snapshot.get("rows")
-            if "rows" in selection.snapshot and selection.snapshot.get("source_backend") != "hana":
+            if (
+                "rows" in selection.snapshot
+                and selection.snapshot.get("source_backend") != "hana"
+            ):
                 from api.services.dataset_service import dataset_service
-                return dataset_service._frame(rows, selection.snapshot.get("columns", []))
+
+                return dataset_service._frame(
+                    rows, selection.snapshot.get("columns", [])
+                )
             from api.platform.data_resolution import current_table
+
             target_table = current_table(selection.entry, selection.context.version)
             if not target_table:
-                raise RuntimeError("The selected version has no complete snapshot or exact live table mapping.")
+                raise RuntimeError(
+                    "The selected version has no complete snapshot or exact live table mapping."
+                )
             dataset_id = selection.entry.get("id")
             if self._needs_reload(target_table, dataset_id):
                 return self._load_dataset(target_table, dataset_id)
@@ -128,16 +160,24 @@ class ExcelDatasetService:
     def get_data_as_of(self) -> Optional[str]:
         """Return the ISO 8601 UTC timestamp of the data source's last modification."""
         from api.models.execution_context import current_selection
+
         selection = current_selection.get()
         if selection and selection.snapshot.get("source_backend") != "hana":
-            return next((v.get("createdAt") for v in selection.entry.get("versions", [])
-                         if v["version"] == selection.context.version), None)
+            return next(
+                (
+                    v.get("createdAt")
+                    for v in selection.entry.get("versions", [])
+                    if v["version"] == selection.context.version
+                ),
+                None,
+            )
         self.get_df()
         return self._data_as_of.isoformat() if self._data_as_of else None
 
     def get_records_in_source(self) -> int:
         """Return the total number of records in the source dataset."""
         from api.models.execution_context import current_selection
+
         selection = current_selection.get()
         if selection and selection.snapshot.get("source_backend") != "hana":
             return len(selection.snapshot.get("rows", []))
@@ -150,6 +190,7 @@ class ExcelDatasetService:
     def get_fast_dataset_path(self) -> Path:
         """Return a fast path for external scripts (like PythonGraphAgent) in temp dir without local output dependencies."""
         import tempfile
+
         temp_pkl = Path(tempfile.gettempdir()) / "HANA_ACTIVE_DATASET.pkl"
         df = self.get_df()
         if df is not None and not df.empty:
@@ -179,7 +220,11 @@ class ExcelDatasetService:
           - The data is staler than max_stale_hours.
         Returns a status dict on success.
         """
-        threshold = max_stale_hours if max_stale_hours is not None else settings.DATA_STALE_MAX_HOURS
+        threshold = (
+            max_stale_hours
+            if max_stale_hours is not None
+            else settings.DATA_STALE_MAX_HOURS
+        )
 
         resolved_path = self._resolve_dataset_path()
         if not resolved_path.exists():
@@ -193,7 +238,9 @@ class ExcelDatasetService:
             logger.error(msg)
             raise RuntimeError(msg)
 
-        file_mtime = datetime.fromtimestamp(resolved_path.stat().st_mtime, tz=timezone.utc)
+        file_mtime = datetime.fromtimestamp(
+            resolved_path.stat().st_mtime, tz=timezone.utc
+        )
         age_hours = (datetime.now(timezone.utc) - file_mtime).total_seconds() / 3600.0
 
         if age_hours > threshold:

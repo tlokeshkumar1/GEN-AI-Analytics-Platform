@@ -1,4 +1,5 @@
 """Shared metadata, ingestion and review contracts for the analytics platform."""
+
 import importlib.util as _util
 import os as _os
 import sys as _sys
@@ -15,11 +16,23 @@ _stdlib_dir = _sysconfig.get_path("stdlib")
 if _stdlib_dir:
     _stdlib_candidates.append(_os.path.join(_stdlib_dir, "platform.py"))
 
-_stdlib_candidates.extend([
-    _os.path.join(_sys.base_prefix, "Lib", "platform.py"),
-    _os.path.join(_sys.base_prefix, "lib", f"python{_sys.version_info.major}.{_sys.version_info.minor}", "platform.py"),
-    _os.path.join(_sys.base_prefix, "lib64", f"python{_sys.version_info.major}.{_sys.version_info.minor}", "platform.py"),
-])
+_stdlib_candidates.extend(
+    [
+        _os.path.join(_sys.base_prefix, "Lib", "platform.py"),
+        _os.path.join(
+            _sys.base_prefix,
+            "lib",
+            f"python{_sys.version_info.major}.{_sys.version_info.minor}",
+            "platform.py",
+        ),
+        _os.path.join(
+            _sys.base_prefix,
+            "lib64",
+            f"python{_sys.version_info.major}.{_sys.version_info.minor}",
+            "platform.py",
+        ),
+    ]
+)
 
 _std_mod = None
 for _candidate in _stdlib_candidates:

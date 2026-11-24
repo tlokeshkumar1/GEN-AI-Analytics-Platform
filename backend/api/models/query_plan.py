@@ -1,4 +1,5 @@
 """Allowlisted analytical plans. SQL/Python strings are never execution inputs."""
+
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -8,7 +9,9 @@ Aggregation = Literal["SUM", "AVG", "MIN", "MAX", "COUNT", "COUNT_DISTINCT"]
 class Filter(BaseModel):
     model_config = ConfigDict(extra="forbid")
     column: str
-    operator: Literal["=", "!=", ">", "<", ">=", "<=", "IN", "CONTAINS", "IS_NULL", "NOT_NULL"]
+    operator: Literal[
+        "=", "!=", ">", "<", ">=", "<=", "IN", "CONTAINS", "IS_NULL", "NOT_NULL"
+    ]
     value: Any = None
 
     @model_validator(mode="after")
@@ -57,8 +60,14 @@ class Join(BaseModel):
 
     @model_validator(mode="after")
     def validate_join_spec(self):
-        if not self.relationship and not (self.right_dataset_id or self.right_table or (self.left_key and self.right_key)):
-            raise ValueError("Join must specify either a relationship identifier or right_dataset_id/right_table with keys")
+        if not self.relationship and not (
+            self.right_dataset_id
+            or self.right_table
+            or (self.left_key and self.right_key)
+        ):
+            raise ValueError(
+                "Join must specify either a relationship identifier or right_dataset_id/right_table with keys"
+            )
         return self
 
 
@@ -76,7 +85,9 @@ class QueryPlan(BaseModel):
     dataset_id: str | None = None
     left_dataset_id: str | None = None
     table_name: str | None = None
-    intent: Literal["analytical", "ranking", "comparison", "graph", "chat"] = "analytical"
+    intent: Literal["analytical", "ranking", "comparison", "graph", "chat"] = (
+        "analytical"
+    )
     metric: str | None = None
     aggregation: Aggregation | None = None
     dimension: str | None = None
@@ -90,26 +101,58 @@ class QueryPlan(BaseModel):
     comparison: PeriodComparison | None = None
     sort: Sort | None = None
     limit: int | None = Field(None, ge=1, le=10000)
-    chart_type: Literal["kpi", "table", "bar", "line", "scatter", "pie", "area", "donut", "horizontal_bar", "gauge", "funnel", "radar"] | None = None
+    chart_type: (
+        Literal[
+            "kpi",
+            "table",
+            "bar",
+            "line",
+            "scatter",
+            "pie",
+            "area",
+            "donut",
+            "horizontal_bar",
+            "gauge",
+            "funnel",
+            "radar",
+        ]
+        | None
+    ) = None
     requires_vector_search: bool = False
     requires_structured_query: bool = True
 
     @model_validator(mode="after")
     def normalize_legacy_shape(self):
         if self.comparison and (self.date_filter or self.time_grouping):
-            raise ValueError("Use explicit comparison periods without an additional date range or time grouping")
-        if self.dimension and self.dimensions and self.dimensions != [d.strip() for d in self.dimension.split(",")]:
+            raise ValueError(
+                "Use explicit comparison periods without an additional date range or time grouping"
+            )
+        if (
+            self.dimension
+            and self.dimensions
+            and self.dimensions != [d.strip() for d in self.dimension.split(",")]
+        ):
             raise ValueError("Specify dimension or dimensions, not both")
         if self.dimension:
             self.dimensions = [d.strip() for d in self.dimension.split(",")]
-        if self.metric and self.measures and self.measures != [Measure(field=self.metric, aggregation=self.aggregation)]:
+        if (
+            self.metric
+            and self.measures
+            and self.measures
+            != [Measure(field=self.metric, aggregation=self.aggregation)]
+        ):
             raise ValueError("Specify metric or measures, not both")
         if self.metric:
             if not self.aggregation:
                 raise ValueError("An explicit aggregation is required")
             self.measures = [Measure(field=self.metric, aggregation=self.aggregation)]
         aliases = [m.alias or m.field for m in self.measures]
-        outputs = aliases + self.derived_metrics + self.dimensions + (["period"] if self.time_grouping else [])
+        outputs = (
+            aliases
+            + self.derived_metrics
+            + self.dimensions
+            + (["period"] if self.time_grouping else [])
+        )
         if len(outputs) != len(set(outputs)):
             raise ValueError("Output field names must be unique")
         return self

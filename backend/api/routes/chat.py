@@ -24,20 +24,28 @@ def get_all_sessions(request: Request, user_id: Optional[str] = Query(None)):
 
 
 @router.get("/sessions/{session_id}", response_model=List[Dict[str, Any]])
-def get_session_messages(session_id: str, request: Request, user_id: Optional[str] = Query(None)):
+def get_session_messages(
+    session_id: str, request: Request, user_id: Optional[str] = Query(None)
+):
     """Fetch message history for a session after verifying user ownership."""
     resolved_user_id = get_user_id_from_request(request, user_id)
-    messages = history_service.get_session_messages(session_id, user_id=resolved_user_id)
+    messages = history_service.get_session_messages(
+        session_id, user_id=resolved_user_id
+    )
     return messages
 
 
 @router.delete("/sessions/{session_id}")
-def delete_session(session_id: str, request: Request, user_id: Optional[str] = Query(None)):
+def delete_session(
+    session_id: str, request: Request, user_id: Optional[str] = Query(None)
+):
     """Delete a chat session and all its messages if owned by the user."""
     resolved_user_id = get_user_id_from_request(request, user_id)
     success = history_service.delete_session(session_id, user_id=resolved_user_id)
     if not success:
-        raise HTTPException(status_code=403, detail="Session not found or access denied")
+        raise HTTPException(
+            status_code=403, detail="Session not found or access denied"
+        )
     return {"status": "deleted", "session_id": session_id}
 
 
@@ -52,11 +60,14 @@ def chat_with_rag(req: ChatRequest, request: Request):
     Falls back gracefully to an ephemeral session if HANA is unavailable or returns an error.
     """
     import uuid
+
     user_id = get_user_id_from_request(request, req.user_id)
     chat_history = []
     session_id = None
     try:
-        session_id = history_service.get_or_create_session(req.session_id, user_id=user_id, first_message=req.message)
+        session_id = history_service.get_or_create_session(
+            req.session_id, user_id=user_id, first_message=req.message
+        )
     except HTTPException as exc:
         if exc.status_code < 500:
             raise
@@ -64,7 +75,9 @@ def chat_with_rag(req: ChatRequest, request: Request):
         logger.warning("Chat history is unavailable; continuing without persistence.")
     except Exception as exc:
         session_id = f"ephemeral-{uuid.uuid4().hex[:8]}"
-        logger.warning(f"HANA chat session creation failed ({exc}); using ephemeral session {session_id}.")
+        logger.warning(
+            f"HANA chat session creation failed ({exc}); using ephemeral session {session_id}."
+        )
 
     # 1. Save the user query if session is persistent
     if not session_id.startswith("ephemeral-"):
@@ -75,14 +88,18 @@ def chat_with_rag(req: ChatRequest, request: Request):
                 content=req.message,
             )
         except Exception as exc:
-            logger.warning(f"Failed to persist user message for session {session_id} ({exc}).")
+            logger.warning(
+                f"Failed to persist user message for session {session_id} ({exc})."
+            )
 
     # 2. Load recent history for context-aware RAG
     if not session_id.startswith("ephemeral-") and catalog_intent(req.message) is None:
         try:
             chat_history = history_service.get_recent_history(session_id, limit=10)
         except Exception as exc:
-            logger.warning(f"Failed to load recent history for session {session_id} ({exc}); continuing with empty history.")
+            logger.warning(
+                f"Failed to load recent history for session {session_id} ({exc}); continuing with empty history."
+            )
             chat_history = []
 
     # 3. Run the RAG pipeline
@@ -106,18 +123,22 @@ def chat_with_rag(req: ChatRequest, request: Request):
                 },
             )
         except Exception as exc:
-            logger.warning(f"Failed to persist assistant response ({exc}); session {session_id} is ephemeral.")
+            logger.warning(
+                f"Failed to persist assistant response ({exc}); session {session_id} is ephemeral."
+            )
 
     session_title = None
     try:
-        session_title = history_service.ensure_session_title(session_id, user_id, req.message, result.get('reply', ''))
+        session_title = history_service.ensure_session_title(
+            session_id, user_id, req.message, result.get("reply", "")
+        )
     except Exception as exc:
-        logger.warning('Could not update conversation title (%s).', type(exc).__name__)
+        logger.warning("Could not update conversation title (%s).", type(exc).__name__)
     return ChatResponse(
         session_title=session_title,
-        cosine_score=result.get('cosine_score'),
-        retrieval=result.get('retrieval'),
-        warnings=result.get('warnings', []),
+        cosine_score=result.get("cosine_score"),
+        retrieval=result.get("retrieval"),
+        warnings=result.get("warnings", []),
         reply=result["reply"],
         sources=result.get("sources", []),
         session_id=session_id,
@@ -131,4 +152,3 @@ def chat_with_rag(req: ChatRequest, request: Request):
         status=result.get("status", "success"),
         query_plan=result.get("query_plan"),
     )
-

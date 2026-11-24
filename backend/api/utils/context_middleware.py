@@ -1,4 +1,5 @@
 """ASGI middleware keeps verified identity and one data snapshot through SSE completion."""
+
 import copy
 import json
 import os
@@ -10,7 +11,10 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
 from api.models.execution_context import (
-    DatasetSelection, ExecutionContext, current_identity, current_selection,
+    DatasetSelection,
+    ExecutionContext,
+    current_identity,
+    current_selection,
     require_dataset_access,
 )
 
@@ -21,31 +25,58 @@ class DatasetContextMiddleware:
 
     async def __call__(self, scope, receive, send):
         path = scope.get("path", "")
-        if scope["type"] != "http" or not path.startswith("/api/") or path == "/api/health" or path.startswith("/api/auth/") or scope.get("method") == "OPTIONS":
+        if (
+            scope["type"] != "http"
+            or not path.startswith("/api/")
+            or path == "/api/health"
+            or path.startswith("/api/auth/")
+            or scope.get("method") == "OPTIONS"
+        ):
             return await self.app(scope, receive, send)
         identity_token = selection_token = ai_token = None
         try:
             from api.xsuaa import authenticated_profile
+
             headers = Headers(scope=scope)
-            identity = await run_in_threadpool(authenticated_profile, headers.get("authorization"))
+            identity = await run_in_threadpool(
+                authenticated_profile, headers.get("authorization")
+            )
             # This deployment owns this workspace; clients cannot manufacture membership.
             workspace = os.getenv("PLATFORM_WORKSPACE_ID", "default")
             if headers.get("x-workspace-id", workspace) != workspace:
-                raise HTTPException(403, "This account has no access to the requested workspace.")
-            identity_token = current_identity.set({**identity, "workspace_id": workspace,
-                                                   "request_channel": "chat" if path.startswith("/api/chat") else "dataset"})
+                raise HTTPException(
+                    403, "This account has no access to the requested workspace."
+                )
+            identity_token = current_identity.set(
+                {
+                    **identity,
+                    "workspace_id": workspace,
+                    "request_channel": "chat"
+                    if path.startswith("/api/chat")
+                    else "dataset",
+                }
+            )
             is_chat_session = path.startswith("/api/chat/sessions")
-            is_chat = path in ("/api/chat", "/api/chat/stream") or (path.startswith("/api/chat/") and not is_chat_session)
+            is_chat = path in ("/api/chat", "/api/chat/stream") or (
+                path.startswith("/api/chat/") and not is_chat_session
+            )
             catalog_chat = False
             invalid_chat_body = False
-            if path in ("/api/chat", "/api/chat/stream") and scope.get("method") == "POST":
+            if (
+                path in ("/api/chat", "/api/chat/stream")
+                and scope.get("method") == "POST"
+            ):
                 # Inspect small JSON bodies and replay every ASGI message unchanged.
                 # Catalog questions need identity, but no snapshot or approved model.
                 from api.rag.catalog_chat import catalog_intent
+
                 original_receive = receive
                 buffered = deque()
                 body = bytearray()
-                if headers.get("content-type", "").split(";", 1)[0].strip().lower() == "application/json":
+                if (
+                    headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    == "application/json"
+                ):
                     while len(body) <= 65536:
                         event = await original_receive()
                         buffered.append(event)
@@ -59,17 +90,28 @@ class DatasetContextMiddleware:
                             if len(body) <= 65536:
                                 try:
                                     payload = json.loads(body)
-                                    invalid_chat_body = not isinstance(payload, dict) or not isinstance(payload.get("message"), str)
-                                    catalog_chat = isinstance(payload, dict) and catalog_intent(payload.get("message")) is not None
+                                    invalid_chat_body = not isinstance(
+                                        payload, dict
+                                    ) or not isinstance(payload.get("message"), str)
+                                    catalog_chat = (
+                                        isinstance(payload, dict)
+                                        and catalog_intent(payload.get("message"))
+                                        is not None
+                                    )
                                 except (ValueError, UnicodeError):
                                     invalid_chat_body = True
                             break
+
                 async def replay_receive():
                     if buffered:
                         return buffered.popleft()
                     return await original_receive()
+
                 receive = replay_receive
-            is_metadata_only_insight = scope.get("method", "GET") == "GET" and path in ("/api/insights/dashboard", "/api/insights/recommendations")
+            is_metadata_only_insight = scope.get("method", "GET") == "GET" and path in (
+                "/api/insights/dashboard",
+                "/api/insights/recommendations",
+            )
             needs_dataset = (
                 (is_chat and not catalog_chat and not invalid_chat_body)
                 or path == "/api/analytics"
@@ -80,63 +122,139 @@ class DatasetContextMiddleware:
             if needs_dataset:
                 needs_snapshot = not is_chat_session and not is_metadata_only_insight
                 if needs_snapshot:
-                    from api.platform.ai_settings import ai_settings, current_ai_settings
-                    ai_token = current_ai_settings.set(await run_in_threadpool(ai_settings))
+                    from api.platform.ai_settings import (
+                        ai_settings,
+                        current_ai_settings,
+                    )
+
+                    ai_token = current_ai_settings.set(
+                        await run_in_threadpool(ai_settings)
+                    )
                 from api.services.dataset_service import dataset_service
+
                 catalog = await run_in_threadpool(dataset_service._catalog)
                 dataset_id = headers.get("x-dataset-id")
                 if not dataset_id:
-                    if (path.startswith(("/api/dashboard", "/api/graph/", "/api/chat/")) or path == "/api/chat") and catalog.get("activeDatasetId"):
+                    if (
+                        path.startswith(("/api/dashboard", "/api/graph/", "/api/chat/"))
+                        or path == "/api/chat"
+                    ) and catalog.get("activeDatasetId"):
                         dataset_id = catalog.get("activeDatasetId")
                     else:
-                        raise HTTPException(409, "Select a dataset and version before requesting analytics.")
-                elif str(dataset_id).strip().lower() == "all" and (is_chat or is_chat_session):
-                    dataset_id = catalog.get("activeDatasetId") or (next(iter(catalog["datasets"])) if catalog.get("datasets") else None)
+                        raise HTTPException(
+                            409,
+                            "Select a dataset and version before requesting analytics.",
+                        )
+                elif str(dataset_id).strip().lower() == "all" and (
+                    is_chat or is_chat_session
+                ):
+                    dataset_id = catalog.get("activeDatasetId") or (
+                        next(iter(catalog["datasets"]))
+                        if catalog.get("datasets")
+                        else None
+                    )
                     if not dataset_id:
                         raise HTTPException(409, "No datasets available.")
-                entry = await run_in_threadpool(dataset_service._entry, catalog, dataset_id, is_chat or is_chat_session)
+                entry = await run_in_threadpool(
+                    dataset_service._entry,
+                    catalog,
+                    dataset_id,
+                    is_chat or is_chat_session,
+                )
                 require_dataset_access(entry, for_chat=is_chat or is_chat_session)
                 try:
-                    version = int(headers.get("x-dataset-version", str(entry["currentVersion"])))
+                    version = int(
+                        headers.get("x-dataset-version", str(entry["currentVersion"]))
+                    )
                     from api.platform.semantic import semantic_registry
                     from api.platform.contracts import SemanticModel
+
                     pinned_entry = copy.deepcopy(entry)
                     pinned_entry["currentVersion"] = version
-                    models = await run_in_threadpool(semantic_registry.list, pinned_entry, version, is_chat or is_chat_session)
-                    approved_models = [m for m in models if m.get("status") == "approved"]
-                    latest_approved = max([m["revision"] for m in approved_models], default=None)
+                    models = await run_in_threadpool(
+                        semantic_registry.list,
+                        pinned_entry,
+                        version,
+                        is_chat or is_chat_session,
+                    )
+                    approved_models = [
+                        m for m in models if m.get("status") == "approved"
+                    ]
+                    latest_approved = max(
+                        [m["revision"] for m in approved_models], default=None
+                    )
 
                     rev_header = headers.get("x-semantic-revision")
                     if rev_header:
                         try:
                             req_rev = int(rev_header)
                             # If client requested an unapproved revision but an approved one exists, use approved
-                            if latest_approved and not any(m["revision"] == req_rev and m.get("status") == "approved" for m in models):
+                            if latest_approved and not any(
+                                m["revision"] == req_rev
+                                and m.get("status") == "approved"
+                                for m in models
+                            ):
                                 revision = latest_approved
                             else:
                                 revision = req_rev
                         except ValueError:
                             revision = latest_approved or 1
                     else:
-                        revision = latest_approved or (max([m["revision"] for m in models], default=1) if models else 1)
+                        revision = latest_approved or (
+                            max([m["revision"] for m in models], default=1)
+                            if models
+                            else 1
+                        )
 
-                    context = ExecutionContext(workspace_id=workspace, dataset_id=dataset_id,
-                                               version=version, semantic_revision=revision, user_id=identity["user_id"])
+                    context = ExecutionContext(
+                        workspace_id=workspace,
+                        dataset_id=dataset_id,
+                        version=version,
+                        semantic_revision=revision,
+                        user_id=identity["user_id"],
+                    )
                 except ValueError:
-                    raise HTTPException(422, "Dataset version and semantic revision must be positive integers.") from None
-                snapshot = await run_in_threadpool(dataset_service._snapshot, entry, version) if needs_snapshot else {}
-                selection_token = current_selection.set(DatasetSelection(context, pinned_entry, snapshot))
-                matched_model = next((m for m in models if m.get("revision") == revision), None)
-                if matched_model is not None and "fields" in matched_model and "dataset_id" in matched_model:
+                    raise HTTPException(
+                        422,
+                        "Dataset version and semantic revision must be positive integers.",
+                    ) from None
+                snapshot = (
+                    await run_in_threadpool(dataset_service._snapshot, entry, version)
+                    if needs_snapshot
+                    else {}
+                )
+                selection_token = current_selection.set(
+                    DatasetSelection(context, pinned_entry, snapshot)
+                )
+                matched_model = next(
+                    (m for m in models if m.get("revision") == revision), None
+                )
+                if (
+                    matched_model is not None
+                    and "fields" in matched_model
+                    and "dataset_id" in matched_model
+                ):
                     SemanticModel.model_validate(matched_model)
                 else:
-                    await run_in_threadpool(semantic_registry.get, pinned_entry, version, revision, True if approved_models else False, is_chat or is_chat_session)
+                    await run_in_threadpool(
+                        semantic_registry.get,
+                        pinned_entry,
+                        version,
+                        revision,
+                        True if approved_models else False,
+                        is_chat or is_chat_session,
+                    )
             await self.app(scope, receive, send)
         except HTTPException as exc:
-            await JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers={"Cache-Control": "no-store"})(scope, receive, send)
+            await JSONResponse(
+                {"detail": exc.detail},
+                status_code=exc.status_code,
+                headers={"Cache-Control": "no-store"},
+            )(scope, receive, send)
         finally:
             if ai_token is not None:
                 from api.platform.ai_settings import current_ai_settings
+
                 current_ai_settings.reset(ai_token)
             if selection_token is not None:
                 current_selection.reset(selection_token)

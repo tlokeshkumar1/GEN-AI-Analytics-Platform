@@ -38,8 +38,13 @@ class RequestContext:
         self.llm_time_ms: float = 0
         self.graph_time_ms: float = 0
 
-    def add_stage(self, stage: str, status: str, message: str,
-                  details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def add_stage(
+        self,
+        stage: str,
+        status: str,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Add a processing stage and return it as a dict."""
         entry = {
             "stage": stage,
@@ -75,6 +80,7 @@ class RequestContext:
         if not self.model_used:
             try:
                 from api.services.ai_core_service import ai_core_service
+
                 self.model_used = ai_core_service.last_used_model
             except Exception:
                 pass

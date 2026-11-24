@@ -2,6 +2,7 @@
 
 Keep this module independent of config and package utility initializers.
 """
+
 import copy
 import json
 import logging
@@ -20,7 +21,9 @@ _CREDENTIALS_LOCK = threading.Lock()
 
 def xsuaa_credentials(plan: str = "application") -> dict:
     if plan != "application":
-        raise HTTPException(503, "Only the project XSUAA application service is supported.")
+        raise HTTPException(
+            503, "Only the project XSUAA application service is supported."
+        )
     try:
         raw = os.getenv("VCAP_SERVICES")
         vcap_app = os.getenv("VCAP_APPLICATION")
@@ -44,18 +47,28 @@ def xsuaa_credentials(plan: str = "application") -> dict:
         if raw:
             services = json.loads(raw)
         elif has_default_env:
-            services = json.loads(default_env_path.read_text(encoding="utf-8-sig")).get("VCAP_SERVICES", {})
+            services = json.loads(default_env_path.read_text(encoding="utf-8-sig")).get(
+                "VCAP_SERVICES", {}
+            )
         else:
             services = {}
-        candidates = [service for service in services.get("xsuaa", [])
-                      if service.get("plan") == "application"
-                      and (not expected or service.get("name") == expected)]
+        candidates = [
+            service
+            for service in services.get("xsuaa", [])
+            if service.get("plan") == "application"
+            and (not expected or service.get("name") == expected)
+        ]
         if len(candidates) > 1:
-            raise HTTPException(503, "Multiple XSUAA application bindings found. Configure XSUAA_SERVICE_NAME.")
+            raise HTTPException(
+                503,
+                "Multiple XSUAA application bindings found. Configure XSUAA_SERVICE_NAME.",
+            )
         if candidates:
             credentials = candidates[0].get("credentials", {})
         elif services.get("xsuaa"):
-            raise HTTPException(503, "The configured project XSUAA application binding was not found.")
+            raise HTTPException(
+                503, "The configured project XSUAA application binding was not found."
+            )
         else:
             credentials = json.loads(env_creds)
         if not isinstance(credentials, dict):
@@ -73,34 +86,61 @@ def xsuaa_credentials(plan: str = "application") -> dict:
 def bearer_token(authorization: str | None) -> str:
     parts = (authorization or "").strip().split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
-        raise HTTPException(401, "SAP XSUAA authentication required. Sign in again.", headers={"WWW-Authenticate": "Bearer"})
+        raise HTTPException(
+            401,
+            "SAP XSUAA authentication required. Sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return parts[1].strip()
 
 
 def validate_token(token: str, credentials: dict | None = None) -> tuple:
     credentials = xsuaa_credentials() if credentials is None else credentials
-    if not credentials or not credentials.get("clientid") or not credentials.get("xsappname"):
-        raise HTTPException(503, "A complete project XSUAA application binding is required.")
+    if (
+        not credentials
+        or not credentials.get("clientid")
+        or not credentials.get("xsappname")
+    ):
+        raise HTTPException(
+            503, "A complete project XSUAA application binding is required."
+        )
 
     # Local development token bypass (Strictly prohibited in production / Cloud Foundry)
-    is_dev = os.getenv("APP_ENV", "development").lower() == "development" and not os.getenv("VCAP_APPLICATION")
+    is_dev = os.getenv(
+        "APP_ENV", "development"
+    ).lower() == "development" and not os.getenv("VCAP_APPLICATION")
     if is_dev and token.startswith("dev-token-"):
-        logger.warning("Local development mock token used. This is strictly prohibited in production.")
+        logger.warning(
+            "Local development mock token used. This is strictly prohibited in production."
+        )
         from urllib.parse import unquote
+
         parts = token.split(":")
-        user_email = unquote(parts[1]) if len(parts) > 1 else os.getenv("DEV_AUTH_EMAIL", "dev-admin@localhost")
-        user_name = unquote(parts[2]) if len(parts) > 2 else os.getenv("DEV_AUTH_NAME", "Local Dev Admin")
+        user_email = (
+            unquote(parts[1])
+            if len(parts) > 1
+            else os.getenv("DEV_AUTH_EMAIL", "dev-admin@localhost")
+        )
+        user_name = (
+            unquote(parts[2])
+            if len(parts) > 2
+            else os.getenv("DEV_AUTH_NAME", "Local Dev Admin")
+        )
         user_id = parts[3] if len(parts) > 3 else "dev-admin-user"
 
         class LocalDevSecurityContext:
             def check_local_scope(self, scope: str) -> bool:
                 return True
+
             def check_scope(self, scope: str) -> bool:
                 return True
+
             def get_logon_name(self) -> str:
                 return user_email
+
             def get_identity_zone(self) -> str:
                 return credentials.get("identityzoneid") or "x3xp40nc-cd8dlcr"
+
             def get_client_id(self) -> str:
                 return credentials.get("clientid") or "local-dev-client"
 
@@ -125,7 +165,9 @@ def validate_token(token: str, credentials: dict | None = None) -> tuple:
     try:
         from sap import xssec
     except ImportError:
-        raise HTTPException(503, "Install the backend requirements (sap-xssec) and restart the backend.") from None
+        raise HTTPException(
+            503, "Install the backend requirements (sap-xssec) and restart the backend."
+        ) from None
     try:
         context = xssec.create_security_context(token, credentials)
         # xssec verified signature and timestamps; enforce tenant/audience below.
@@ -135,34 +177,62 @@ def validate_token(token: str, credentials: dict | None = None) -> tuple:
         logger.warning("XSUAA validation failed (%s).", type(exc).__name__)
         if "not yet valid" in reason or "issued" in reason:
             detail = "The SAP token is not yet valid. Synchronize the backend UTC clock and sign in again."
-        elif "public key" in reason or "verificationkey" in reason or "provided key" in reason:
-            raise HTTPException(503, "XSUAA signing key validation failed. Refresh the project service binding and restart the backend.") from None
+        elif (
+            "public key" in reason
+            or "verificationkey" in reason
+            or "provided key" in reason
+        ):
+            raise HTTPException(
+                503,
+                "XSUAA signing key validation failed. Refresh the project service binding and restart the backend.",
+            ) from None
         else:
             detail = "Invalid or expired SAP XSUAA token. Sign in again."
-        raise HTTPException(401, detail, headers={"WWW-Authenticate": "Bearer"}) from None
+        raise HTTPException(
+            401, detail, headers={"WWW-Authenticate": "Bearer"}
+        ) from None
     expected_zone = credentials.get("identityzoneid") or credentials.get("zoneid")
     if expected_zone and claims.get("zid") != expected_zone:
-        raise HTTPException(401, "The SAP token belongs to a different tenant. Sign in through this project's application router.")
+        raise HTTPException(
+            401,
+            "The SAP token belongs to a different tenant. Sign in through this project's application router.",
+        )
     audience = claims.get("aud", [])
     if isinstance(audience, str):
         audience = [audience]
-    if not isinstance(audience, list) or not {credentials["clientid"], credentials["xsappname"]}.intersection(audience):
-        raise HTTPException(401, "The SAP token is intended for a different application. Sign in through this project's application router.")
-    if claims.get("grant_type") == "client_credentials" or not (claims.get("user_id") or claims.get("user_name") or claims.get("sub")):
-        raise HTTPException(401, "A SAP end-user session is required. Sign in through the application router.")
+    if not isinstance(audience, list) or not {
+        credentials["clientid"],
+        credentials["xsappname"],
+    }.intersection(audience):
+        raise HTTPException(
+            401,
+            "The SAP token is intended for a different application. Sign in through this project's application router.",
+        )
+    if claims.get("grant_type") == "client_credentials" or not (
+        claims.get("user_id") or claims.get("user_name") or claims.get("sub")
+    ):
+        raise HTTPException(
+            401,
+            "A SAP end-user session is required. Sign in through the application router.",
+        )
     return context, claims
 
 
 def user_profile(context, claims: dict) -> dict:
     roles = [role for role in ("Admin", "Member") if context.check_local_scope(role)]
     if not roles:
-        raise HTTPException(403, "The project Administrator or Member role collection is required.")
+        raise HTTPException(
+            403, "The project Administrator or Member role collection is required."
+        )
     user_id = claims.get("user_id") or claims.get("user_name") or claims["sub"]
     name = " ".join(filter(None, [claims.get("given_name"), claims.get("family_name")]))
     return {
-        "user_id": user_id, "email": claims.get("email", ""),
+        "user_id": user_id,
+        "email": claims.get("email", ""),
         "name": name or claims.get("name") or claims.get("user_name") or user_id,
-        "scopes": claims.get("scope", []), "role": roles[0], "roles": roles,
+        "scopes": claims.get("scope", []),
+        "role": roles[0],
+        "roles": roles,
     }
 
 

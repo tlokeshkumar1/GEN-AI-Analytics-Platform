@@ -10,14 +10,26 @@ logger = get_logger("database.vector_client")
 _schema_initialized = False
 _schema_lock = threading.Lock()
 
+
 class HANAVectorClient:
-    def replace_dataset_version(self, dataset_id, version, chunks, embeddings, source, previous_version=None, previous_chunks=None, metadata_extra=None):
+    def replace_dataset_version(
+        self,
+        dataset_id,
+        version,
+        chunks,
+        embeddings,
+        source,
+        previous_version=None,
+        previous_chunks=None,
+        metadata_extra=None,
+    ):
         """Publish a complete version in one transaction; preserve other versions.
         If previous_version has matching chunks in HANA, performs instant server-side delta clone.
         """
         if len(chunks) != len(embeddings):
             raise ValueError("Every chunk must have a matching embedding")
         from api.database.connection import db_manager
+
         conn = db_manager.get_connection()
         if conn is None:
             raise RuntimeError("HANA vector database is unavailable")
@@ -27,12 +39,26 @@ class HANAVectorClient:
             cursor = conn.cursor()
             prefix = f"{dataset_id}:v{version}:"
             cursor.execute("DELETE FROM VECTOR_TABLE WHERE ID LIKE ?", (prefix + "%",))
-            metadata = json.dumps({"dataset_id": dataset_id, "version": version, "source": source, **(metadata_extra or {})})
+            metadata = json.dumps(
+                {
+                    "dataset_id": dataset_id,
+                    "version": version,
+                    "source": source,
+                    **(metadata_extra or {}),
+                }
+            )
 
             delta_synced = False
-            if previous_version is not None and previous_chunks is not None and len(previous_chunks) == len(chunks):
+            if (
+                previous_version is not None
+                and previous_chunks is not None
+                and len(previous_chunks) == len(chunks)
+            ):
                 prev_prefix = f"{dataset_id}:v{previous_version}:"
-                cursor.execute("SELECT COUNT(*) FROM VECTOR_TABLE WHERE ID LIKE ?", (prev_prefix + "%",))
+                cursor.execute(
+                    "SELECT COUNT(*) FROM VECTOR_TABLE WHERE ID LIKE ?",
+                    (prev_prefix + "%",),
+                )
                 row = cursor.fetchone()
                 prev_count = row[0] if row else 0
                 if prev_count == len(chunks):
@@ -42,19 +68,27 @@ class HANAVectorClient:
                     SELECT REPLACE(ID, ?, ?), TEXT_CHUNK, EMBEDDING, ?
                     FROM VECTOR_TABLE WHERE ID LIKE ?
                     """
-                    cursor.execute(clone_sql, (prev_prefix, prefix, metadata, prev_prefix + "%"))
+                    cursor.execute(
+                        clone_sql, (prev_prefix, prefix, metadata, prev_prefix + "%")
+                    )
 
                     # Identify changed chunk indices
-                    changed_indices = [i for i in range(len(chunks)) if chunks[i] != previous_chunks[i]]
+                    changed_indices = [
+                        i for i in range(len(chunks)) if chunks[i] != previous_chunks[i]
+                    ]
                     for idx in changed_indices:
                         target_id = f"{prefix}{idx}"
-                        cursor.execute("DELETE FROM VECTOR_TABLE WHERE ID = ?", (target_id,))
+                        cursor.execute(
+                            "DELETE FROM VECTOR_TABLE WHERE ID = ?", (target_id,)
+                        )
                         cursor.execute(
                             "INSERT INTO VECTOR_TABLE (ID, TEXT_CHUNK, EMBEDDING, METADATA) VALUES (?, ?, TO_REAL_VECTOR(?), ?)",
-                            (target_id, chunks[idx], str(embeddings[idx]), metadata)
+                            (target_id, chunks[idx], str(embeddings[idx]), metadata),
                         )
                     delta_synced = True
-                    logger.info(f"HANA delta sync: cloned {len(chunks) - len(changed_indices)} vectors, updated {len(changed_indices)} vectors")
+                    logger.info(
+                        f"HANA delta sync: cloned {len(chunks) - len(changed_indices)} vectors, updated {len(changed_indices)} vectors"
+                    )
 
             if not delta_synced:
                 sql = "INSERT INTO VECTOR_TABLE (ID, TEXT_CHUNK, EMBEDDING, METADATA) VALUES (?, ?, TO_REAL_VECTOR(?), ?)"
@@ -62,10 +96,17 @@ class HANAVectorClient:
                 total = len(chunks)
                 for start in range(0, total, batch_size):
                     end = min(start + batch_size, total)
-                    cursor.executemany(sql, [(prefix + str(i), chunks[i], str(embeddings[i]), metadata)
-                                            for i in range(start, end)])
+                    cursor.executemany(
+                        sql,
+                        [
+                            (prefix + str(i), chunks[i], str(embeddings[i]), metadata)
+                            for i in range(start, end)
+                        ],
+                    )
                     if end % 2560 == 0 or end == total:
-                        logger.info(f"HANA sync progress: {end}/{total} vectors inserted into VECTOR_TABLE")
+                        logger.info(
+                            f"HANA sync progress: {end}/{total} vectors inserted into VECTOR_TABLE"
+                        )
 
             conn.commit()
             cursor.close()
@@ -85,21 +126,36 @@ class HANAVectorClient:
                 except Exception:
                     pass
 
-    def search_dataset_version(self, dataset_id, version, embedding, top_k, text_query: Optional[str] = None):
+    def search_dataset_version(
+        self, dataset_id, version, embedding, top_k, text_query: Optional[str] = None
+    ):
         """
         Query SAP HANA Cloud Vector Engine using native COSINE_SIMILARITY(EMBEDDING, TO_REAL_VECTOR(?)).
         When text_query specifies particular entity identifiers (e.g. Order ID SO-XXXXX),
         performs hybrid lookup against VECTOR_TABLE to ensure exact matches are included.
         """
         exact_chunks = []
-        is_multi = (not dataset_id) or (str(dataset_id).strip().lower() in ("all", "*", "default"))
+        is_multi = (not dataset_id) or (
+            str(dataset_id).strip().lower() in ("all", "*", "default")
+        )
+
         def patterns(identifier, number):
-            return [f"{identifier}:v{int(number)}:%", f"%:{identifier}:%:v{int(number)}:%"]
+            return [
+                f"{identifier}:v{int(number)}:%",
+                f"%:{identifier}:%:v{int(number)}:%",
+            ]
+
         scope_patterns = ["%"] if is_multi else patterns(dataset_id, version)
-        from api.models.execution_context import current_identity, current_selection, require_dataset_access
+        from api.models.execution_context import (
+            current_identity,
+            current_selection,
+            require_dataset_access,
+        )
+
         identity = current_identity.get()
         if is_multi and identity is not None:
             from api.services.dataset_service import dataset_service
+
             scope_patterns = []
             selection = current_selection.get()
             for entry in dataset_service._catalog().get("datasets", {}).values():
@@ -107,7 +163,11 @@ class HANAVectorClient:
                     require_dataset_access(entry, for_chat=True)
                 except Exception:
                     continue
-                number = selection.context.version if selection and selection.context.dataset_id == entry["id"] else entry["currentVersion"]
+                number = (
+                    selection.context.version
+                    if selection and selection.context.dataset_id == entry["id"]
+                    else entry["currentVersion"]
+                )
                 scope_patterns.extend(patterns(entry["id"], number))
             if not scope_patterns:
                 return []
@@ -115,18 +175,34 @@ class HANAVectorClient:
         target_pattern = scope_patterns[0]
         if text_query:
             import re
-            matches = re.findall(r'\b([A-Za-z]{1,12}[-_]?\d{2,12})\b', text_query, re.IGNORECASE)
+
+            matches = re.findall(
+                r"\b([A-Za-z]{1,12}[-_]?\d{2,12})\b", text_query, re.IGNORECASE
+            )
             for m in matches[:2]:
-                score_sql = 'COSINE_SIMILARITY(EMBEDDING, TO_REAL_VECTOR(?))' if embedding else 'NULL'
+                score_sql = (
+                    "COSINE_SIMILARITY(EMBEDDING, TO_REAL_VECTOR(?))"
+                    if embedding
+                    else "NULL"
+                )
                 keyword_sql = f"""SELECT TOP {min(max(int(top_k), 1), 20)} ID, TEXT_CHUNK, METADATA, {score_sql} AS SCORE
                                   FROM VECTOR_TABLE
                                   WHERE {predicate} AND (UPPER(TEXT_CHUNK) LIKE ? ESCAPE '\\' OR UPPER(ID) LIKE ? ESCAPE '\\')
                                   ORDER BY ID"""
-                literal = m.upper().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-                params = ((str(embedding),) if embedding else ()) + (*scope_patterns, f"%{literal}%", f"%{literal}%")
+                literal = (
+                    m.upper()
+                    .replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                params = ((str(embedding),) if embedding else ()) + (
+                    *scope_patterns,
+                    f"%{literal}%",
+                    f"%{literal}%",
+                )
                 found = hana_client.execute_query(keyword_sql, params)
                 for row in found or []:
-                    row['MATCH_TYPE'] = 'identifier'
+                    row["MATCH_TYPE"] = "identifier"
                     if not any(r["ID"] == row["ID"] for r in exact_chunks):
                         exact_chunks.append(row)
 
@@ -136,9 +212,13 @@ class HANAVectorClient:
                       COSINE_SIMILARITY(EMBEDDING, TO_REAL_VECTOR(?)) AS SCORE
                       FROM VECTOR_TABLE WHERE {predicate} ORDER BY SCORE DESC"""
             try:
-                vector_results = hana_client.execute_query(sql, (str(embedding), *scope_patterns))
+                vector_results = hana_client.execute_query(
+                    sql, (str(embedding), *scope_patterns)
+                )
             except Exception as e:
-                logger.warning(f"HANA Cloud vector search with pattern {target_pattern} failed: {e}")
+                logger.warning(
+                    f"HANA Cloud vector search with pattern {target_pattern} failed: {e}"
+                )
 
         # Combine exact matches with top semantic vector results
         combined = []
@@ -153,19 +233,37 @@ class HANAVectorClient:
                 seen_ids.add(r["ID"])
         for row in combined:
             try:
-                meta = json.loads(row.get('METADATA') or '{}') if isinstance(row.get('METADATA'), str) else dict(row.get('METADATA') or {})
+                meta = (
+                    json.loads(row.get("METADATA") or "{}")
+                    if isinstance(row.get("METADATA"), str)
+                    else dict(row.get("METADATA") or {})
+                )
             except (ValueError, TypeError):
                 meta = {}
-            row['METADATA'] = json.dumps({**meta, 'retrieval': 'hana_vector', 'source_table': 'VECTOR_TABLE',
-                                          'match_type': row.get('MATCH_TYPE', 'semantic'),
-                                          'score_type': 'cosine' if row.get('SCORE') is not None else None})
+            row["METADATA"] = json.dumps(
+                {
+                    **meta,
+                    "retrieval": "hana_vector",
+                    "source_table": "VECTOR_TABLE",
+                    "match_type": row.get("MATCH_TYPE", "semantic"),
+                    "score_type": "cosine" if row.get("SCORE") is not None else None,
+                }
+            )
         return combined[:top_k]
 
-    def update_row_vector(self, dataset_id: str, row_identifier: str, text_chunk: str, embedding: List[float], metadata: Optional[Dict[str, Any]] = None) -> bool:
+    def update_row_vector(
+        self,
+        dataset_id: str,
+        row_identifier: str,
+        text_chunk: str,
+        embedding: List[float],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """
         Incrementally update or insert a single row's vector in VECTOR_TABLE without recreating the whole table.
         """
         from api.database.connection import db_manager
+
         conn = db_manager.get_connection()
         if not conn:
             return False
@@ -179,7 +277,7 @@ class HANAVectorClient:
             row_pattern = f"%{row_identifier}%"
             cursor.execute(
                 "SELECT ID FROM VECTOR_TABLE WHERE ID LIKE ? AND (ID LIKE ? OR TEXT_CHUNK LIKE ?) LIMIT 10",
-                (target_pattern, row_pattern, row_pattern)
+                (target_pattern, row_pattern, row_pattern),
             )
             found_rows = cursor.fetchall()
             if found_rows:
@@ -187,19 +285,25 @@ class HANAVectorClient:
                     v_id = r[0]
                     cursor.execute(
                         "UPDATE VECTOR_TABLE SET TEXT_CHUNK = ?, EMBEDDING = TO_REAL_VECTOR(?), METADATA = ? WHERE ID = ?",
-                        (text_chunk, str(embedding), meta_str, v_id)
+                        (text_chunk, str(embedding), meta_str, v_id),
                     )
-                logger.info(f"Incrementally updated {len(found_rows)} vector(s) in VECTOR_TABLE for record {row_identifier}")
+                logger.info(
+                    f"Incrementally updated {len(found_rows)} vector(s) in VECTOR_TABLE for record {row_identifier}"
+                )
             else:
                 target_id = f"{dataset_id}:{row_identifier}"
                 cursor.execute(
                     "INSERT INTO VECTOR_TABLE (ID, TEXT_CHUNK, EMBEDDING, METADATA) VALUES (?, ?, TO_REAL_VECTOR(?), ?)",
-                    (target_id, text_chunk, str(embedding), meta_str)
+                    (target_id, text_chunk, str(embedding), meta_str),
                 )
-                logger.info(f"Inserted new single vector in VECTOR_TABLE for record {row_identifier}")
+                logger.info(
+                    f"Inserted new single vector in VECTOR_TABLE for record {row_identifier}"
+                )
             return True
         except Exception as exc:
-            logger.warning(f"Could not incrementally update vector for {row_identifier}: {exc}")
+            logger.warning(
+                f"Could not incrementally update vector for {row_identifier}: {exc}"
+            )
             return False
         finally:
             if cursor is not None:
@@ -216,7 +320,7 @@ class HANAVectorClient:
             row_pattern = f"%{row_identifier}%"
             hana_client.execute_query(
                 "DELETE FROM VECTOR_TABLE WHERE ID LIKE ? AND (ID LIKE ? OR TEXT_CHUNK LIKE ?)",
-                (target_pattern, row_pattern, row_pattern)
+                (target_pattern, row_pattern, row_pattern),
             )
             return True
         except Exception as exc:
@@ -228,12 +332,20 @@ class HANAVectorClient:
         try:
             hana_client.execute_query(
                 "DELETE FROM VECTOR_TABLE WHERE ID LIKE ? OR ID LIKE ? OR (METADATA LIKE ? AND METADATA LIKE ?)",
-                (f"{dataset_id}:v{version}:%", f"%:{dataset_id}:%:v{version}:%", f'%"dataset_id": "{dataset_id}"%', f'%"version": {version}%')
+                (
+                    f"{dataset_id}:v{version}:%",
+                    f"%:{dataset_id}:%:v{version}:%",
+                    f'%"dataset_id": "{dataset_id}"%',
+                    f'%"version": {version}%',
+                ),
             )
         except Exception as e:
-            logger.warning(f"Could not prune HANA vectors for dataset {dataset_id} v{version}: {e}")
+            logger.warning(
+                f"Could not prune HANA vectors for dataset {dataset_id} v{version}: {e}"
+            )
         try:
             from api.services.vector_service import vector_service
+
             vector_service.cache.clear()
         except Exception:
             pass
@@ -244,15 +356,24 @@ class HANAVectorClient:
             # Match both raw dataset_id prefixes and workspace-hashed namespaces (e.g. w<hash>:<dataset_id>:i<hash>:v<ver>:...)
             hana_client.execute_query(
                 "DELETE FROM VECTOR_TABLE WHERE ID LIKE ? OR ID LIKE ? OR METADATA LIKE ?",
-                (f"{dataset_id}:%", f"%:{dataset_id}:%", f'%"dataset_id": "{dataset_id}"%')
+                (
+                    f"{dataset_id}:%",
+                    f"%:{dataset_id}:%",
+                    f'%"dataset_id": "{dataset_id}"%',
+                ),
             )
-            logger.info(f"Purged vector embeddings for dataset '{dataset_id}' from VECTOR_TABLE")
+            logger.info(
+                f"Purged vector embeddings for dataset '{dataset_id}' from VECTOR_TABLE"
+            )
             return True
         except Exception as e:
-            logger.warning(f"Could not delete HANA vectors for dataset {dataset_id}: {e}")
+            logger.warning(
+                f"Could not delete HANA vectors for dataset {dataset_id}: {e}"
+            )
             return False
         try:
             from api.services.vector_service import vector_service
+
             vector_service.cache.clear()
         except Exception:
             pass
@@ -283,31 +404,43 @@ class HANAVectorClient:
                 logger.info("Successfully created VECTOR_TABLE in database")
             except Exception as e:
                 # If the table already exists, ignore silently (not a warning)
-                if "already exists" not in str(e).lower() and "duplicate table name" not in str(e).lower():
+                if (
+                    "already exists" not in str(e).lower()
+                    and "duplicate table name" not in str(e).lower()
+                ):
                     logger.warning(f"Could not create VECTOR_TABLE: {e}")
-            
+
             try:
                 # Try to add METADATA column if it doesn't exist
-                hana_client.execute_query("ALTER TABLE VECTOR_TABLE ADD (METADATA NCLOB)")
+                hana_client.execute_query(
+                    "ALTER TABLE VECTOR_TABLE ADD (METADATA NCLOB)"
+                )
                 logger.info("Checked and updated VECTOR_TABLE to support METADATA")
             except Exception as e:
                 # Column already exists is fine - suppress warning
-                if "already exists" not in str(e).lower() and "column name already exists" not in str(e).lower():
+                if (
+                    "already exists" not in str(e).lower()
+                    and "column name already exists" not in str(e).lower()
+                ):
                     logger.debug(f"METADATA column check: {e}")
             _schema_initialized = True
 
-
-    def similarity_search(self, query_embedding: List[float], top_k: int = 5, metadata_filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    def similarity_search(
+        self,
+        query_embedding: List[float],
+        top_k: int = 5,
+        metadata_filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
         # Uses SAP HANA Vector Engine COSINE_SIMILARITY with optional metadata filtering
         vector_str = f"'{query_embedding}'"
         where_clause = ""
-        
+
         if metadata_filters:
             conditions = []
             for k, v in metadata_filters.items():
                 if v:
                     clean_val = str(v).replace("'", "''")
-                    conditions.append(f"LIKE(METADATA, '%\"{k}\": \"{clean_val}\"%')")
+                    conditions.append(f'LIKE(METADATA, \'%"{k}": "{clean_val}"%\')')
             if conditions:
                 where_clause = "WHERE " + " AND ".join(conditions)
 
@@ -323,7 +456,13 @@ class HANAVectorClient:
             logger.warning(f"Vector search returned empty results due to DB state: {e}")
             return []
 
-    def store_vector(self, doc_id: str, text_chunk: str, embedding: List[float], metadata: Optional[Any] = None):
+    def store_vector(
+        self,
+        doc_id: str,
+        text_chunk: str,
+        embedding: List[float],
+        metadata: Optional[Any] = None,
+    ):
         # Schema already initialized in __init__, no need to check again
         vector_str = str(embedding)
         metadata_str = None
@@ -341,8 +480,11 @@ class HANAVectorClient:
             VALUES (?, ?, TO_REAL_VECTOR(?), ?)
         """
         try:
-            hana_client.execute_query(sql, (doc_id, text_chunk, vector_str, metadata_str))
+            hana_client.execute_query(
+                sql, (doc_id, text_chunk, vector_str, metadata_str)
+            )
         except Exception as e:
             logger.warning(f"Vector store fallback: {e}")
+
 
 vector_client = HANAVectorClient()

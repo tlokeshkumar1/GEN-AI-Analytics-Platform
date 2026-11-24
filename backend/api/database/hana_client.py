@@ -6,13 +6,16 @@ from api.utils.logger import get_logger
 
 logger = get_logger("database.hana_client")
 
+
 class HANAClient:
-    def execute_query(self, sql: str, params: tuple = (), *, native_types: bool = False) -> List[Dict[str, Any]]:
+    def execute_query(
+        self, sql: str, params: tuple = (), *, native_types: bool = False
+    ) -> List[Dict[str, Any]]:
         conn = db_manager.get_connection()
         if not conn:
             logger.error("HANA Database connection is not active.")
             return []
-        
+
         cursor = None
         try:
             cursor = conn.cursor()
@@ -51,5 +54,6 @@ class HANAClient:
                 except Exception:
                     pass
             db_manager.return_connection(conn)
+
 
 hana_client = HANAClient()

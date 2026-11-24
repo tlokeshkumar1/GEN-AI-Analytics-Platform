@@ -1,4 +1,5 @@
 """Natural-language adapter over the shared deterministic analytical executor."""
+
 import time
 from api.services.analytics_engine import analytics_engine
 from api.services.intent_engine import intent_engine
@@ -26,12 +27,27 @@ class AnalyticsService:
 
             # Filter allowed keys for QueryPlan validation
             allowed_keys = {
-                "intent", "metric", "aggregation", "dimension", "dimensions",
-                "measures", "filters", "date_filter", "time_grouping", "joins",
-                "derived_metrics", "comparison", "sort", "limit", "chart_type",
-                "requires_vector_search", "requires_structured_query"
+                "intent",
+                "metric",
+                "aggregation",
+                "dimension",
+                "dimensions",
+                "measures",
+                "filters",
+                "date_filter",
+                "time_grouping",
+                "joins",
+                "derived_metrics",
+                "comparison",
+                "sort",
+                "limit",
+                "chart_type",
+                "requires_vector_search",
+                "requires_structured_query",
             }
-            clean_plan = {k: v for k, v in plan.items() if k in allowed_keys and v is not None}
+            clean_plan = {
+                k: v for k, v in plan.items() if k in allowed_keys and v is not None
+            }
             if "filters" not in clean_plan:
                 clean_plan["filters"] = []
 
@@ -42,13 +58,22 @@ class AnalyticsService:
                 "query": query,
                 "generated_sql": "",
                 "execution_backend": result.execution_backend,
-                "execution_label": "Executed with SAP HANA" if result.execution_backend == "hana" else "Executed with the deterministic DataFrame engine",
+                "execution_label": "Executed with SAP HANA"
+                if result.execution_backend == "hana"
+                else "Executed with the deterministic DataFrame engine",
                 "warnings": result.warnings,
                 "context": result.context,
                 "data_complete": result.data_complete,
-                "status": getattr(result, "status", "success" if result.success else "invalid_query"),
+                "status": getattr(
+                    result, "status", "success" if result.success else "invalid_query"
+                ),
                 "results": result.data or [],
-                "summary_insights": result.error or ("No matching records." if not result.data else f"Calculated from {result.records_matched} matching records."),
+                "summary_insights": result.error
+                or (
+                    "No matching records."
+                    if not result.data
+                    else f"Calculated from {result.records_matched} matching records."
+                ),
                 "recommended_chart": plan.get("chart_type") or "table",
                 "parsing_latency": parsing_ms,
                 "execution_time_ms": getattr(result, "execution_time_ms", 0),

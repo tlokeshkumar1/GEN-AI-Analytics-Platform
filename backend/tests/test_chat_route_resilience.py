@@ -1,4 +1,5 @@
 """Unit tests for chat route session ID retention and streaming generator cancellation."""
+
 import sys
 import threading
 import time
@@ -23,14 +24,17 @@ class ChatRouteSessionResilienceTests(unittest.TestCase):
         request.state = MagicMock()
         request.state.user = None
 
-        with patch("api.routes.chat.get_user_id_from_request", return_value="user-123"), \
-             patch("api.routes.chat.history_service") as mock_history, \
-             patch("api.routes.chat.RAGPipeline") as mock_rag:
-
+        with (
+            patch("api.routes.chat.get_user_id_from_request", return_value="user-123"),
+            patch("api.routes.chat.history_service") as mock_history,
+            patch("api.routes.chat.RAGPipeline") as mock_rag,
+        ):
             mock_history.get_or_create_session.return_value = "session-valid-created"
             mock_history.ensure_session_title.return_value = None
             mock_history.save_message.return_value = None
-            mock_history.get_recent_history.side_effect = RuntimeError("HANA transient timeout during history fetch")
+            mock_history.get_recent_history.side_effect = RuntimeError(
+                "HANA transient timeout during history fetch"
+            )
 
             mock_pipeline_instance = MagicMock()
             mock_pipeline_instance.run.return_value = {
@@ -44,7 +48,9 @@ class ChatRouteSessionResilienceTests(unittest.TestCase):
             # Assert that the created session_id was RETAINED in the response, not replaced with ephemeral-
             self.assertEqual(resp.session_id, "session-valid-created")
             # Verify RAG was called with empty history
-            mock_pipeline_instance.run.assert_called_once_with(req.message, req.top_k, chat_history=[])
+            mock_pipeline_instance.run.assert_called_once_with(
+                req.message, req.top_k, chat_history=[]
+            )
 
     def test_ephemeral_fallback_only_when_creation_fails(self):
         """If get_or_create_session fails, an ephemeral session ID is generated."""
@@ -54,11 +60,14 @@ class ChatRouteSessionResilienceTests(unittest.TestCase):
         request.state = MagicMock()
         request.state.user = None
 
-        with patch("api.routes.chat.get_user_id_from_request", return_value="user-123"), \
-             patch("api.routes.chat.history_service") as mock_history, \
-             patch("api.routes.chat.RAGPipeline") as mock_rag:
-
-            mock_history.get_or_create_session.side_effect = RuntimeError("Database down")
+        with (
+            patch("api.routes.chat.get_user_id_from_request", return_value="user-123"),
+            patch("api.routes.chat.history_service") as mock_history,
+            patch("api.routes.chat.RAGPipeline") as mock_rag,
+        ):
+            mock_history.get_or_create_session.side_effect = RuntimeError(
+                "Database down"
+            )
             mock_history.ensure_session_title.return_value = None
             mock_pipeline_instance = MagicMock()
             mock_pipeline_instance.run.return_value = {
@@ -89,16 +98,27 @@ class ChatRouteSessionResilienceTests(unittest.TestCase):
         request.is_disconnected = fake_is_disconnected
 
         async def run_test():
-            with patch("api.utils.auth.get_user_id_from_request", return_value="user-123"), \
-                 patch("api.routes.chat_stream.history_service") as mock_history, \
-                 patch("api.routes.chat_stream.RAGPipeline") as mock_rag:
-
-                mock_history.get_or_create_session.side_effect = RuntimeError("HANA down")
+            with (
+                patch(
+                    "api.utils.auth.get_user_id_from_request", return_value="user-123"
+                ),
+                patch("api.routes.chat_stream.history_service") as mock_history,
+                patch("api.routes.chat_stream.RAGPipeline") as mock_rag,
+            ):
+                mock_history.get_or_create_session.side_effect = RuntimeError(
+                    "HANA down"
+                )
                 mock_history.ensure_session_title.return_value = None
                 mock_pipeline_instance = MagicMock()
 
                 def fake_run_stream(msg, top_k, cb, history, stop):
-                    cb({"type": "stage", "stage": "intent_detection", "status": "completed"})
+                    cb(
+                        {
+                            "type": "stage",
+                            "stage": "intent_detection",
+                            "status": "completed",
+                        }
+                    )
                     return {"reply": "Stream reply", "sources": []}
 
                 mock_pipeline_instance.run_stream.side_effect = fake_run_stream
@@ -143,9 +163,10 @@ class GeneratorCancellationTests(unittest.TestCase):
         mock_resp.status_code = 200
         mock_resp.iter_lines = slow_iter_lines
 
-        with patch("requests.post", return_value=mock_resp), \
-             patch.object(gen, "generate") as mock_sync_generate:
-
+        with (
+            patch("requests.post", return_value=mock_resp),
+            patch.object(gen, "generate") as mock_sync_generate,
+        ):
             stream = gen.generate_stream("prompt", stop_event=stop_event)
 
             # Get first chunk

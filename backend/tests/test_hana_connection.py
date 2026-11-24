@@ -1,5 +1,5 @@
 """Unit tests for HANAConnectionManager connection pooling and capacity limits."""
-import os
+
 import sys
 import unittest
 from pathlib import Path
@@ -28,12 +28,15 @@ class HANAConnectionManagerTests(unittest.TestCase):
 
     def test_live_connections_limited_to_pool_size(self):
         """Live connections in use cannot exceed HANA_POOL_SIZE."""
-        with patch.object(conn_module.settings, "HANA_POOL_SIZE", 2), \
-             patch.object(conn_module, "HDBCLI_AVAILABLE", True):
+        with (
+            patch.object(conn_module.settings, "HANA_POOL_SIZE", 2),
+            patch.object(conn_module, "HDBCLI_AVAILABLE", True),
+        ):
             manager = HANAConnectionManager()
 
             # Mock _create_connection to return distinct mock connections
             created_conns = []
+
             def fake_create():
                 c = MagicMock()
                 cursor = MagicMock()
@@ -68,8 +71,10 @@ class HANAConnectionManagerTests(unittest.TestCase):
 
     def test_failed_connection_creation_releases_capacity_permit(self):
         """If _create_connection fails, the reserved permit is released immediately."""
-        with patch.object(conn_module.settings, "HANA_POOL_SIZE", 1), \
-             patch.object(conn_module, "HDBCLI_AVAILABLE", True):
+        with (
+            patch.object(conn_module.settings, "HANA_POOL_SIZE", 1),
+            patch.object(conn_module, "HDBCLI_AVAILABLE", True),
+        ):
             manager = HANAConnectionManager()
 
             # First create fails

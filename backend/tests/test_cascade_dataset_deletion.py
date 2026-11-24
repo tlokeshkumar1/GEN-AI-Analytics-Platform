@@ -1,4 +1,5 @@
 """Unit tests for comprehensive cascade dataset deletion across all storage layers."""
+
 import sys
 import tempfile
 import unittest
@@ -19,12 +20,14 @@ class CascadeDatasetDeletionTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
-        self.identity_token = current_identity.set({
-            "user_id": "test-admin",
-            "workspace_id": "default",
-            "roles": ["Admin"],
-            "role": "Admin",
-        })
+        self.identity_token = current_identity.set(
+            {
+                "user_id": "test-admin",
+                "workspace_id": "default",
+                "roles": ["Admin"],
+                "role": "Admin",
+            }
+        )
         self.addCleanup(lambda: current_identity.reset(self.identity_token))
 
     def test_hana_table_drop_safeguards_system_tables(self):
@@ -124,13 +127,23 @@ class CascadeDatasetDeletionTests(unittest.TestCase):
             self.assertIn("%:ds-target:%", params)
             self.assertIn('%"dataset_id": "ds-target"%', params)
 
-    @patch("api.platform.ai_settings.ai_settings", return_value={"llm_model": "test", "embedding_model": "test", "max_tokens": 1500, "temperature": 0.2})
+    @patch(
+        "api.platform.ai_settings.ai_settings",
+        return_value={
+            "llm_model": "test",
+            "embedding_model": "test",
+            "max_tokens": 1500,
+            "temperature": 0.2,
+        },
+    )
     def test_dataset_service_delete_coordinates_full_cascade(self, mock_ai):
         service = DatasetService(self.temp_dir.name, default_async_index=False)
         self.addCleanup(service.wait_for_idle)
 
-        with patch.object(service, "_prune_old_versions", return_value=None), \
-             patch.object(service, "_index", return_value=([], None)):
+        with (
+            patch.object(service, "_prune_old_versions", return_value=None),
+            patch.object(service, "_index", return_value=([], None)),
+        ):
             # Upload a dataset
             csv_bytes = b"ID,Product,Amount\n1,Alpha,100\n2,Beta,200\n"
             upload_res = service.upload(csv_bytes, "TestPurge.csv")
@@ -143,12 +156,28 @@ class CascadeDatasetDeletionTests(unittest.TestCase):
 
             # Mock HANA services and metadata store
             mock_store = MagicMock()
-            with patch("api.platform.store.metadata_store", return_value=mock_store), \
-                 patch("api.database.hana_table_service.hana_table_service.table_exists", return_value=True), \
-                 patch("api.database.hana_table_service.hana_table_service.drop_table", return_value={"success": True, "dropped": True, "table_name": f"DS_{folder[:18].upper()}_V1"}), \
-                 patch("api.platform.datasets_metadata_repository.datasets_metadata_repo.delete_dataset", return_value=True) as mock_ds_meta, \
-                 patch("api.database.vector_client.vector_client.delete_dataset") as mock_vec:
-
+            with (
+                patch("api.platform.store.metadata_store", return_value=mock_store),
+                patch(
+                    "api.database.hana_table_service.hana_table_service.table_exists",
+                    return_value=True,
+                ),
+                patch(
+                    "api.database.hana_table_service.hana_table_service.drop_table",
+                    return_value={
+                        "success": True,
+                        "dropped": True,
+                        "table_name": f"DS_{folder[:18].upper()}_V1",
+                    },
+                ),
+                patch(
+                    "api.platform.datasets_metadata_repository.datasets_metadata_repo.delete_dataset",
+                    return_value=True,
+                ) as mock_ds_meta,
+                patch(
+                    "api.database.vector_client.vector_client.delete_dataset"
+                ) as mock_vec,
+            ):
                 res = service.delete(dataset_id)
 
                 self.assertTrue(res["success"])

@@ -1,4 +1,5 @@
 """Semantic-only intent planning. Proposals are validated before any execution."""
+
 import json
 import re
 
@@ -29,37 +30,83 @@ def simple_semantic_plan(prompt, model):
     if not aliases:
         return None
     text = re.sub(r"\s+", " ", prompt.strip().casefold()).rstrip("?.!").strip()
-    names = "|".join(re.escape(name).replace(r"\ ", r"[\s_]+") for name in sorted(aliases, key=len, reverse=True))
+    names = "|".join(
+        re.escape(name).replace(r"\ ", r"[\s_]+")
+        for name in sorted(aliases, key=len, reverse=True)
+    )
     prefix = r"(?:(?:what is|whats|show me|show|calculate|give me)\s+)?(?:the\s+)?"
-    count = re.fullmatch(prefix + r"(?:count(?: of)?|how many|number of)\s+(?:rows|records)(?:\s+(?:by|per)\s+(?P<dimension>" + names + r"))?", text)
-    match = count or re.fullmatch(prefix + r"(?P<operation>count distinct|total|sum|average|avg|minimum|min|maximum|max|count)\s+(?:of\s+)?(?P<metric>" + names + r")(?:\s+(?:by|per)\s+(?P<dimension>" + names + r"))?", text)
+    count = re.fullmatch(
+        prefix
+        + r"(?:count(?: of)?|how many|number of)\s+(?:rows|records)(?:\s+(?:by|per)\s+(?P<dimension>"
+        + names
+        + r"))?",
+        text,
+    )
+    match = count or re.fullmatch(
+        prefix
+        + r"(?P<operation>count distinct|total|sum|average|avg|minimum|min|maximum|max|count)\s+(?:of\s+)?(?P<metric>"
+        + names
+        + r")(?:\s+(?:by|per)\s+(?P<dimension>"
+        + names
+        + r"))?",
+        text,
+    )
     if not match:
         return None
+
     def resolve(alias):
         candidates = aliases.get(re.sub(r"[\s_]+", " ", alias or ""), set())
         return next(iter(candidates)) if len(candidates) == 1 else None
+
     dimension = resolve(match.groupdict().get("dimension"))
     if match.groupdict().get("dimension") and not dimension:
         return None
     field_map = {field.name: field for field in model.fields}
-    if dimension and field_map[dimension].role not in ("dimension", "identifier", "time"):
+    if dimension and field_map[dimension].role not in (
+        "dimension",
+        "identifier",
+        "time",
+    ):
         return None
-    operation = "COUNT" if count else {
-        "total": "SUM", "sum": "SUM", "average": "AVG", "avg": "AVG",
-        "minimum": "MIN", "min": "MIN", "maximum": "MAX", "max": "MAX",
-        "count": "COUNT", "count distinct": "COUNT_DISTINCT",
-    }[match["operation"]]
+    operation = (
+        "COUNT"
+        if count
+        else {
+            "total": "SUM",
+            "sum": "SUM",
+            "average": "AVG",
+            "avg": "AVG",
+            "minimum": "MIN",
+            "min": "MIN",
+            "maximum": "MAX",
+            "max": "MAX",
+            "count": "COUNT",
+            "count distinct": "COUNT_DISTINCT",
+        }[match["operation"]]
+    )
     metric = "*" if count else resolve(match["metric"])
     if not metric:
         return None
     if metric != "*" and operation not in field_map[metric].aggregations:
-        raise HTTPException(422, f"{operation} is not approved for '{metric}'. Review the dataset semantic model.")
-    return QueryPlan(metric=metric, aggregation=operation, dimensions=[dimension] if dimension else []).model_dump(exclude_none=True, by_alias=True)
+        raise HTTPException(
+            422,
+            f"{operation} is not approved for '{metric}'. Review the dataset semantic model.",
+        )
+    return QueryPlan(
+        metric=metric,
+        aggregation=operation,
+        dimensions=[dimension] if dimension else [],
+    ).model_dump(exclude_none=True, by_alias=True)
 
 
 def classify_request(prompt):
     selection = current_selection.get()
-    model = semantic_registry.get(selection.entry, selection.context.version, selection.context.semantic_revision, approved=True)
+    model = semantic_registry.get(
+        selection.entry,
+        selection.context.version,
+        selection.context.semantic_revision,
+        approved=True,
+    )
     cache_key = (
         selection.context.dataset_id,
         selection.context.version,
@@ -74,19 +121,42 @@ def classify_request(prompt):
         return simple
     text = prompt.casefold()
 
-    numerical = bool(re.search(r"\b(total|sum|average|avg|count|how many|how much|top|bottom|highest|lowest|compare|chart|graph|plot|min|max|minimum|maximum|trend|trends|list|distinct)\b", text))
+    numerical = bool(
+        re.search(
+            r"\b(total|sum|average|avg|count|how many|how much|top|bottom|highest|lowest|compare|chart|graph|plot|min|max|minimum|maximum|trend|trends|list|distinct)\b",
+            text,
+        )
+    )
     if not re.search(r"\b(meaning|definition|describe|explain)\b", text):
-        numerical = numerical or any(f.role == "measure" and any(re.search(r"(?<!\w)" + re.escape(alias.casefold()) + r"(?!\w)", text) for alias in [f.name, f.semantic_name, *f.aliases]) for f in model.fields)
+        numerical = numerical or any(
+            f.role == "measure"
+            and any(
+                re.search(r"(?<!\w)" + re.escape(alias.casefold()) + r"(?!\w)", text)
+                for alias in [f.name, f.semantic_name, *f.aliases]
+            )
+            for f in model.fields
+        )
     if not numerical:
-        return QueryPlan(intent="chat", requires_structured_query=False, requires_vector_search=True).model_dump(exclude_none=True)
+        return QueryPlan(
+            intent="chat", requires_structured_query=False, requires_vector_search=True
+        ).model_dump(exclude_none=True)
     # Discover any joinable datasets dynamically in the current workspace
     from api.platform.join_service import join_service
+
     current_ds_id = selection.context.dataset_id
     join_edges = join_service.get_workspace_join_graph()
     joined_dims_map = {}  # dim_lower -> (c_name, edge, other_id)
     for edge in join_edges:
         if edge.get("joinable"):
-            other_id = edge["right_dataset_id"] if edge["left_dataset_id"] == current_ds_id else (edge["left_dataset_id"] if edge["right_dataset_id"] == current_ds_id else None)
+            other_id = (
+                edge["right_dataset_id"]
+                if edge["left_dataset_id"] == current_ds_id
+                else (
+                    edge["left_dataset_id"]
+                    if edge["right_dataset_id"] == current_ds_id
+                    else None
+                )
+            )
             if other_id:
                 for c in join_service.get_dataset_columns(other_id):
                     if c.get("role") in ("dimension", "identifier", "time"):
@@ -102,24 +172,36 @@ def classify_request(prompt):
                 joinable_other_ids.add(edge.get("left_dataset_id"))
 
     from api.services.dataset_service import dataset_service
+
     catalog = dataset_service._catalog()
     for ds_id, ds_entry in catalog.get("datasets", {}).items():
         if ds_id == current_ds_id or ds_id in joinable_other_ids:
             continue
         for c in join_service.get_dataset_columns(ds_id):
             c_name = c.get("name", "")
-            if not c_name or any(k.casefold() == c_name.casefold() for k in joined_dims_map):
+            if not c_name or any(
+                k.casefold() == c_name.casefold() for k in joined_dims_map
+            ):
                 continue
             c_pattern = re.escape(c_name.casefold()).replace("_", r"[\s_]+")
             if re.search(r"\b(by|per)\s+" + c_pattern, text):
-                raise HTTPException(422, f"The field '{c_name}' belongs to dataset '{ds_entry.get('name', ds_id)}' which cannot be joined with the active dataset because they do not share common keys or matching data.")
+                raise HTTPException(
+                    422,
+                    f"The field '{c_name}' belongs to dataset '{ds_entry.get('name', ds_id)}' which cannot be joined with the active dataset because they do not share common keys or matching data.",
+                )
 
     from api.config import settings
+
     if settings.NVIDIA_API_KEY:
         from api.services.ai_core_service import ai_core_service
         from api.services.intent_engine import intent_engine
+
         measures_names = [f.name for f in model.fields if f.role == "measure"]
-        dimensions_names = [f.name for f in model.fields if f.role in ("dimension", "identifier", "time")]
+        dimensions_names = [
+            f.name
+            for f in model.fields
+            if f.role in ("dimension", "identifier", "time")
+        ]
         instruction = (
             "You are a precise analytical query planner for enterprise business intelligence. Return ONLY a valid JSON object.\n"
             f"Dataset Domain: {model.domain}\n"
@@ -136,17 +218,24 @@ def classify_request(prompt):
             "- If the user asks for ranking, top/bottom items, use the matching metric from Approved Measures, appropriate dimension from Approved Dimensions, and limit=number requested or 5.\n"
             "- For trend requests explicitly asking for trends over time, select the primary metric, pair with the temporal dimension, and set chart_type='line'.\n"
             "- If the user asks to calculate or chart specific metrics by dimensions, return intent='analytical' or 'graph' with requires_structured_query=true.\n"
-            "- If the user asks a broad semantic question, overview, explanation, or general knowledge, return {\"intent\": \"chat\", \"requires_structured_query\": false}.\n"
+            '- If the user asks a broad semantic question, overview, explanation, or general knowledge, return {"intent": "chat", "requires_structured_query": false}.\n'
             "- Preserve every requested filter and date period; never silently drop a constraint. Omit filters/date_filter when none are requested.\n"
-            "- Do not guess a field, business definition, comparison period or join. Return {\"clarification\": \"specific question\"} if the request is ambiguous.\n"
+            '- Do not guess a field, business definition, comparison period or join. Return {"clarification": "specific question"} if the request is ambiguous.\n'
             "- For a distinct-value listing, group by the requested approved dimension and count records. Do not substitute a different dimension.\n"
             f"User request: {prompt}"
         )
         response = ai_core_service.generate_nvidia_completion(instruction)
         proposal = intent_engine._parse_json_response(response)
         if proposal and proposal.get("intent") == "chat":
-            raise HTTPException(422, "Specify the metric, aggregation and any filters to calculate. I could not resolve an analytical plan for this question.")
-        if proposal and "measures" in proposal and isinstance(proposal["measures"], list):
+            raise HTTPException(
+                422,
+                "Specify the metric, aggregation and any filters to calculate. I could not resolve an analytical plan for this question.",
+            )
+        if (
+            proposal
+            and "measures" in proposal
+            and isinstance(proposal["measures"], list)
+        ):
             for m in proposal["measures"]:
                 if isinstance(m, dict) and "metric" in m and "field" not in m:
                     m["field"] = m.pop("metric")
@@ -160,16 +249,38 @@ def classify_request(prompt):
         try:
             plan = QueryPlan.model_validate(proposal)
         except Exception:
-            raise HTTPException(422, "The proposed calculation was invalid. Specify the metric, aggregation and any filters.") from None
-        if plan.intent == "chat" or not plan.measures or not plan.requires_structured_query:
-            raise HTTPException(422, "Specify which metric and aggregation you want to calculate.")
-        constraints = json.dumps({"filters": proposal.get("filters"), "date_filter": proposal.get("date_filter"),
-                                  "comparison": proposal.get("comparison")})
+            raise HTTPException(
+                422,
+                "The proposed calculation was invalid. Specify the metric, aggregation and any filters.",
+            ) from None
+        if (
+            plan.intent == "chat"
+            or not plan.measures
+            or not plan.requires_structured_query
+        ):
+            raise HTTPException(
+                422, "Specify which metric and aggregation you want to calculate."
+            )
+        constraints = json.dumps(
+            {
+                "filters": proposal.get("filters"),
+                "date_filter": proposal.get("date_filter"),
+                "comparison": proposal.get("comparison"),
+            }
+        )
         requested_years = set(re.findall(r"\b(?:19|20)\d{2}\b", text))
         if requested_years - set(re.findall(r"\b(?:19|20)\d{2}\b", constraints)):
-            raise HTTPException(422, "The calculation plan did not preserve the requested year. Specify the date field and period explicitly.")
-        if re.search(r"\bwhere\b", text) and not (plan.filters or plan.date_filter or plan.comparison):
-            raise HTTPException(422, "The calculation plan did not preserve the requested filter. Specify the field and value explicitly.")
+            raise HTTPException(
+                422,
+                "The calculation plan did not preserve the requested year. Specify the date field and period explicitly.",
+            )
+        if re.search(r"\bwhere\b", text) and not (
+            plan.filters or plan.date_filter or plan.comparison
+        ):
+            raise HTTPException(
+                422,
+                "The calculation plan did not preserve the requested filter. Specify the field and value explicitly.",
+            )
         out = plan.model_dump(exclude_none=True, by_alias=True)
         with _INTENT_CACHE_LOCK:
             if len(_INTENT_CACHE) > 200:
@@ -180,10 +291,18 @@ def classify_request(prompt):
     matched = []
     for field in model.fields:
         aliases = [field.name, field.semantic_name, *field.aliases]
-        if any(re.search(r"(?<!\w)" + re.escape(alias.casefold()) + r"(?!\w)", text) for alias in aliases):
+        if any(
+            re.search(r"(?<!\w)" + re.escape(alias.casefold()) + r"(?!\w)", text)
+            for alias in aliases
+        ):
             matched.append(field)
     measures = [f for f in matched if f.role == "measure"]
-    dimensions = [f for f in matched if f.role in ("dimension", "identifier", "time") and re.search(r"\b(by|per)\s+" + re.escape(f.name.casefold()), text)]
+    dimensions = [
+        f
+        for f in matched
+        if f.role in ("dimension", "identifier", "time")
+        and re.search(r"\b(by|per)\s+" + re.escape(f.name.casefold()), text)
+    ]
     selected_dims = [f.name for f in dimensions]
     joined_joins = []
 
@@ -191,20 +310,26 @@ def classify_request(prompt):
     if not selected_dims and joined_dims_map:
         for raw_name, (actual_name, edge, other_id) in joined_dims_map.items():
             pattern = re.escape(raw_name.casefold()).replace("_", r"[\s_]+")
-            if re.search(r"\b(by|per)\s+" + pattern, text) or re.search(r"(?<!\w)" + pattern + r"(?!\w)", text):
+            if re.search(r"\b(by|per)\s+" + pattern, text) or re.search(
+                r"(?<!\w)" + pattern + r"(?!\w)", text
+            ):
                 from api.models.query_plan import Join
+
                 selected_dims.append(actual_name)
-                joined_joins.append(Join(
-                    right_dataset_id=other_id,
-                    left_key=edge["left_key"],
-                    right_key=edge["right_key"],
-                    how="left"
-                ))
+                joined_joins.append(
+                    Join(
+                        right_dataset_id=other_id,
+                        left_key=edge["left_key"],
+                        right_key=edge["right_key"],
+                        how="left",
+                    )
+                )
                 break
 
     # If still not found, check if user requested a field from an unjoinable dataset
     if not selected_dims:
         from api.services.dataset_service import dataset_service
+
         catalog = dataset_service._catalog()
         for ds_id, ds_entry in catalog.get("datasets", {}).items():
             if ds_id == current_ds_id:
@@ -213,30 +338,65 @@ def classify_request(prompt):
             for c in cols:
                 c_name = c["name"]
                 c_pattern = re.sub(r"[_\\s]+", r"[\\s_]+", re.escape(c_name.casefold()))
-                if re.search(r"\b(by|per)\s+" + c_pattern, text) or re.search(r"(?<!\w)" + c_pattern + r"(?!\w)", text):
-                    is_joinable = any(e.get("joinable") and (e["right_dataset_id"] == ds_id or e["left_dataset_id"] == ds_id) for e in join_edges)
+                if re.search(r"\b(by|per)\s+" + c_pattern, text) or re.search(
+                    r"(?<!\w)" + c_pattern + r"(?!\w)", text
+                ):
+                    is_joinable = any(
+                        e.get("joinable")
+                        and (
+                            e["right_dataset_id"] == ds_id
+                            or e["left_dataset_id"] == ds_id
+                        )
+                        for e in join_edges
+                    )
                     if not is_joinable:
-                        raise HTTPException(422, f"The field '{c_name}' belongs to dataset '{ds_entry.get('name', ds_id)}' which cannot be joined with the active dataset because they do not share common keys or matching data.")
+                        raise HTTPException(
+                            422,
+                            f"The field '{c_name}' belongs to dataset '{ds_entry.get('name', ds_id)}' which cannot be joined with the active dataset because they do not share common keys or matching data.",
+                        )
 
     aggregation = None
-    for pattern, agg in [(r"count distinct|unique", "COUNT_DISTINCT"), (r"\b(count|how many)\b", "COUNT"),
-                         (r"\b(average|avg)\b", "AVG"), (r"\b(minimum|min|lowest)\b", "MIN"),
-                         (r"\b(maximum|max|highest)\b", "MAX"), (r"\b(total|sum)\b", "SUM")]:
+    for pattern, agg in [
+        (r"count distinct|unique", "COUNT_DISTINCT"),
+        (r"\b(count|how many)\b", "COUNT"),
+        (r"\b(average|avg)\b", "AVG"),
+        (r"\b(minimum|min|lowest)\b", "MIN"),
+        (r"\b(maximum|max|highest)\b", "MAX"),
+        (r"\b(total|sum)\b", "SUM"),
+    ]:
         if re.search(pattern, text):
             aggregation = agg
             break
     metric = measures[0].name if len(measures) == 1 else None
     if aggregation in ("COUNT", "COUNT_DISTINCT"):
         targets = [f for f in matched if f not in dimensions]
-        metric = targets[0].name if len(targets) == 1 else "*" if re.search(r"\b(rows|records)\b", text) else None
+        metric = (
+            targets[0].name
+            if len(targets) == 1
+            else "*"
+            if re.search(r"\b(rows|records)\b", text)
+            else None
+        )
     if metric is None:
-        raise HTTPException(422, "Specify one approved metric or use 'count records'. Multiple or missing metrics require clarification.")
+        raise HTTPException(
+            422,
+            "Specify one approved metric or use 'count records'. Multiple or missing metrics require clarification.",
+        )
     if not aggregation:
-        aggregation = next((f.default_aggregation for f in model.fields if f.name == metric), None)
+        aggregation = next(
+            (f.default_aggregation for f in model.fields if f.name == metric), None
+        )
     if not aggregation:
-        raise HTTPException(422, "Specify an aggregation or approve a default for this metric.")
-    if re.search(r"\b(where|between|during|since|until|for|in|compare|versus|vs)\b", text):
-        raise HTTPException(422, "This request needs an explicit filtered query plan. Configure AI planning or use the structured editor.")
+        raise HTTPException(
+            422, "Specify an aggregation or approve a default for this metric."
+        )
+    if re.search(
+        r"\b(where|between|during|since|until|for|in|compare|versus|vs)\b", text
+    ):
+        raise HTTPException(
+            422,
+            "This request needs an explicit filtered query plan. Configure AI planning or use the structured editor.",
+        )
     out = QueryPlan(
         intent="graph" if re.search(r"\b(chart|plot|graph)\b", text) else "analytical",
         left_dataset_id=current_ds_id if joined_joins else None,

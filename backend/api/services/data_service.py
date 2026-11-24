@@ -1,14 +1,14 @@
 """
 Data Service for reading KPIs from preprocessed Excel file with session caching.
 """
-import os
+
 import re
 import pandas as pd
-from pathlib import Path
 from typing import Dict, Any, List, Optional
 from api.utils.logger import get_logger
 
 logger = get_logger("services.data_service")
+
 
 class CaseInsensitiveRecord(dict):
     """
@@ -16,6 +16,7 @@ class CaseInsensitiveRecord(dict):
     (e.g., 'RecordName', 'RECORDNAME', 'record_name', 'recordname' all resolve).
     Derives attributes dynamically from data without hardcoded column dictionaries.
     """
+
     def __init__(self, data=None):
         super().__init__()
         self._lookup = {}
@@ -26,7 +27,7 @@ class CaseInsensitiveRecord(dict):
     def _norm(self, key):
         if not isinstance(key, str):
             return key
-        return re.sub(r'[\s_\-]+', '', key).lower()
+        return re.sub(r"[\s_\-]+", "", key).lower()
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
@@ -52,51 +53,60 @@ class CaseInsensitiveRecord(dict):
 
 class DataService:
     """Service to load and cache data from preprocessed Excel file."""
-    
+
     _instance = None
     _cache = None
     _df = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(DataService, cls).__new__(cls)
         return cls._instance
-    
+
     def __init__(self):
         # Importing a router must not read application data or create cache files.
         pass
-    
+
     def _load_data(self):
         """Load schema sample dynamically from active dataset or SAP HANA Cloud."""
         try:
             from api.platform.datasets_metadata_repository import datasets_metadata_repo
             from api.models.execution_context import current_selection
+
             sel = current_selection.get()
             hint = None
             if sel and getattr(sel, "entry", None):
                 hint = sel.entry.get("physical_table_name") or sel.entry.get("name")
             target_table = datasets_metadata_repo._resolve_physical_table(hint)
             from api.database.hana_client import hana_client
-            rows = hana_client.execute_query(f'SELECT * FROM "{target_table}"', native_types=True)
+
+            rows = hana_client.execute_query(
+                f'SELECT * FROM "{target_table}"', native_types=True
+            )
             if rows:
                 self._df = pd.DataFrame(rows)
-                logger.info(f"Schema sample loaded directly from SAP HANA Cloud {target_table}. Shape: {self._df.shape}")
+                logger.info(
+                    f"Schema sample loaded directly from SAP HANA Cloud {target_table}. Shape: {self._df.shape}"
+                )
             else:
                 self._df = pd.DataFrame()
         except Exception as e:
             logger.error(f"Error loading schema from SAP HANA Cloud: {e}")
             self._df = pd.DataFrame()
-    
+
     def get_dataframe(self) -> pd.DataFrame:
         """Get the dataset dataframe with canonical column naming."""
         from api.services.excel_dataset_service import excel_dataset_service
+
         current = excel_dataset_service.get_df()
         from api.models.execution_context import current_selection
+
         if current_selection.get() is not None:
             return current
         if current is None or current.empty:
             from api.services.dataset_service import dataset_service
             from api.platform.data_resolution import dataset_frame
+
             entry, snapshot = dataset_service.active()
             if entry is not None and snapshot is not None:
                 return dataset_frame(entry, snapshot, entry["currentVersion"])
@@ -104,24 +114,34 @@ class DataService:
             if current is not self._df:
                 self._df = current
                 from api.services.schema_service import schema_service
+
                 schema_service.refresh(current)
             return self._df
         if self._df is None or self._df.empty:
             self._load_data()
             if self._df is not None and not self._df.empty:
                 from api.services.schema_service import schema_service
+
                 schema_service.refresh(self._df)
         return self._df if self._df is not None else pd.DataFrame()
-    
+
     def _resolve_target_table(self, table_name: Optional[str] = None) -> Optional[str]:
         from api.platform.datasets_metadata_repository import datasets_metadata_repo
         from api.models.execution_context import current_selection
+
         sel = current_selection.get()
         if sel:
             from api.platform.data_resolution import current_table
+
             if current_table(sel.entry, sel.context.version) is None:
                 return None
-        hint = table_name or (sel.entry.get("physical_table_name") or sel.entry.get("tableName") or sel.entry.get("name") if sel and sel.entry else None)
+        hint = table_name or (
+            sel.entry.get("physical_table_name")
+            or sel.entry.get("tableName")
+            or sel.entry.get("name")
+            if sel and sel.entry
+            else None
+        )
         return datasets_metadata_repo._resolve_physical_table(hint)
 
     @staticmethod
@@ -131,9 +151,20 @@ class DataService:
     def _introspect_hana_table(self, target_table: str) -> Dict[str, List[str]]:
         """Classify a HANA table's columns dynamically without hardcoded column names."""
         from api.database.hana_table_service import hana_table_service
+
         cols = hana_table_service.get_table_columns(target_table) or []
         measures, dimensions, temporal, identifiers = [], [], [], []
-        numeric_types = {"INTEGER", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "DOUBLE", "REAL", "FLOAT", "SMALLDECIMAL"}
+        numeric_types = {
+            "INTEGER",
+            "BIGINT",
+            "SMALLINT",
+            "TINYINT",
+            "DECIMAL",
+            "DOUBLE",
+            "REAL",
+            "FLOAT",
+            "SMALLDECIMAL",
+        }
         date_types = {"DATE", "TIME", "TIMESTAMP", "SECONDDATE"}
 
         for col in cols:
@@ -142,8 +173,17 @@ class DataService:
             low = name.lower()
             if not name:
                 continue
-            is_id = bool(re.search(r"(?:^|_)(?:id|code|key|uuid|guid|num|no)$", low) or re.search(r"[a-z](?:Id|ID|Key|Code|Num|No)$", name))
-            is_date = dtype in date_types or (any(t in low for t in ("date", "month", "quarter", "year", "period", "time")) and not any(d in low for d in ("duration", "latency", "uptime")))
+            is_id = bool(
+                re.search(r"(?:^|_)(?:id|code|key|uuid|guid|num|no)$", low)
+                or re.search(r"[a-z](?:Id|ID|Key|Code|Num|No)$", name)
+            )
+            is_date = dtype in date_types or (
+                any(
+                    t in low
+                    for t in ("date", "month", "quarter", "year", "period", "time")
+                )
+                and not any(d in low for d in ("duration", "latency", "uptime"))
+            )
             if is_id:
                 identifiers.append(name)
             elif is_date:
@@ -166,14 +206,20 @@ class DataService:
         try:
             df = self.get_dataframe()
             if df is not None and not df.empty:
-                nums = df.select_dtypes(include=['number']).columns.tolist()
-                measures = [c for c in nums if not re.search(r'(?:^|_)(?:id|code|key)$', c.lower())]
+                nums = df.select_dtypes(include=["number"]).columns.tolist()
+                measures = [
+                    c
+                    for c in nums
+                    if not re.search(r"(?:^|_)(?:id|code|key)$", c.lower())
+                ]
                 m1 = measures[0] if measures else (nums[0] if nums else None)
                 m2 = measures[1] if len(measures) > 1 else None
                 m1_val = round(float(df[m1].sum()), 2) if m1 else 0.0
                 m2_val = round(float(df[m2].sum()), 2) if m2 else float(len(df))
                 avg_val = round(float(df[m1].mean()), 2) if m1 else 0.0
-                cat_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
+                cat_cols = df.select_dtypes(
+                    include=["object", "string"]
+                ).columns.tolist()
                 dim_count = int(df[cat_cols[0]].nunique()) if cat_cols else len(df)
                 return {
                     "total_revenue": m1_val,
@@ -186,20 +232,30 @@ class DataService:
 
         try:
             from api.database.hana_client import hana_client
+
             target_table = self._resolve_target_table()
             if not target_table:
-                return {"total_revenue": 0, "total_quantity": 0, "avg_margin": 0, "country_count": 0}
+                return {
+                    "total_revenue": 0,
+                    "total_quantity": 0,
+                    "avg_margin": 0,
+                    "country_count": 0,
+                }
             schema = self._introspect_hana_table(target_table)
             m1 = schema["measures"][0] if schema["measures"] else None
             m2 = schema["measures"][1] if len(schema["measures"]) > 1 else None
-            d1 = schema["dimensions"][0] if schema["dimensions"] else (schema["identifiers"][0] if schema["identifiers"] else None)
+            d1 = (
+                schema["dimensions"][0]
+                if schema["dimensions"]
+                else (schema["identifiers"][0] if schema["identifiers"] else None)
+            )
 
             m1_expr = f"ROUND(SUM({self._quote_ident(m1)}), 2)" if m1 else "COUNT(*)"
             m2_expr = f"SUM({self._quote_ident(m2)})" if m2 else "COUNT(*)"
             avg_expr = f"ROUND(AVG({self._quote_ident(m1)}), 2)" if m1 else "0"
             d1_expr = f"COUNT(DISTINCT {self._quote_ident(d1)})" if d1 else "COUNT(*)"
 
-            sql = f'SELECT {m1_expr} AS M1, {m2_expr} AS M2, {avg_expr} AS M_AVG, {d1_expr} AS D1 FROM {self._quote_ident(target_table)}'
+            sql = f"SELECT {m1_expr} AS M1, {m2_expr} AS M2, {avg_expr} AS M_AVG, {d1_expr} AS D1 FROM {self._quote_ident(target_table)}"
             rows = hana_client.execute_query(sql)
             if rows:
                 r = rows[0]
@@ -211,15 +267,31 @@ class DataService:
                 }
         except Exception as e:
             logger.error(f"Error calculating KPIs in SAP HANA Cloud: {e}")
-        return {"total_revenue": 0, "total_quantity": 0, "avg_margin": 0, "country_count": 0}
+        return {
+            "total_revenue": 0,
+            "total_quantity": 0,
+            "avg_margin": 0,
+            "country_count": 0,
+        }
 
     def get_revenue_trend(self) -> List[Dict[str, Any]]:
         """Get trend dynamically from active dataset or SAP HANA Cloud."""
         try:
             df = self.get_dataframe()
             if df is not None and not df.empty:
-                date_cols = [c for c in df.columns if any(k in str(c).lower() for k in ["date", "month", "year", "time", "period"])]
-                nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+                date_cols = [
+                    c
+                    for c in df.columns
+                    if any(
+                        k in str(c).lower()
+                        for k in ["date", "month", "year", "time", "period"]
+                    )
+                ]
+                nums = [
+                    c
+                    for c in df.select_dtypes(include=["number"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
                 if date_cols and nums:
                     t_col, m_col = date_cols[0], nums[0]
                     second_col = nums[1] if len(nums) > 1 else None
@@ -227,21 +299,35 @@ class DataService:
                     if second_col and second_col != m_col:
                         agg_dict[second_col] = "sum"
                     grouped = df.groupby(t_col).agg(agg_dict).reset_index().head(12)
-                    return [{
-                        "month": str(r[t_col]),
-                        "revenue": round(float(r[m_col]), 2),
-                        "profit": round(float(r[second_col]), 2) if (second_col and second_col in r and pd.notna(r[second_col])) else None,
-                    } for _, r in grouped.iterrows()]
+                    return [
+                        {
+                            "month": str(r[t_col]),
+                            "revenue": round(float(r[m_col]), 2),
+                            "profit": round(float(r[second_col]), 2)
+                            if (
+                                second_col
+                                and second_col in r
+                                and pd.notna(r[second_col])
+                            )
+                            else None,
+                        }
+                        for _, r in grouped.iterrows()
+                    ]
         except Exception as exc:
             logger.debug(f"Dynamic trend DataFrame check: {exc}")
 
         try:
             from api.database.hana_client import hana_client
+
             target_table = self._resolve_target_table()
             if not target_table:
                 return []
             schema = self._introspect_hana_table(target_table)
-            t_col = schema["temporal"][0] if schema["temporal"] else (schema["dimensions"][0] if schema["dimensions"] else None)
+            t_col = (
+                schema["temporal"][0]
+                if schema["temporal"]
+                else (schema["dimensions"][0] if schema["dimensions"] else None)
+            )
             m1 = schema["measures"][0] if schema["measures"] else None
             m2 = schema["measures"][1] if len(schema["measures"]) > 1 else None
             if not t_col:
@@ -249,20 +335,26 @@ class DataService:
             t_q = self._quote_ident(t_col)
             m1_expr = f"ROUND(SUM({self._quote_ident(m1)}), 2)" if m1 else "COUNT(*)"
             m2_expr = f", ROUND(SUM({self._quote_ident(m2)}), 2) AS M2" if m2 else ""
-            sql = f'SELECT {t_q} AS PERIOD_VAL, {m1_expr} AS M1{m2_expr} FROM {self._quote_ident(target_table)} WHERE {t_q} IS NOT NULL GROUP BY {t_q} ORDER BY {t_q} LIMIT 24'
+            sql = f"SELECT {t_q} AS PERIOD_VAL, {m1_expr} AS M1{m2_expr} FROM {self._quote_ident(target_table)} WHERE {t_q} IS NOT NULL GROUP BY {t_q} ORDER BY {t_q} LIMIT 24"
             rows = hana_client.execute_query(sql)
             if rows:
-                return [{
-                    "month": str(r.get("PERIOD_VAL")),
-                    "revenue": float(r.get("M1") or 0),
-                    "profit": float(r.get("M2") or 0) if m2 else None,
-                } for r in rows]
+                return [
+                    {
+                        "month": str(r.get("PERIOD_VAL")),
+                        "revenue": float(r.get("M1") or 0),
+                        "profit": float(r.get("M2") or 0) if m2 else None,
+                    }
+                    for r in rows
+                ]
         except Exception as e:
             logger.error(f"Error getting trend in SAP HANA Cloud: {e}")
         return []
 
-    def _hana_dimension_breakdown(self, dim_index: int = 0, limit: int = 10) -> List[Dict[str, Any]]:
+    def _hana_dimension_breakdown(
+        self, dim_index: int = 0, limit: int = 10
+    ) -> List[Dict[str, Any]]:
         from api.database.hana_client import hana_client
+
         target_table = self._resolve_target_table()
         if not target_table:
             return []
@@ -274,7 +366,7 @@ class DataService:
         m1 = schema["measures"][0] if schema["measures"] else None
         dim_q = self._quote_ident(dim)
         m1_expr = f"ROUND(SUM({self._quote_ident(m1)}), 2)" if m1 else "COUNT(*)"
-        sql = f'SELECT {dim_q} AS DIM_VAL, {m1_expr} AS MEAS_VAL FROM {self._quote_ident(target_table)} WHERE {dim_q} IS NOT NULL GROUP BY {dim_q} ORDER BY MEAS_VAL DESC LIMIT {int(limit)}'
+        sql = f"SELECT {dim_q} AS DIM_VAL, {m1_expr} AS MEAS_VAL FROM {self._quote_ident(target_table)} WHERE {dim_q} IS NOT NULL GROUP BY {dim_q} ORDER BY MEAS_VAL DESC LIMIT {int(limit)}"
         return hana_client.execute_query(sql) or []
 
     def get_region_breakdown(self) -> List[Dict[str, Any]]:
@@ -282,18 +374,37 @@ class DataService:
         try:
             df = self.get_dataframe()
             if df is not None and not df.empty:
-                cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+                cats = [
+                    c
+                    for c in df.select_dtypes(include=["object", "string"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
+                nums = [
+                    c
+                    for c in df.select_dtypes(include=["number"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
                 dim = cats[0] if cats else None
                 meas = nums[0] if nums else None
                 if dim and meas:
-                    grouped = df.groupby(dim)[meas].sum().reset_index().sort_values(by=meas, ascending=False).head(10)
+                    grouped = (
+                        df.groupby(dim)[meas]
+                        .sum()
+                        .reset_index()
+                        .sort_values(by=meas, ascending=False)
+                        .head(10)
+                    )
                     total_val = float(grouped[meas].sum())
-                    return [{
-                        "region": str(r[dim]),
-                        "revenue": round(float(r[meas]), 2),
-                        "share": round((float(r[meas]) / total_val * 100.0), 1) if total_val > 0 else 0.0,
-                    } for _, r in grouped.iterrows()]
+                    return [
+                        {
+                            "region": str(r[dim]),
+                            "revenue": round(float(r[meas]), 2),
+                            "share": round((float(r[meas]) / total_val * 100.0), 1)
+                            if total_val > 0
+                            else 0.0,
+                        }
+                        for _, r in grouped.iterrows()
+                    ]
         except Exception as exc:
             logger.debug(f"Dynamic primary breakdown dataframe check: {exc}")
 
@@ -301,11 +412,18 @@ class DataService:
             rows = self._hana_dimension_breakdown(dim_index=0, limit=10)
             if rows:
                 total_val = sum(float(r.get("MEAS_VAL") or 0) for r in rows)
-                return [{
-                    "region": str(r.get("DIM_VAL")),
-                    "revenue": float(r.get("MEAS_VAL") or 0),
-                    "share": round((float(r.get("MEAS_VAL") or 0) / total_val * 100.0), 1) if total_val > 0 else 0.0,
-                } for r in rows]
+                return [
+                    {
+                        "region": str(r.get("DIM_VAL")),
+                        "revenue": float(r.get("MEAS_VAL") or 0),
+                        "share": round(
+                            (float(r.get("MEAS_VAL") or 0) / total_val * 100.0), 1
+                        )
+                        if total_val > 0
+                        else 0.0,
+                    }
+                    for r in rows
+                ]
         except Exception as e:
             logger.error(f"Error getting primary breakdown in SAP HANA Cloud: {e}")
         return []
@@ -315,20 +433,43 @@ class DataService:
         try:
             df = self.get_dataframe()
             if df is not None and not df.empty:
-                cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+                cats = [
+                    c
+                    for c in df.select_dtypes(include=["object", "string"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
+                nums = [
+                    c
+                    for c in df.select_dtypes(include=["number"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
                 dim = cats[1] if len(cats) > 1 else (cats[0] if cats else None)
                 meas = nums[0] if nums else None
                 if dim and meas:
-                    grouped = df.groupby(dim)[meas].sum().reset_index().sort_values(by=meas, ascending=False).head(10)
-                    return [{"country": str(r[dim]), "revenue": round(float(r[meas]), 2)} for _, r in grouped.iterrows()]
+                    grouped = (
+                        df.groupby(dim)[meas]
+                        .sum()
+                        .reset_index()
+                        .sort_values(by=meas, ascending=False)
+                        .head(10)
+                    )
+                    return [
+                        {"country": str(r[dim]), "revenue": round(float(r[meas]), 2)}
+                        for _, r in grouped.iterrows()
+                    ]
         except Exception as exc:
             logger.debug(f"Dynamic secondary breakdown dataframe check: {exc}")
 
         try:
             rows = self._hana_dimension_breakdown(dim_index=1, limit=10)
             if rows:
-                return [{"country": str(r.get("DIM_VAL")), "revenue": float(r.get("MEAS_VAL") or 0)} for r in rows]
+                return [
+                    {
+                        "country": str(r.get("DIM_VAL")),
+                        "revenue": float(r.get("MEAS_VAL") or 0),
+                    }
+                    for r in rows
+                ]
         except Exception as e:
             logger.error(f"Error getting secondary breakdown in SAP HANA Cloud: {e}")
         return []
@@ -338,20 +479,46 @@ class DataService:
         try:
             df = self.get_dataframe()
             if df is not None and not df.empty:
-                cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+                cats = [
+                    c
+                    for c in df.select_dtypes(include=["object", "string"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
+                nums = [
+                    c
+                    for c in df.select_dtypes(include=["number"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
                 if cats and nums:
                     cat_col = cats[2] if len(cats) > 2 else cats[0]
                     m_col = nums[0]
-                    grouped = df.groupby(cat_col)[m_col].sum().reset_index().sort_values(by=m_col, ascending=False).head(8)
-                    return [{"category": str(r[cat_col]), "revenue": round(float(r[m_col]), 2)} for _, r in grouped.iterrows()]
+                    grouped = (
+                        df.groupby(cat_col)[m_col]
+                        .sum()
+                        .reset_index()
+                        .sort_values(by=m_col, ascending=False)
+                        .head(8)
+                    )
+                    return [
+                        {
+                            "category": str(r[cat_col]),
+                            "revenue": round(float(r[m_col]), 2),
+                        }
+                        for _, r in grouped.iterrows()
+                    ]
         except Exception as exc:
             logger.debug(f"Dynamic tertiary breakdown check: {exc}")
 
         try:
             rows = self._hana_dimension_breakdown(dim_index=2, limit=8)
             if rows:
-                return [{"category": str(r.get("DIM_VAL")), "revenue": float(r.get("MEAS_VAL") or 0)} for r in rows]
+                return [
+                    {
+                        "category": str(r.get("DIM_VAL")),
+                        "revenue": float(r.get("MEAS_VAL") or 0),
+                    }
+                    for r in rows
+                ]
         except Exception as e:
             logger.error(f"Error getting tertiary breakdown in SAP HANA Cloud: {e}")
         return []
@@ -361,21 +528,36 @@ class DataService:
         try:
             df = self.get_dataframe()
             if df is not None and not df.empty:
-                q_cols = [c for c in df.columns if any(k in str(c).lower() for k in ["quarter", "qtr", "period", "month", "year", "date"])]
-                nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+                q_cols = [
+                    c
+                    for c in df.columns
+                    if any(
+                        k in str(c).lower()
+                        for k in ["quarter", "qtr", "period", "month", "year", "date"]
+                    )
+                ]
+                nums = [
+                    c
+                    for c in df.select_dtypes(include=["number"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
                 if q_cols and nums:
                     t_col, m_col = q_cols[0], nums[0]
                     grouped = df.groupby(t_col)[m_col].sum().reset_index().head(8)
-                    return [{
-                        "quarter_label": str(r[t_col]),
-                        "actual": round(float(r[m_col]), 2),
-                        "target": round(float(r[m_col]) * 0.9, 0),
-                    } for _, r in grouped.iterrows()]
+                    return [
+                        {
+                            "quarter_label": str(r[t_col]),
+                            "actual": round(float(r[m_col]), 2),
+                            "target": round(float(r[m_col]) * 0.9, 0),
+                        }
+                        for _, r in grouped.iterrows()
+                    ]
         except Exception as exc:
             logger.debug(f"Dynamic periodic performance fallback: {exc}")
 
         try:
             from api.database.hana_client import hana_client
+
             target_table = self._resolve_target_table()
             if not target_table:
                 return []
@@ -386,14 +568,17 @@ class DataService:
                 return []
             t_q = self._quote_ident(t_col)
             m1_expr = f"ROUND(SUM({self._quote_ident(m1)}), 2)" if m1 else "COUNT(*)"
-            sql = f'SELECT {t_q} AS P_LABEL, {m1_expr} AS ACTUAL FROM {self._quote_ident(target_table)} WHERE {t_q} IS NOT NULL GROUP BY {t_q} ORDER BY {t_q} LIMIT 8'
+            sql = f"SELECT {t_q} AS P_LABEL, {m1_expr} AS ACTUAL FROM {self._quote_ident(target_table)} WHERE {t_q} IS NOT NULL GROUP BY {t_q} ORDER BY {t_q} LIMIT 8"
             rows = hana_client.execute_query(sql)
             if rows:
-                return [{
-                    "quarter_label": str(r.get("P_LABEL")),
-                    "actual": float(r.get("ACTUAL") or 0),
-                    "target": round(float(r.get("ACTUAL") or 0) * 0.9, 0),
-                } for r in rows]
+                return [
+                    {
+                        "quarter_label": str(r.get("P_LABEL")),
+                        "actual": float(r.get("ACTUAL") or 0),
+                        "target": round(float(r.get("ACTUAL") or 0) * 0.9, 0),
+                    }
+                    for r in rows
+                ]
         except Exception as e:
             logger.error(f"Error getting periodic performance in SAP HANA Cloud: {e}")
         return []
@@ -404,27 +589,51 @@ class DataService:
         try:
             df = self.get_dataframe()
             if df is not None and not df.empty:
-                cats = [c for c in df.select_dtypes(include=['object', 'string']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
-                nums = [c for c in df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+                cats = [
+                    c
+                    for c in df.select_dtypes(include=["object", "string"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
+                nums = [
+                    c
+                    for c in df.select_dtypes(include=["number"]).columns
+                    if not str(c).lower().endswith(("id", "code", "key"))
+                ]
                 if cats and nums:
                     cat_col, m_col = cats[0], nums[0]
                     u_col = nums[1] if len(nums) > 1 else None
-                    grouped = df.groupby(cat_col)[m_col].sum().reset_index().sort_values(by=m_col, ascending=False).head(lim)
-                    return [{
-                        "product": str(r[cat_col]),
-                        "units": int(df[df[cat_col] == r[cat_col]][u_col].sum()) if u_col else int(len(df[df[cat_col] == r[cat_col]])),
-                        "revenue": round(float(r[m_col]), 2),
-                    } for _, r in grouped.iterrows()]
+                    grouped = (
+                        df.groupby(cat_col)[m_col]
+                        .sum()
+                        .reset_index()
+                        .sort_values(by=m_col, ascending=False)
+                        .head(lim)
+                    )
+                    return [
+                        {
+                            "product": str(r[cat_col]),
+                            "units": int(df[df[cat_col] == r[cat_col]][u_col].sum())
+                            if u_col
+                            else int(len(df[df[cat_col] == r[cat_col]])),
+                            "revenue": round(float(r[m_col]), 2),
+                        }
+                        for _, r in grouped.iterrows()
+                    ]
         except Exception as exc:
             logger.debug(f"Dynamic top items fallback: {exc}")
 
         try:
             from api.database.hana_client import hana_client
+
             target_table = self._resolve_target_table()
             if not target_table:
                 return []
             schema = self._introspect_hana_table(target_table)
-            d1 = schema["dimensions"][0] if schema["dimensions"] else (schema["identifiers"][0] if schema["identifiers"] else None)
+            d1 = (
+                schema["dimensions"][0]
+                if schema["dimensions"]
+                else (schema["identifiers"][0] if schema["identifiers"] else None)
+            )
             if not d1:
                 return []
             m1 = schema["measures"][0] if schema["measures"] else None
@@ -432,14 +641,17 @@ class DataService:
             d1_q = self._quote_ident(d1)
             m1_expr = f"ROUND(SUM({self._quote_ident(m1)}), 2)" if m1 else "COUNT(*)"
             m2_expr = f"SUM({self._quote_ident(m2)})" if m2 else "COUNT(*)"
-            sql = f'SELECT {d1_q} AS ITEM_NAME, {m2_expr} AS UNITS, {m1_expr} AS VAL FROM {self._quote_ident(target_table)} WHERE {d1_q} IS NOT NULL GROUP BY {d1_q} ORDER BY VAL DESC LIMIT {int(lim)}'
+            sql = f"SELECT {d1_q} AS ITEM_NAME, {m2_expr} AS UNITS, {m1_expr} AS VAL FROM {self._quote_ident(target_table)} WHERE {d1_q} IS NOT NULL GROUP BY {d1_q} ORDER BY VAL DESC LIMIT {int(lim)}"
             rows = hana_client.execute_query(sql)
             if rows:
-                return [{
-                    "product": str(r.get("ITEM_NAME")),
-                    "units": int(r.get("UNITS") or 0),
-                    "revenue": float(r.get("VAL") or 0),
-                } for r in rows]
+                return [
+                    {
+                        "product": str(r.get("ITEM_NAME")),
+                        "units": int(r.get("UNITS") or 0),
+                        "revenue": float(r.get("VAL") or 0),
+                    }
+                    for r in rows
+                ]
         except Exception as e:
             logger.error(f"Error getting top items in SAP HANA Cloud: {e}")
         return []
@@ -449,7 +661,14 @@ class DataService:
         try:
             df = self.get_dataframe()
             if df is not None and not df.empty:
-                id_cols = [c for c in df.columns if any(term in str(c).lower() for term in ["id", "code", "key", "num", "number", "ref"])]
+                id_cols = [
+                    c
+                    for c in df.columns
+                    if any(
+                        term in str(c).lower()
+                        for term in ["id", "code", "key", "num", "number", "ref"]
+                    )
+                ]
                 if not id_cols:
                     id_cols = [c for c in df.columns if str(df[c].dtype) == "object"]
                 if id_cols:
@@ -460,18 +679,25 @@ class DataService:
 
         try:
             from api.database.hana_client import hana_client
+
             target_table = self._resolve_target_table()
             if not target_table:
                 return []
             schema = self._introspect_hana_table(target_table)
-            id_col = schema["identifiers"][0] if schema["identifiers"] else (schema["dimensions"][0] if schema["dimensions"] else None)
+            id_col = (
+                schema["identifiers"][0]
+                if schema["identifiers"]
+                else (schema["dimensions"][0] if schema["dimensions"] else None)
+            )
             if not id_col:
                 return []
             id_q = self._quote_ident(id_col)
-            sql = f'SELECT DISTINCT {id_q} AS REC_ID FROM {self._quote_ident(target_table)} WHERE {id_q} IS NOT NULL LIMIT {int(limit)}'
+            sql = f"SELECT DISTINCT {id_q} AS REC_ID FROM {self._quote_ident(target_table)} WHERE {id_q} IS NOT NULL LIMIT {int(limit)}"
             rows = hana_client.execute_query(sql)
             if rows:
-                return [str(r.get("REC_ID")) for r in rows if r.get("REC_ID") is not None]
+                return [
+                    str(r.get("REC_ID")) for r in rows if r.get("REC_ID") is not None
+                ]
         except Exception as e:
             logger.error(f"Error getting record IDs in SAP HANA Cloud: {e}")
         return []
@@ -480,8 +706,11 @@ class DataService:
         """Backwards-compatible wrapper for get_record_details."""
         return self.get_record_details(order_id)
 
-    def _lookup_record_in_table(self, table_name: str, clean_id: str) -> Optional[CaseInsensitiveRecord]:
+    def _lookup_record_in_table(
+        self, table_name: str, clean_id: str
+    ) -> Optional[CaseInsensitiveRecord]:
         from api.database.hana_client import hana_client
+
         schema = self._introspect_hana_table(table_name)
         candidate_columns = schema["identifiers"] or schema["dimensions"][:3]
         tbl_q = self._quote_ident(table_name)
@@ -492,9 +721,13 @@ class DataService:
                 if sample and isinstance(sample[0], dict):
                     keys = [str(k) for k in sample[0].keys()]
                     id_terms = ("id", "code", "key", "num", "number", "tag", "ref")
-                    candidate_columns = [k for k in keys if any(t in k.lower() for t in id_terms)]
+                    candidate_columns = [
+                        k for k in keys if any(t in k.lower() for t in id_terms)
+                    ]
                     if not candidate_columns:
-                        candidate_columns = [k for k in keys if isinstance(sample[0].get(k), str)][:3]
+                        candidate_columns = [
+                            k for k in keys if isinstance(sample[0].get(k), str)
+                        ][:3]
             except Exception:
                 return None
         if not candidate_columns:
@@ -502,7 +735,7 @@ class DataService:
         for col in candidate_columns:
             try:
                 col_q = self._quote_ident(col)
-                sql = f'SELECT * FROM {tbl_q} WHERE UPPER(CAST({col_q} AS NVARCHAR)) = UPPER(?) LIMIT 1'
+                sql = f"SELECT * FROM {tbl_q} WHERE UPPER(CAST({col_q} AS NVARCHAR)) = UPPER(?) LIMIT 1"
                 rows = hana_client.execute_query(sql, (clean_id,))
                 if rows:
                     return CaseInsensitiveRecord(rows[0])
@@ -515,20 +748,29 @@ class DataService:
         from api.models.execution_context import current_selection
         from api.services.dataset_service import dataset_service
         from api.platform.data_resolution import current_table
+
         selection = current_selection.get()
         entry = selection.entry if selection else dataset_service.active()[0]
         if entry:
-            version = selection.context.version if selection else entry.get('currentVersion', 1)
-            record['_resolved_dataset_id'] = entry['id']
-            record['_resolved_dataset_name'] = entry.get('displayName') or entry.get('name')
-            record['_resolved_version'] = version
-            record['_resolved_table'] = table or current_table(entry, version)
-            if selection and selection.snapshot.get('source_backend') == 'hana':
-                backend = 'hana_table'
-        record['_resolved_backend'] = backend
+            version = (
+                selection.context.version
+                if selection
+                else entry.get("currentVersion", 1)
+            )
+            record["_resolved_dataset_id"] = entry["id"]
+            record["_resolved_dataset_name"] = entry.get("displayName") or entry.get(
+                "name"
+            )
+            record["_resolved_version"] = version
+            record["_resolved_table"] = table or current_table(entry, version)
+            if selection and selection.snapshot.get("source_backend") == "hana":
+                backend = "hana_table"
+        record["_resolved_backend"] = backend
         return record
 
-    def get_record_details(self, record_id: str, table_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_record_details(
+        self, record_id: str, table_name: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """Get details for any record ID dynamically from active DataFrame or SAP HANA Cloud tables."""
         clean_id = str(record_id).strip()
         if not clean_id:
@@ -538,13 +780,25 @@ class DataService:
         try:
             df = self.get_dataframe()
             if df is not None and not df.empty:
-                id_cols = [c for c in df.columns if any(term in str(c).lower() for term in ["id", "code", "key", "num", "number", "tag", "ref"])]
+                id_cols = [
+                    c
+                    for c in df.columns
+                    if any(
+                        term in str(c).lower()
+                        for term in ["id", "code", "key", "num", "number", "tag", "ref"]
+                    )
+                ]
                 if not id_cols:
                     id_cols = [c for c in df.columns if str(df[c].dtype) == "object"]
                 for col in id_cols:
-                    matches = df[df[col].astype(str).str.strip().str.upper() == clean_id.upper()]
+                    matches = df[
+                        df[col].astype(str).str.strip().str.upper() == clean_id.upper()
+                    ]
                     if not matches.empty:
-                        return self._record_with_provenance(CaseInsensitiveRecord(matches.iloc[0].to_dict()), 'dataset_snapshot')
+                        return self._record_with_provenance(
+                            CaseInsensitiveRecord(matches.iloc[0].to_dict()),
+                            "dataset_snapshot",
+                        )
         except Exception as e:
             logger.debug(f"DataFrame record lookup skipped ({e})")
 
@@ -555,7 +809,7 @@ class DataService:
             if target:
                 rec = self._lookup_record_in_table(target, clean_id)
                 if rec:
-                    return self._record_with_provenance(rec, 'hana_table', table=target)
+                    return self._record_with_provenance(rec, "hana_table", table=target)
         except Exception as e:
             logger.warning(f"Direct HANA record lookup failed ({e})")
 
@@ -563,29 +817,48 @@ class DataService:
         try:
             from api.services.dataset_service import dataset_service
             from api.platform.datasets_metadata_repository import datasets_metadata_repo
+
             catalog = dataset_service._catalog()
             for d_id, entry in catalog.get("datasets", {}).items():
-                from api.models.execution_context import current_selection, require_dataset_access
+                from api.models.execution_context import (
+                    current_selection,
+                    require_dataset_access,
+                )
                 from api.platform.data_resolution import current_table
+
                 try:
                     require_dataset_access(entry, for_chat=True)
                 except Exception:
                     continue
                 selection = current_selection.get()
-                if selection and selection.context.dataset_id == d_id and current_table(entry, selection.context.version) is None:
+                if (
+                    selection
+                    and selection.context.dataset_id == d_id
+                    and current_table(entry, selection.context.version) is None
+                ):
                     continue
-                other_hint = entry.get("physical_table_name") or entry.get("tableName") or entry.get("name")
-                other_target = datasets_metadata_repo._resolve_physical_table(other_hint)
+                other_hint = (
+                    entry.get("physical_table_name")
+                    or entry.get("tableName")
+                    or entry.get("name")
+                )
+                other_target = datasets_metadata_repo._resolve_physical_table(
+                    other_hint
+                )
                 if not other_target or other_target == target:
                     continue
                 rec = self._lookup_record_in_table(other_target, clean_id)
                 if rec:
-                    logger.info(f"Resolved record {clean_id} from alternate table '{other_target}' (dataset '{d_id}')")
+                    logger.info(
+                        f"Resolved record {clean_id} from alternate table '{other_target}' (dataset '{d_id}')"
+                    )
                     rec["_resolved_table"] = other_target
                     rec["_resolved_dataset_id"] = d_id
-                    rec["_resolved_dataset_name"] = entry.get("displayName") or entry.get("name")
+                    rec["_resolved_dataset_name"] = entry.get(
+                        "displayName"
+                    ) or entry.get("name")
                     rec["_resolved_version"] = entry.get("currentVersion", 1)
-                    rec["_resolved_backend"] = 'hana_table'
+                    rec["_resolved_backend"] = "hana_table"
                     return rec
         except Exception as e:
             logger.debug(f"Cross-table record fallback search failed: {e}")

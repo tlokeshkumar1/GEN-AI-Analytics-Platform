@@ -16,7 +16,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import pandas as pd
 
 from api.models.query_plan import QueryPlan
-from api.platform.agent_domain_classifier import _inspect_numeric_series, _split_identifier_tokens
+from api.platform.agent_domain_classifier import (
+    _inspect_numeric_series,
+    _split_identifier_tokens,
+)
 from api.platform.contracts import SemanticField, SemanticModel
 from api.services.ai_core_service import ai_core_service
 from api.services.analytics_engine import analytics_engine
@@ -104,7 +107,11 @@ REQUIREMENTS:
 def _normalize_query_plan_dict(raw_plan: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize legacy/UI QueryPlan variants before validation."""
     cleaned = {k: v for k, v in raw_plan.items() if v is not None and v != ""}
-    if cleaned.get("metric") and not cleaned.get("aggregation") and not cleaned.get("measures"):
+    if (
+        cleaned.get("metric")
+        and not cleaned.get("aggregation")
+        and not cleaned.get("measures")
+    ):
         cleaned["aggregation"] = "COUNT" if cleaned["metric"] == "*" else "SUM"
     if isinstance(cleaned.get("aggregation"), str):
         agg_u = cleaned["aggregation"].strip().upper()
@@ -115,7 +122,9 @@ def _normalize_query_plan_dict(raw_plan: Dict[str, Any]) -> Dict[str, Any]:
             m_dict = m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m
             if isinstance(m_dict, dict) and m_dict.get("field"):
                 agg_u = str(m_dict.get("aggregation") or "SUM").strip().upper()
-                norm_measures.append({**m_dict, "aggregation": AGG_ALIASES.get(agg_u, agg_u)})
+                norm_measures.append(
+                    {**m_dict, "aggregation": AGG_ALIASES.get(agg_u, agg_u)}
+                )
         if norm_measures:
             cleaned["measures"] = norm_measures
             cleaned.pop("metric", None)
@@ -147,13 +156,20 @@ def recommendation_signature(item: Any) -> Tuple[Any, ...]:
         plan = QueryPlan.model_validate(_normalize_query_plan_dict(dict(raw_plan)))
     except Exception:
         metric = str(raw_plan.get("metric") or "").lower()
-        agg = str(raw_plan.get("aggregation") or ("COUNT" if metric == "*" else "SUM")).upper()
+        agg = str(
+            raw_plan.get("aggregation") or ("COUNT" if metric == "*" else "SUM")
+        ).upper()
         dim = str(raw_plan.get("dimension") or "").lower()
-        dims = tuple(str(d).lower() for d in (raw_plan.get("dimensions") or ([dim] if dim else [])))
+        dims = tuple(
+            str(d).lower()
+            for d in (raw_plan.get("dimensions") or ([dim] if dim else []))
+        )
         measures = tuple(sorted([(metric, agg)])) if metric else ()
         return (kind_group, measures, dims, None, (), (), ())
 
-    measures = tuple(sorted((m.field.lower(), m.aggregation.upper()) for m in plan.measures))
+    measures = tuple(
+        sorted((m.field.lower(), m.aggregation.upper()) for m in plan.measures)
+    )
     dimensions = tuple(d.lower() for d in plan.dimensions)
     time_group = (
         (plan.time_grouping.field.lower(), plan.time_grouping.period)
@@ -161,7 +177,9 @@ def recommendation_signature(item: Any) -> Tuple[Any, ...]:
         else None
     )
     derived = tuple(sorted(d.lower() for d in plan.derived_metrics))
-    filters = tuple(sorted((f.column.lower(), f.operator, str(f.value)) for f in plan.filters))
+    filters = tuple(
+        sorted((f.column.lower(), f.operator, str(f.value)) for f in plan.filters)
+    )
     joins = tuple(
         sorted(
             (j.relationship or "", j.right_dataset_id or "", j.right_table or "")
@@ -177,7 +195,9 @@ def concept_signature(item: Any) -> Tuple[Any, ...]:
     return sig[:4]
 
 
-def extract_query_dependencies(model: Optional[SemanticModel], query: QueryPlan) -> List[str]:
+def extract_query_dependencies(
+    model: Optional[SemanticModel], query: QueryPlan
+) -> List[str]:
     """Extract sorted semantic and join dependencies from a validated QueryPlan."""
     dependencies = (
         {measure.field for measure in query.measures if measure.field != "*"}
@@ -192,15 +212,21 @@ def extract_query_dependencies(model: Optional[SemanticModel], query: QueryPlan)
     for name in query.derived_metrics:
         dependencies.add(name)
         if model is not None:
-            definition = next((m for m in model.derived_metrics if m.name == name), None)
+            definition = next(
+                (m for m in model.derived_metrics if m.name == name), None
+            )
             if definition:
-                dependencies.update(dep.field for dep in definition.dependencies.values())
+                dependencies.update(
+                    dep.field for dep in definition.dependencies.values()
+                )
     for join in query.joins:
         if join.relationship:
             dependencies.add("relationship:" + join.relationship)
         elif join.right_dataset_id or join.right_table:
             target_ref = join.right_dataset_id or join.right_table
-            dependencies.add(f"join:{target_ref}:{join.left_key or ''}:{join.right_key or ''}")
+            dependencies.add(
+                f"join:{target_ref}:{join.left_key or ''}:{join.right_key or ''}"
+            )
     return sorted(dependencies)
 
 
@@ -218,6 +244,7 @@ class ChartRecommenderAgent:
         are never dominated by 1 or 2 kinds (e.g. only bar and donut).
         """
         from collections import defaultdict
+
         by_kind = defaultdict(list)
         for c in candidates:
             by_kind[c.get("kind", "bar")].append(c)
@@ -292,14 +319,21 @@ class ChartRecommenderAgent:
         for existing in existing_list:
             seen_signatures.add(recommendation_signature(existing))
             seen_concepts.add(concept_signature(existing))
-            title = existing.get("title") if isinstance(existing, dict) else getattr(existing, "title", "")
+            title = (
+                existing.get("title")
+                if isinstance(existing, dict)
+                else getattr(existing, "title", "")
+            )
             if title:
                 seen_titles.add(str(title).strip().lower())
 
         profiles = self._profile_columns(df, model)
         recommendations: List[Dict[str, Any]] = []
 
-        def _add_with_diversity(candidates_list: List[Dict[str, Any]], rejected_dest: Optional[List[str]] = None):
+        def _add_with_diversity(
+            candidates_list: List[Dict[str, Any]],
+            rejected_dest: Optional[List[str]] = None,
+        ):
             nonlocal recommendations
             interleaved = self._interleave_by_kind(candidates_list)
             kind_counts: Dict[str, int] = {}
@@ -316,13 +350,21 @@ class ChartRecommenderAgent:
                 limit = 2 if k == "kpi" else 1
                 if kind_counts.get(k, 0) < limit:
                     validated, reason = self._validate_and_preview(
-                        cand, df, model, profiles, seen_signatures, seen_concepts, seen_titles
+                        cand,
+                        df,
+                        model,
+                        profiles,
+                        seen_signatures,
+                        seen_concepts,
+                        seen_titles,
                     )
                     if validated is not None:
                         recommendations.append(validated)
                         kind_counts[k] = kind_counts.get(k, 0) + 1
                     elif reason == "duplicate" and rejected_dest is not None:
-                        rejected_dest.append(str(cand.get("title") or cand.get("query_plan")))
+                        rejected_dest.append(
+                            str(cand.get("title") or cand.get("query_plan"))
+                        )
                 else:
                     deferred.append(cand)
 
@@ -334,7 +376,13 @@ class ChartRecommenderAgent:
                     k = cand.get("kind", "bar")
                     if kind_counts.get(k, 0) < 2:
                         validated, _ = self._validate_and_preview(
-                            cand, df, model, profiles, seen_signatures, seen_concepts, seen_titles
+                            cand,
+                            df,
+                            model,
+                            profiles,
+                            seen_signatures,
+                            seen_concepts,
+                            seen_titles,
                         )
                         if validated is not None:
                             recommendations.append(validated)
@@ -346,7 +394,13 @@ class ChartRecommenderAgent:
                     if len(recommendations) >= max_items:
                         break
                     validated, _ = self._validate_and_preview(
-                        cand, df, model, profiles, seen_signatures, seen_concepts, seen_titles
+                        cand,
+                        df,
+                        model,
+                        profiles,
+                        seen_signatures,
+                        seen_concepts,
+                        seen_titles,
                     )
                     if validated is not None:
                         recommendations.append(validated)
@@ -384,8 +438,12 @@ class ChartRecommenderAgent:
 
         # 2. When LLM is offline/unavailable or produced no net-new valid items,
         #    derive non-duplicate recommendations dynamically from observed distributions.
-        if (not llm_available or not recommendations) and len(recommendations) < max_items:
-            stat_candidates = self._generate_dynamic_statistical_candidates(df, model, profiles)
+        if (not llm_available or not recommendations) and len(
+            recommendations
+        ) < max_items:
+            stat_candidates = self._generate_dynamic_statistical_candidates(
+                df, model, profiles
+            )
             _add_with_diversity(stat_candidates)
 
         logger.info(
@@ -402,7 +460,9 @@ class ChartRecommenderAgent:
                 return col
         return None
 
-    def _profile_columns(self, df: pd.DataFrame, model: SemanticModel) -> Dict[str, Dict[str, Any]]:
+    def _profile_columns(
+        self, df: pd.DataFrame, model: SemanticModel
+    ) -> Dict[str, Dict[str, Any]]:
         """Compute statistical quality, cardinality, variance, and date-span metrics per field."""
         profiles: Dict[str, Dict[str, Any]] = {}
         total_rows = max(1, len(df))
@@ -433,7 +493,9 @@ class ChartRecommenderAgent:
             }
 
             is_num, _ = _inspect_numeric_series(non_null)
-            if field.role == "measure" or (is_num and field.role not in ("identifier", "time", "dimension")):
+            if field.role == "measure" or (
+                is_num and field.role not in ("identifier", "time", "dimension")
+            ):
                 numeric_series = pd.to_numeric(non_null, errors="coerce").dropna()
                 if numeric_series.empty or numeric_series.nunique() <= 1:
                     profile["useful"] = False
@@ -444,23 +506,58 @@ class ChartRecommenderAgent:
                     std_val = float(numeric_series.std(ddof=0))
                     min_val = float(numeric_series.min())
                     max_val = float(numeric_series.max())
-                    cv = (std_val / abs(mean_val)) if abs(mean_val) > 1e-9 else (1.0 if std_val > 0 else 0.0)
+                    cv = (
+                        (std_val / abs(mean_val))
+                        if abs(mean_val) > 1e-9
+                        else (1.0 if std_val > 0 else 0.0)
+                    )
                     tokens = _split_identifier_tokens(field.name)
                     token_set = set(tokens)
                     looks_like_code = bool(
-                        (tokens and tokens[-1] in {"id", "code", "key", "zip", "postal", "phone", "mobile", "ssn", "serial"})
+                        (
+                            tokens
+                            and tokens[-1]
+                            in {
+                                "id",
+                                "code",
+                                "key",
+                                "zip",
+                                "postal",
+                                "phone",
+                                "mobile",
+                                "ssn",
+                                "serial",
+                            }
+                        )
                         or ("year" in token_set and 1900 <= min_val <= max_val <= 2150)
                     )
                     is_rate = (
                         field.unit == "%"
-                        or bool(token_set & {"percent", "percentage", "pct", "ratio", "rate", "margin", "discount", "score", "rating", "avg", "mean"})
+                        or bool(
+                            token_set
+                            & {
+                                "percent",
+                                "percentage",
+                                "pct",
+                                "ratio",
+                                "rate",
+                                "margin",
+                                "discount",
+                                "score",
+                                "rating",
+                                "avg",
+                                "mean",
+                            }
+                        )
                         or field.default_aggregation == "AVG"
                     )
                     is_binary_flag = bool(
                         (nunique <= 2 and min_val >= 0 and max_val <= 1)
                         or (nunique <= 3 and min_val == 0.0 and max_val == 1.0)
                     )
-                    is_sparse_flag = bool(nunique <= 3 and max_val <= 2 and mean_val < 0.2)
+                    is_sparse_flag = bool(
+                        nunique <= 3 and max_val <= 2 and mean_val < 0.2
+                    )
                     preferred_agg = field.default_aggregation
                     if not preferred_agg:
                         if is_rate and "AVG" in field.aggregations:
@@ -493,7 +590,9 @@ class ChartRecommenderAgent:
                     else pd.Series(dtype="datetime64[ns]")
                 )
                 valid_dates = parsed.dropna()
-                is_parseable_date = non_null_count > 0 and (len(valid_dates) / non_null_count) >= 0.7
+                is_parseable_date = (
+                    non_null_count > 0 and (len(valid_dates) / non_null_count) >= 0.7
+                )
                 time_period = None
                 if is_parseable_date and nunique > 12:
                     span_days = (valid_dates.max() - valid_dates.min()).days
@@ -512,7 +611,9 @@ class ChartRecommenderAgent:
                     }
                 )
             elif field.role == "dimension":
-                top_vals = [str(k) for k in non_null.value_counts().head(3).index.tolist()]
+                top_vals = [
+                    str(k) for k in non_null.value_counts().head(3).index.tolist()
+                ]
                 is_free_text = uniqueness_ratio > 0.85 and nunique > 25
                 profile.update(
                     {
@@ -567,8 +668,16 @@ class ChartRecommenderAgent:
 
             existing_lines = []
             for item in existing_items:
-                title = item.get("title") if isinstance(item, dict) else getattr(item, "title", "")
-                kind = item.get("kind") if isinstance(item, dict) else getattr(item, "kind", "")
+                title = (
+                    item.get("title")
+                    if isinstance(item, dict)
+                    else getattr(item, "title", "")
+                )
+                kind = (
+                    item.get("kind")
+                    if isinstance(item, dict)
+                    else getattr(item, "kind", "")
+                )
                 sig = recommendation_signature(item)
                 existing_lines.append(
                     f"- [{kind}] '{title}' -> measures={sig[1]}, dimensions={sig[2]}, time_grouping={sig[3]}"
@@ -585,24 +694,34 @@ class ChartRecommenderAgent:
                 row_count=len(df),
                 profiles_summary="\n".join(profile_lines),
                 sample_rows_json=json.dumps(sample_rows, indent=2, default=str),
-                existing_summary="\n".join(existing_lines) if existing_lines else "None yet.",
+                existing_summary="\n".join(existing_lines)
+                if existing_lines
+                else "None yet.",
             )
 
-            response = ai_core_service.generate_structured_completion(prompt, max_tokens=1800, temperature=0.15)
+            response = ai_core_service.generate_structured_completion(
+                prompt, max_tokens=1800, temperature=0.15
+            )
             if not response:
                 return [], False
 
             parsed = self._extract_json(response)
-            if isinstance(parsed, dict) and isinstance(parsed.get("recommendations"), list):
+            if isinstance(parsed, dict) and isinstance(
+                parsed.get("recommendations"), list
+            ):
                 return parsed["recommendations"], True
             return [], False
         except Exception as exc:
-            logger.warning(f"[ChartRecommenderAgent] LLM recommendation pass failed: {exc}")
+            logger.warning(
+                f"[ChartRecommenderAgent] LLM recommendation pass failed: {exc}"
+            )
             return [], False
 
     @staticmethod
     def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(
+            r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE
+        ).strip()
         try:
             parsed = json.loads(cleaned)
             if isinstance(parsed, dict):
@@ -648,7 +767,10 @@ class ChartRecommenderAgent:
         # Prioritize rich continuous business measures over sparse binary flags
         measures.sort(
             key=lambda f: (
-                0 if profiles[f.name].get("is_binary_flag") or profiles[f.name].get("is_sparse_flag") else 1,
+                0
+                if profiles[f.name].get("is_binary_flag")
+                or profiles[f.name].get("is_sparse_flag")
+                else 1,
                 1 if f.default_aggregation else 0,
                 min(profiles[f.name].get("nunique", 0), 50),
                 1 - profiles[f.name].get("null_ratio", 1.0),
@@ -670,7 +792,8 @@ class ChartRecommenderAgent:
         identifiers = [
             f
             for f in model.fields
-            if f.role == "identifier" and profiles.get(f.name, {}).get("nunique", 0) >= 1
+            if f.role == "identifier"
+            and profiles.get(f.name, {}).get("nunique", 0) >= 1
         ]
 
         # Measure KPIs (primary preferred aggregation, then AVG for additive measures)
@@ -686,7 +809,12 @@ class ChartRecommenderAgent:
                     "kind": "kpi",
                     "explanation": f"Tracks {agg.lower()} {m.semantic_name} across {model.domain}.",
                     "selected_by_default": True,
-                    "query_plan": {"intent": "analytical", "metric": m.name, "aggregation": agg, "filters": []},
+                    "query_plan": {
+                        "intent": "analytical",
+                        "metric": m.name,
+                        "aggregation": agg,
+                        "filters": [],
+                    },
                 }
             )
             if agg == "SUM" and "AVG" in m.aggregations and len(df) > 1:
@@ -697,7 +825,12 @@ class ChartRecommenderAgent:
                         "kind": "kpi",
                         "explanation": f"Measures average {m.semantic_name} per {model.grain}.",
                         "selected_by_default": True,
-                        "query_plan": {"intent": "analytical", "metric": m.name, "aggregation": "AVG", "filters": []},
+                        "query_plan": {
+                            "intent": "analytical",
+                            "metric": m.name,
+                            "aggregation": "AVG",
+                            "filters": [],
+                        },
                     }
                 )
             if prof.get("is_rate") or m.unit == "%" or agg == "AVG":
@@ -708,12 +841,25 @@ class ChartRecommenderAgent:
                         "kind": "gauge",
                         "explanation": f"Target gauge indicator of {m.semantic_name} across {model.domain}.",
                         "selected_by_default": True,
-                        "query_plan": {"intent": "analytical", "metric": m.name, "aggregation": "AVG", "filters": []},
+                        "query_plan": {
+                            "intent": "analytical",
+                            "metric": m.name,
+                            "aggregation": "AVG",
+                            "filters": [],
+                        },
                     }
                 )
 
         # Always provide a baseline Total Volume KPI candidate
-        vol_metric = identifiers[0].name if identifiers else (measures[0].name if measures else (model.fields[0].name if model.fields else "*"))
+        vol_metric = (
+            identifiers[0].name
+            if identifiers
+            else (
+                measures[0].name
+                if measures
+                else (model.fields[0].name if model.fields else "*")
+            )
+        )
         candidates.append(
             {
                 "id": "rec_kpi_total_volume",
@@ -733,7 +879,10 @@ class ChartRecommenderAgent:
         if identifiers:
             ranked_ids = sorted(
                 identifiers,
-                key=lambda f: (1 if profiles[f.name]["nunique"] < len(df) else 0, profiles[f.name]["nunique"]),
+                key=lambda f: (
+                    1 if profiles[f.name]["nunique"] < len(df) else 0,
+                    profiles[f.name]["nunique"],
+                ),
                 reverse=True,
             )
             id_field = ranked_ids[0]
@@ -766,7 +915,10 @@ class ChartRecommenderAgent:
                         "intent": "analytical",
                         "metric": metric_name,
                         "aggregation": agg,
-                        "time_grouping": {"field": t_field.name, "period": t_prof["time_period"]},
+                        "time_grouping": {
+                            "field": t_field.name,
+                            "period": t_prof["time_period"],
+                        },
                         "sort": {"column": "period", "direction": "ASC"},
                         "limit": 24,
                         "filters": [],
@@ -795,13 +947,16 @@ class ChartRecommenderAgent:
                 )
 
         # Categorical comparisons across diverse dimensions & measures
-        for m in (measures if measures else [None]):
+        for m in measures if measures else [None]:
             m_name = m.name if m else "*"
             m_label = m.semantic_name if m else "Volume"
             agg = (profiles[m.name].get("preferred_agg") or "SUM") if m else "COUNT"
             sorted_dims = sorted(
                 dimensions,
-                key=lambda d: (abs(profiles[d.name]["nunique"] - 6), profiles[d.name]["null_ratio"]),
+                key=lambda d: (
+                    abs(profiles[d.name]["nunique"] - 6),
+                    profiles[d.name]["null_ratio"],
+                ),
             )
             for d in sorted_dims:
                 card = profiles[d.name]["nunique"]
@@ -911,7 +1066,19 @@ class ChartRecommenderAgent:
                     )
 
                 # 6. Funnel Chart (progression across stages/phases/status or card 3-8)
-                is_funnel_dim = any(tok in d_lower for tok in ["phase", "stage", "status", "level", "step", "rag", "priority", "state"])
+                is_funnel_dim = any(
+                    tok in d_lower
+                    for tok in [
+                        "phase",
+                        "stage",
+                        "status",
+                        "level",
+                        "step",
+                        "rag",
+                        "priority",
+                        "state",
+                    ]
+                )
                 if is_funnel_dim or (3 <= card <= 8):
                     candidates.append(
                         {
@@ -934,7 +1101,25 @@ class ChartRecommenderAgent:
 
                 # 7. Line & Area Trend (when time fields are absent, use numeric/ordered dimensions)
                 if not time_fields:
-                    is_ordered = any(tok in d_lower for tok in ["level", "progress", "phase", "stage", "year", "month", "date", "num", "seq", "period", "rank", "grade", "score", "quarter"])
+                    is_ordered = any(
+                        tok in d_lower
+                        for tok in [
+                            "level",
+                            "progress",
+                            "phase",
+                            "stage",
+                            "year",
+                            "month",
+                            "date",
+                            "num",
+                            "seq",
+                            "period",
+                            "rank",
+                            "grade",
+                            "score",
+                            "quarter",
+                        ]
+                    )
                     if is_ordered or card >= 4:
                         candidates.append(
                             {
@@ -1041,15 +1226,25 @@ class ChartRecommenderAgent:
             plan = QueryPlan.model_validate(raw_plan)
             normalized_plan = plan.model_dump(exclude_none=True, by_alias=True)
 
-            if kind not in ("kpi", "gauge") and not plan.dimensions and not plan.time_grouping:
+            if (
+                kind not in ("kpi", "gauge")
+                and not plan.dimensions
+                and not plan.time_grouping
+            ):
                 return None, "invalid"
 
-            sig = recommendation_signature({"kind": kind, "query_plan": normalized_plan})
+            sig = recommendation_signature(
+                {"kind": kind, "query_plan": normalized_plan}
+            )
             concept = concept_signature({"kind": kind, "query_plan": normalized_plan})
             title = str(candidate.get("title") or "").strip()
             if not title:
                 return None, "invalid"
-            if sig in seen_signatures or concept in seen_concepts or title.lower() in seen_titles:
+            if (
+                sig in seen_signatures
+                or concept in seen_concepts
+                or title.lower() in seen_titles
+            ):
                 return None, "duplicate"
 
             exec_result = analytics_engine.execute(
@@ -1072,14 +1267,23 @@ class ChartRecommenderAgent:
                 "semantic_revision": model.revision,
                 "query_plan": normalized_plan,
                 "dependencies": extract_query_dependencies(model, plan),
-                "explanation": str(candidate.get("explanation") or f"Analytical view of {title}."),
+                "explanation": str(
+                    candidate.get("explanation") or f"Analytical view of {title}."
+                ),
                 "selected_by_default": bool(candidate.get("selected_by_default", True)),
                 "status": "proposed",
             }
 
             if kind == "kpi":
                 val = exec_result.summary.get("value")
-                field_obj = next((f for f in model.fields if f.name == plan.measures[0].field), None) if plan.measures else None
+                field_obj = (
+                    next(
+                        (f for f in model.fields if f.name == plan.measures[0].field),
+                        None,
+                    )
+                    if plan.measures
+                    else None
+                )
                 prefix = "$" if field_obj and field_obj.currency == "USD" else ""
                 suffix = "%" if field_obj and field_obj.unit == "%" else ""
                 if isinstance(val, (int, float)):
@@ -1089,7 +1293,9 @@ class ChartRecommenderAgent:
                         else f"{prefix}{int(val):,}{suffix}"
                     )
                 else:
-                    item["preview_value"] = str(exec_result.summary.get("formatted_value") or val or "0")
+                    item["preview_value"] = str(
+                        exec_result.summary.get("formatted_value") or val or "0"
+                    )
             else:
                 item["preview_rows"] = exec_result.data[:15]
 
@@ -1098,7 +1304,9 @@ class ChartRecommenderAgent:
             seen_titles.add(title.lower())
             return item, "ok"
         except Exception as exc:
-            logger.debug(f"[ChartRecommenderAgent] Rejected candidate '{candidate.get('title')}': {exc}")
+            logger.debug(
+                f"[ChartRecommenderAgent] Rejected candidate '{candidate.get('title')}': {exc}"
+            )
             return None, "error"
 
     def _normalize_raw_plan_fields(
@@ -1129,8 +1337,14 @@ class ChartRecommenderAgent:
             agg_raw = str(cleaned.get("aggregation") or "").strip().upper()
             agg_norm = AGG_ALIASES.get(agg_raw, agg_raw)
             if not agg_norm:
-                f_obj = next((f for f in model.fields if f.name == cleaned["metric"]), None)
-                agg_norm = "COUNT" if cleaned["metric"] == "*" else ((f_obj.default_aggregation or "SUM") if f_obj else "COUNT")
+                f_obj = next(
+                    (f for f in model.fields if f.name == cleaned["metric"]), None
+                )
+                agg_norm = (
+                    "COUNT"
+                    if cleaned["metric"] == "*"
+                    else ((f_obj.default_aggregation or "SUM") if f_obj else "COUNT")
+                )
             cleaned["aggregation"] = agg_norm
         if "dimension" in cleaned:
             cleaned["dimension"] = _res(cleaned["dimension"])
@@ -1141,14 +1355,22 @@ class ChartRecommenderAgent:
             for m in cleaned["measures"]:
                 if isinstance(m, dict) and m.get("field"):
                     agg_raw = str(m.get("aggregation") or "SUM").strip().upper()
-                    norm_measures.append({**m, "field": _res(m["field"]), "aggregation": AGG_ALIASES.get(agg_raw, agg_raw)})
+                    norm_measures.append(
+                        {
+                            **m,
+                            "field": _res(m["field"]),
+                            "aggregation": AGG_ALIASES.get(agg_raw, agg_raw),
+                        }
+                    )
             if norm_measures:
                 cleaned["measures"] = norm_measures
                 cleaned.pop("metric", None)
                 cleaned.pop("aggregation", None)
             else:
                 cleaned.pop("measures", None)
-        if isinstance(cleaned.get("time_grouping"), dict) and cleaned["time_grouping"].get("field"):
+        if isinstance(cleaned.get("time_grouping"), dict) and cleaned[
+            "time_grouping"
+        ].get("field"):
             tg_field = _res(cleaned["time_grouping"]["field"])
             tg_period = str(cleaned["time_grouping"].get("period") or "month").lower()
             if tg_period not in ("year", "quarter", "month", "day"):

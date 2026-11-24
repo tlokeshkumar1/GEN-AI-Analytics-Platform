@@ -12,7 +12,6 @@ from api.platform.agent_domain_classifier import domain_classifier_agent
 from api.platform.agent_chart_recommender import chart_recommender_agent
 from api.platform.semantic import semantic_registry
 from api.platform.workflow import workflow_orchestrator
-from api.models.execution_context import current_identity
 from api.utils.logger import get_logger
 
 logger = get_logger("services.upload_service")
@@ -40,19 +39,25 @@ class UploadService:
         filename = str(filename).replace("\\", "/").rsplit("/", 1)[-1]
         warnings = []
 
-        def _emit(stage: int, status: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
+        def _emit(
+            stage: int, status: str, message: str, data: Optional[Dict[str, Any]] = None
+        ) -> None:
             if progress_callback is None:
                 return
             try:
-                progress_callback({
-                    "type": "stage",
-                    "stage": stage,
-                    "status": status,
-                    "message": message,
-                    "data": data or {},
-                })
+                progress_callback(
+                    {
+                        "type": "stage",
+                        "stage": stage,
+                        "status": status,
+                        "message": message,
+                        "data": data or {},
+                    }
+                )
             except Exception as cb_exc:
-                logger.debug(f"[UploadService] Progress callback error ignored: {cb_exc}")
+                logger.debug(
+                    f"[UploadService] Progress callback error ignored: {cb_exc}"
+                )
 
         # ── STAGE 1 / AGENT 1: Parse + Preprocessing & Cleaning ─────────────
         _emit(1, "running", "Triggering Agent 1: Preprocessing...")
@@ -61,16 +66,21 @@ class UploadService:
                 df_raw = dataset_service.parse_file(content, filename)
             else:
                 from api.platform.ingestion import ingestion_service
-                df_raw, _ = ingestion_service.prepare(content, filename, transformation_plan)
+
+                df_raw, _ = ingestion_service.prepare(
+                    content, filename, transformation_plan
+                )
         except Exception as e:
             logger.error(f"Error parsing raw file {filename}: {e}")
             raise
 
         logger.info("[UploadService] Triggering Agent 1: Preprocessing...")
-        clean_df, audit = preprocessing_agent.clean(df_raw, transformation_plan.parsing if transformation_plan else None)
+        clean_df, audit = preprocessing_agent.clean(
+            df_raw, transformation_plan.parsing if transformation_plan else None
+        )
         if clean_df.empty or not len(clean_df.columns):
-            _emit(1, 'failed', 'Preprocessing produced no usable rows or columns.')
-            raise ValueError('The dataset contains no usable rows after preprocessing.')
+            _emit(1, "failed", "Preprocessing produced no usable rows or columns.")
+            raise ValueError("The dataset contains no usable rows after preprocessing.")
         logger.info(f"[UploadService] Agent 1 finished: {audit.get('message')}")
 
         # Re-export clean dataframe to bytes for snapshot & vector generation
@@ -97,11 +107,19 @@ class UploadService:
         # single-sheet table with row-1 headers, so raw sheet/header/transform options must not be re-applied.
         sheet_name = (
             transformation_plan.parsing.sheet
-            if (transformation_plan and getattr(transformation_plan, 'parsing', None) and getattr(transformation_plan.parsing, 'sheet', None))
-            else getattr(transformation_plan, 'sheet', None)
+            if (
+                transformation_plan
+                and getattr(transformation_plan, "parsing", None)
+                and getattr(transformation_plan.parsing, "sheet", None)
+            )
+            else getattr(transformation_plan, "sheet", None)
         )
-        base_title = filename.rsplit('.', 1)[0]
-        display_name = f"{base_title} - {sheet_name}" if sheet_name else (target_table_name or base_title)
+        base_title = filename.rsplit(".", 1)[0]
+        display_name = (
+            f"{base_title} - {sheet_name}"
+            if sheet_name
+            else (target_table_name or base_title)
+        )
 
         result = dataset_service.upload(
             clean_content,
@@ -127,7 +145,9 @@ class UploadService:
                     rentry["readers"] = ["*"]
                     dataset_service._write_json(dataset_service.catalog_path, cat)
         except Exception as grant_exc:
-            logger.debug(f"[UploadService] Note: Could not set default workspace readers: {grant_exc}")
+            logger.debug(
+                f"[UploadService] Note: Could not set default workspace readers: {grant_exc}"
+            )
 
         logger.info("[UploadService] Triggering Agent 2: Domain Classifier...")
         semantic_model = domain_classifier_agent.analyze(
@@ -137,7 +157,9 @@ class UploadService:
             dataset_name=display_name or filename,
         )
         domain = semantic_model.domain
-        logger.info(f"[UploadService] Agent 2 finished: Classified as domain '{domain}' with {len(semantic_model.fields)} fields.")
+        logger.info(
+            f"[UploadService] Agent 2 finished: Classified as domain '{domain}' with {len(semantic_model.fields)} fields."
+        )
 
         # Persist semantic model into platform store
         raw_entry = None
@@ -146,18 +168,31 @@ class UploadService:
             catalog = dataset_service._catalog()
             raw_entry = dataset_service._entry(catalog, dataset_id)
             snapshot = dataset_service._snapshot(raw_entry, version)
-            persisted_model = semantic_registry.propose(raw_entry, version, snapshot, overrides=semantic_model.model_dump())
-            if persisted_model.status != "approved" and os.getenv("PLATFORM_AUTO_APPROVE_SEMANTICS", "true").lower() == "true":
-                persisted_model = semantic_registry.review(raw_entry, version, persisted_model.revision, "approved")
+            persisted_model = semantic_registry.propose(
+                raw_entry, version, snapshot, overrides=semantic_model.model_dump()
+            )
+            if (
+                persisted_model.status != "approved"
+                and os.getenv("PLATFORM_AUTO_APPROVE_SEMANTICS", "true").lower()
+                == "true"
+            ):
+                persisted_model = semantic_registry.review(
+                    raw_entry, version, persisted_model.revision, "approved"
+                )
                 workflow_orchestrator.save(
                     raw_entry,
                     version,
                     "semantic_review",
                     "completed",
-                    {"semantic_revision": persisted_model.revision, "auto_approved": True},
+                    {
+                        "semantic_revision": persisted_model.revision,
+                        "auto_approved": True,
+                    },
                 )
             semantic_model = persisted_model
-            logger.info(f"[UploadService] Semantic model saved & directly approved (status={semantic_model.status}) for {dataset_id} v{version}")
+            logger.info(
+                f"[UploadService] Semantic model saved & directly approved (status={semantic_model.status}) for {dataset_id} v{version}"
+            )
             try:
                 with dataset_service._writer():
                     cat = dataset_service._catalog()
@@ -167,15 +202,23 @@ class UploadService:
                             v["semanticRevision"] = persisted_model.revision
                     dataset_service._write_json(dataset_service.catalog_path, cat)
             except Exception as ex_cat:
-                logger.debug(f"[UploadService] Could not persist semanticRevision to catalog: {ex_cat}")
+                logger.debug(
+                    f"[UploadService] Could not persist semanticRevision to catalog: {ex_cat}"
+                )
         except Exception as exc:
-            logger.warning(f"[UploadService] Note: Could not direct-approve model to registry: {exc}")
-            warnings.append("Semantic model persistence failed; review and save the model before publishing.")
+            logger.warning(
+                f"[UploadService] Note: Could not direct-approve model to registry: {exc}"
+            )
+            warnings.append(
+                "Semantic model persistence failed; review and save the model before publishing."
+            )
 
         _emit(
             2,
             "completed" if persisted_model is not None else "failed",
-            f"Classified as domain '{domain}' with {len(semantic_model.fields)} fields." if persisted_model is not None else "Domain metadata could not be persisted. Retry ingestion before generating recommendations.",
+            f"Classified as domain '{domain}' with {len(semantic_model.fields)} fields."
+            if persisted_model is not None
+            else "Domain metadata could not be persisted. Retry ingestion before generating recommendations.",
             {
                 "domain": domain,
                 "semantic_model": semantic_model.model_dump(),
@@ -189,10 +232,14 @@ class UploadService:
         # ── STAGE 3: Dynamic Relational Storage in SAP HANA Cloud ────────────
         cloud_table_info = None
         # Use user-specified table or dynamically derive a clean table name
-        folder = (raw_entry or {}).get("folder") or dataset_entry.get("folder") or base_title
+        folder = (
+            (raw_entry or {}).get("folder") or dataset_entry.get("folder") or base_title
+        )
         table_stem = re.sub(r"[^A-Za-z0-9_]", "_", folder).upper()[:18] or "DATASET"
         table_identity = hashlib.sha256(dataset_id.encode()).hexdigest()[:8].upper()
-        active_table = target_table_name or f"DS_{table_stem}_{table_identity}_V{version}"
+        active_table = (
+            target_table_name or f"DS_{table_stem}_{table_identity}_V{version}"
+        )
         table_action = (target_table_action or "replace").lower()
         _emit(3, "running", f"Provisioning SAP HANA Cloud table '{active_table}'...")
 
@@ -204,10 +251,17 @@ class UploadService:
                     action=table_action,
                 )
                 if not cloud_table_info or not cloud_table_info.get("success"):
-                    raise RuntimeError("HANA did not confirm successful table synchronization")
-                cloud_table_info = {**cloud_table_info, "table_name": cloud_table_info.get("table_name") or active_table}
+                    raise RuntimeError(
+                        "HANA did not confirm successful table synchronization"
+                    )
+                cloud_table_info = {
+                    **cloud_table_info,
+                    "table_name": cloud_table_info.get("table_name") or active_table,
+                }
                 active_table = cloud_table_info["table_name"]
-                logger.info(f"[UploadService] Clean data persisted to HANA table '{active_table}'.")
+                logger.info(
+                    f"[UploadService] Clean data persisted to HANA table '{active_table}'."
+                )
                 try:
                     with dataset_service._writer():
                         cat = dataset_service._catalog()
@@ -224,10 +278,16 @@ class UploadService:
                             rentry["name"] = target_table_name
                         dataset_service._write_json(dataset_service.catalog_path, cat)
                 except Exception as ex:
-                    logger.debug(f"[UploadService] Note: Could not update table_name on catalog entry: {ex}")
+                    logger.debug(
+                        f"[UploadService] Note: Could not update table_name on catalog entry: {ex}"
+                    )
             except Exception as e:
-                logger.error(f"[UploadService] Dynamic HANA table error for '{active_table}': {e}")
-                warnings.append("Dataset snapshot saved, but HANA table synchronization failed. Retry storage synchronization before publishing.")
+                logger.error(
+                    f"[UploadService] Dynamic HANA table error for '{active_table}': {e}"
+                )
+                warnings.append(
+                    "Dataset snapshot saved, but HANA table synchronization failed. Retry storage synchronization before publishing."
+                )
                 cloud_table_info = {
                     "success": False,
                     "table_name": active_table,
@@ -237,16 +297,30 @@ class UploadService:
 
         _emit(
             3,
-            "failed" if cloud_table_info and not cloud_table_info.get("success") else "completed",
-            f"Synced to HANA table '{active_table}'." if cloud_table_info and cloud_table_info.get("success") else f"HANA storage finalized for '{active_table}'.",
-            {"cloud_table": cloud_table_info or {"success": True, "table_name": active_table, "action": table_action}},
+            "failed"
+            if cloud_table_info and not cloud_table_info.get("success")
+            else "completed",
+            f"Synced to HANA table '{active_table}'."
+            if cloud_table_info and cloud_table_info.get("success")
+            else f"HANA storage finalized for '{active_table}'.",
+            {
+                "cloud_table": cloud_table_info
+                or {"success": True, "table_name": active_table, "action": table_action}
+            },
         )
 
         # ── STAGE 4 / AGENT 3: Chart & Visualization Recommender ─────────────
-        prerequisites_ready = persisted_model is not None and not (cloud_table_info and not cloud_table_info.get('success'))
+        prerequisites_ready = persisted_model is not None and not (
+            cloud_table_info and not cloud_table_info.get("success")
+        )
         recommendations = []
         if not prerequisites_ready:
-            _emit(4, 'failed', 'Agent 3 cannot execute until domain metadata and dataset storage succeed.', {'recommendations': []})
+            _emit(
+                4,
+                "failed",
+                "Agent 3 cannot execute until domain metadata and dataset storage succeed.",
+                {"recommendations": []},
+            )
         else:
             _emit(4, "running", "Triggering Agent 3: Chart Recommender...")
             logger.info("[UploadService] Triggering Agent 3: Chart Recommender...")
@@ -255,7 +329,11 @@ class UploadService:
                 semantic_model,
                 dataset_name=display_name or filename,
             )
-            if raw_entry is not None and persisted_model is not None and recommendations:
+            if (
+                raw_entry is not None
+                and persisted_model is not None
+                and recommendations
+            ):
                 try:
                     semantic_registry.persist_recommendations(
                         raw_entry,
@@ -265,8 +343,12 @@ class UploadService:
                         model=persisted_model,
                     )
                 except Exception as exc:
-                    logger.warning(f"[UploadService] Note: Could not persist proposed recommendations: {exc}")
-            logger.info(f"[UploadService] Agent 3 finished: Produced {len(recommendations)} recommended charts.")
+                    logger.warning(
+                        f"[UploadService] Note: Could not persist proposed recommendations: {exc}"
+                    )
+            logger.info(
+                f"[UploadService] Agent 3 finished: Produced {len(recommendations)} recommended charts."
+            )
             _emit(
                 4,
                 "completed",
@@ -278,14 +360,18 @@ class UploadService:
         msg_parts = [
             f"Successfully processed {len(clean_df)} clean rows (removed {audit['duplicates_removed']} duplicates, remediated {audit['null_values_cleaned']} nulls).",
             f"Identified domain: {domain.upper()}.",
-            f"Generated {len(recommendations)} curated chart recommendations."
+            f"Generated {len(recommendations)} curated chart recommendations.",
         ]
         if cloud_table_info and cloud_table_info.get("success"):
-            msg_parts.append(f"Synced to HANA table '{cloud_table_info['table_name']}'.")
+            msg_parts.append(
+                f"Synced to HANA table '{cloud_table_info['table_name']}'."
+            )
 
         storage_failed = bool(cloud_table_info and not cloud_table_info.get("success"))
         if storage_failed and not any("HANA" in warning for warning in warnings):
-            warnings.append("HANA table synchronization failed. Retry storage synchronization before publishing.")
+            warnings.append(
+                "HANA table synchronization failed. Retry storage synchronization before publishing."
+            )
         ingestion_status = "partial" if storage_failed or warnings else "ready"
         try:
             with dataset_service._writer():
@@ -301,9 +387,13 @@ class UploadService:
                 rentry["domain"] = domain
                 rentry["cloudTable"] = cloud_table_info
                 dataset_service._write_json(dataset_service.catalog_path, cat)
-                dataset_entry = dataset_service._item(rentry, cat.get("activeDatasetId"))
+                dataset_entry = dataset_service._item(
+                    rentry, cat.get("activeDatasetId")
+                )
         except Exception as audit_save_exc:
-            logger.warning(f"Could not persist preprocessing audit to catalog: {audit_save_exc}")
+            logger.warning(
+                f"Could not persist preprocessing audit to catalog: {audit_save_exc}"
+            )
 
         return {
             "filename": dataset_entry.get("currentFilename", filename),
@@ -313,7 +403,8 @@ class UploadService:
             "dataset": dataset_entry,
             "version": version,
             "status": "partial" if ingestion_status == "partial" else "success",
-            "ready_for_publication": ingestion_status == "ready" and semantic_model.status == "approved",
+            "ready_for_publication": ingestion_status == "ready"
+            and semantic_model.status == "approved",
             "warnings": warnings,
             "message": " ".join(msg_parts + warnings),
             "cloud_table": cloud_table_info,

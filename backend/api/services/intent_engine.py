@@ -17,6 +17,7 @@ logger = get_logger("services.intent_engine")
 
 # ── Default query plan ────────────────────────────────────────────────────────
 
+
 def _default_query_plan() -> Dict[str, Any]:
     return {
         "intent": "chat",
@@ -82,21 +83,34 @@ class IntentEngine:
         Falls back to compact LLM classification only for ambiguous prompts.
         """
         from api.models.execution_context import current_selection
+
         if current_selection.get() is not None:
             from api.platform.planning import classify_request
+
             return classify_request(user_prompt)
         # 1. Fast-path heuristic classification (< 5ms, 0 tokens)
         heuristic_plan = self._classify_heuristic(user_prompt)
         heuristic_plan = self._validate_and_fix(heuristic_plan, user_prompt)
 
         # Check if heuristic captured an actionable, confident intent
-        has_actionable_intent = heuristic_plan.get("intent") in ("analytical", "ranking", "comparison", "graph")
-        has_target = bool(heuristic_plan.get("metric") or heuristic_plan.get("dimension") or heuristic_plan.get("chart_type"))
+        has_actionable_intent = heuristic_plan.get("intent") in (
+            "analytical",
+            "ranking",
+            "comparison",
+            "graph",
+        )
+        has_target = bool(
+            heuristic_plan.get("metric")
+            or heuristic_plan.get("dimension")
+            or heuristic_plan.get("chart_type")
+        )
 
         if has_actionable_intent and has_target:
-            logger.info(f"[IntentEngine] Fast-path heuristic match: intent={heuristic_plan['intent']}, "
-                        f"metric={heuristic_plan.get('metric')}, dim={heuristic_plan.get('dimension')}, "
-                        f"chart={heuristic_plan.get('chart_type')} (0 tokens)")
+            logger.info(
+                f"[IntentEngine] Fast-path heuristic match: intent={heuristic_plan['intent']}, "
+                f"metric={heuristic_plan.get('metric')}, dim={heuristic_plan.get('dimension')}, "
+                f"chart={heuristic_plan.get('chart_type')} (0 tokens)"
+            )
             return heuristic_plan
 
         # 2. LLM fallback only for ambiguous or semantic questions
@@ -106,13 +120,17 @@ class IntentEngine:
                 plan = _default_query_plan()
                 plan.update(llm_plan)
                 plan = self._validate_and_fix(plan, user_prompt)
-                logger.info(f"[IntentEngine] LLM fallback classification: intent={plan['intent']}, "
-                            f"metric={plan.get('metric')}, dim={plan.get('dimension')}")
+                logger.info(
+                    f"[IntentEngine] LLM fallback classification: intent={plan['intent']}, "
+                    f"metric={plan.get('metric')}, dim={plan.get('dimension')}"
+                )
                 return plan
         except Exception as e:
             logger.warning(f"[IntentEngine] LLM classification fallback failed: {e}")
 
-        logger.info(f"[IntentEngine] Default heuristic classification: intent={heuristic_plan['intent']}")
+        logger.info(
+            f"[IntentEngine] Default heuristic classification: intent={heuristic_plan['intent']}"
+        )
         return heuristic_plan
 
     # ── LLM Classification ────────────────────────────────────────────────────
@@ -140,7 +158,7 @@ class IntentEngine:
             pass
 
         # Try extracting JSON block from markdown
-        json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+        json_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
         if json_match:
             try:
                 return json.loads(json_match.group(1))
@@ -148,14 +166,16 @@ class IntentEngine:
                 pass
 
         # Try finding first { ... } block
-        brace_match = re.search(r'\{[\s\S]*\}', text)
+        brace_match = re.search(r"\{[\s\S]*\}", text)
         if brace_match:
             try:
                 return json.loads(brace_match.group(0))
             except json.JSONDecodeError:
                 pass
 
-        logger.warning(f"[IntentEngine] Could not parse LLM response as JSON: {text[:200]}")
+        logger.warning(
+            f"[IntentEngine] Could not parse LLM response as JSON: {text[:200]}"
+        )
         return None
 
     # ── Heuristic Classification ──────────────────────────────────────────────
@@ -192,10 +212,17 @@ class IntentEngine:
                 plan["intent"] = "ranking"
 
         # 8. Detect sort direction
-        fallback_sort_col = plan["metric"] or (schema_service.get_measures()[0] if schema_service.get_measures() else None)
-        if any(w in p for w in ["bottom", "lowest", "worst", "least", "minimum"]) and fallback_sort_col:
+        fallback_sort_col = plan["metric"] or (
+            schema_service.get_measures()[0] if schema_service.get_measures() else None
+        )
+        if (
+            any(w in p for w in ["bottom", "lowest", "worst", "least", "minimum"])
+            and fallback_sort_col
+        ):
             plan["sort"] = {"column": fallback_sort_col, "direction": "ASC"}
-        elif (plan["intent"] in ("ranking",) or plan.get("limit")) and fallback_sort_col:
+        elif (
+            plan["intent"] in ("ranking",) or plan.get("limit")
+        ) and fallback_sort_col:
             plan["sort"] = {"column": fallback_sort_col, "direction": "DESC"}
 
         # 9. Set requires_* flags
@@ -207,8 +234,18 @@ class IntentEngine:
             plan["requires_vector_search"] = False
         else:
             # Chat: check if it's a numerical question
-            numerical_words = ["total", "sum", "average", "count", "how many", "how much",
-                             "maximum", "minimum", "highest", "lowest"]
+            numerical_words = [
+                "total",
+                "sum",
+                "average",
+                "count",
+                "how many",
+                "how much",
+                "maximum",
+                "minimum",
+                "highest",
+                "lowest",
+            ]
             if any(w in p for w in numerical_words) and plan["metric"]:
                 plan["requires_structured_query"] = True
                 plan["requires_vector_search"] = True
@@ -227,30 +264,82 @@ class IntentEngine:
     def _detect_intent_keywords(self, p: str) -> str:
         """Detect intent from keywords."""
         graph_keywords = [
-            "chart", "graph", "plot", "visualize", "visualization",
-            "bar chart", "line chart", "scatter", "box plot", "pie chart",
-            "histogram", "show graph", "draw graph", "show chart",
-            "create a chart", "create a graph", "generate a graph",
-            "generate a chart", "make a chart", "make a graph",
-            "trendline", "dual-axis", "trend line", "waterfall", "donut",
-            "treemap", "funnel", "heatmap", "heat map", "trend"
+            "chart",
+            "graph",
+            "plot",
+            "visualize",
+            "visualization",
+            "bar chart",
+            "line chart",
+            "scatter",
+            "box plot",
+            "pie chart",
+            "histogram",
+            "show graph",
+            "draw graph",
+            "show chart",
+            "create a chart",
+            "create a graph",
+            "generate a graph",
+            "generate a chart",
+            "make a chart",
+            "make a graph",
+            "trendline",
+            "dual-axis",
+            "trend line",
+            "waterfall",
+            "donut",
+            "treemap",
+            "funnel",
+            "heatmap",
+            "heat map",
+            "trend",
         ]
         if any(kw in p for kw in graph_keywords):
             return "graph"
 
-        ranking_keywords = ["top", "bottom", "highest", "lowest", "best", "worst",
-                          "most", "least", "rank", "ranking"]
+        ranking_keywords = [
+            "top",
+            "bottom",
+            "highest",
+            "lowest",
+            "best",
+            "worst",
+            "most",
+            "least",
+            "rank",
+            "ranking",
+        ]
         if any(kw in p for kw in ranking_keywords):
             return "ranking"
 
-        comparison_keywords = ["compare", "comparison", "vs", "versus", "difference between",
-                             "better", "worse"]
+        comparison_keywords = [
+            "compare",
+            "comparison",
+            "vs",
+            "versus",
+            "difference between",
+            "better",
+            "worse",
+        ]
         if any(kw in p for kw in comparison_keywords):
             return "comparison"
 
-        analytical_keywords = ["total", "sum", "average", "avg", "count", "how many",
-                             "how much", "calculate", "what is the", "what was the",
-                             "maximum", "minimum", "aggregate"]
+        analytical_keywords = [
+            "total",
+            "sum",
+            "average",
+            "avg",
+            "count",
+            "how many",
+            "how much",
+            "calculate",
+            "what is the",
+            "what was the",
+            "maximum",
+            "minimum",
+            "aggregate",
+        ]
         if any(kw in p for kw in analytical_keywords):
             return "analytical"
 
@@ -259,54 +348,100 @@ class IntentEngine:
     def _get_active_semantic_model(self):
         try:
             from api.models.execution_context import current_selection
+
             sel = current_selection.get()
             if sel and sel.entry:
                 from api.platform.semantic import semantic_registry
-                return semantic_registry.get(sel.entry, sel.context.version, sel.context.semantic_revision, approved=False)
+
+                return semantic_registry.get(
+                    sel.entry,
+                    sel.context.version,
+                    sel.context.semantic_revision,
+                    approved=False,
+                )
         except Exception:
             pass
         return None
 
-    def _detect_metric(self, p: str, model: Optional[Any] = None, df: Optional[Any] = None) -> Optional[str]:
+    def _detect_metric(
+        self, p: str, model: Optional[Any] = None, df: Optional[Any] = None
+    ) -> Optional[str]:
         """Detect the metric/measure dynamically from semantic model or active DataFrame."""
         active_model = model or self._get_active_semantic_model()
         if active_model and active_model.fields:
             for f in [f for f in active_model.fields if f.role == "measure"]:
-                candidates = [f.name.lower(), f.semantic_name.lower()] + [a.lower() for a in (f.aliases or [])]
+                candidates = [f.name.lower(), f.semantic_name.lower()] + [
+                    a.lower() for a in (f.aliases or [])
+                ]
                 for c in candidates:
-                    if re.search(r'\b' + re.escape(c) + r'\b', p):
+                    if re.search(r"\b" + re.escape(c) + r"\b", p):
                         return f.name
             # Only default to single measure if the dataset strictly has exactly one measure
             measures = [f.name for f in active_model.fields if f.role == "measure"]
-            if len(measures) == 1 and any(k in p for k in ["total", "sum", "average", "avg", "trend", "overall"]):
+            if len(measures) == 1 and any(
+                k in p for k in ["total", "sum", "average", "avg", "trend", "overall"]
+            ):
                 return measures[0]
 
         target_df = df
         if target_df is None:
             try:
                 from api.services.data_service import data_service
+
                 target_df = data_service.get_dataframe()
             except Exception:
                 pass
 
         if target_df is not None and not target_df.empty:
-            nums = [c for c in target_df.select_dtypes(include=['number']).columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            nums = [
+                c
+                for c in target_df.select_dtypes(include=["number"]).columns
+                if not str(c).lower().endswith(("id", "code", "key"))
+            ]
             for col in nums:
                 clean_col = str(col).lower()
-                clean_no_usd = clean_col.replace('usd', '').replace('eur', '').replace('inr', '')
-                if clean_col in p or clean_no_usd in p or clean_col.replace('_', ' ') in p:
+                clean_no_usd = (
+                    clean_col.replace("usd", "").replace("eur", "").replace("inr", "")
+                )
+                if (
+                    clean_col in p
+                    or clean_no_usd in p
+                    or clean_col.replace("_", " ") in p
+                ):
                     return col
             # Only default if exactly one numeric metric exists
-            if len(nums) == 1 and any(k in p for k in ["total", "sum", "average", "avg", "how much", "cost", "salary", "revenue", "price", "rate"]):
+            if len(nums) == 1 and any(
+                k in p
+                for k in [
+                    "total",
+                    "sum",
+                    "average",
+                    "avg",
+                    "how much",
+                    "cost",
+                    "salary",
+                    "revenue",
+                    "price",
+                    "rate",
+                ]
+            ):
                 return nums[0]
 
         return None
 
-    def _detect_dimension(self, p: str, model: Optional[Any] = None, df: Optional[Any] = None) -> Optional[str]:
+    def _detect_dimension(
+        self, p: str, model: Optional[Any] = None, df: Optional[Any] = None
+    ) -> Optional[str]:
         """Detect the dimension/grouping dynamically from semantic model or active DataFrame."""
-        years = re.findall(r'\b(20[12]\d)\b', p)
+        years = re.findall(r"\b(20[12]\d)\b", p)
         multi_year = len(set(years)) > 1
-        quarterly_words = ["quarterly", "quarter", "by quarter", "per quarter", "each quarter"]
+        quarterly_words = [
+            "quarterly",
+            "quarter",
+            "by quarter",
+            "per quarter",
+            "each quarter",
+        ]
         monthly_words = ["monthly", "month", "by month", "per month", "each month"]
         separately_words = ["separately", "each", "broken down", "split", "break down"]
 
@@ -321,27 +456,42 @@ class IntentEngine:
 
         active_model = model or self._get_active_semantic_model()
         if active_model and active_model.fields:
-            for f in [f for f in active_model.fields if f.role in ("dimension", "time")]:
-                candidates = [f.name.lower(), f.semantic_name.lower()] + [a.lower() for a in (f.aliases or [])]
+            for f in [
+                f for f in active_model.fields if f.role in ("dimension", "time")
+            ]:
+                candidates = [f.name.lower(), f.semantic_name.lower()] + [
+                    a.lower() for a in (f.aliases or [])
+                ]
                 for c in candidates:
-                    if re.search(r'\b' + re.escape(c) + r'\b', p):
+                    if re.search(r"\b" + re.escape(c) + r"\b", p):
                         return f.name
 
         target_df = df
         if target_df is None:
             try:
                 from api.services.data_service import data_service
+
                 target_df = data_service.get_dataframe()
             except Exception:
                 pass
 
         if target_df is not None and not target_df.empty:
-            cats = [c for c in target_df.columns if not str(c).lower().endswith(('id', 'code', 'key'))]
+            cats = [
+                c
+                for c in target_df.columns
+                if not str(c).lower().endswith(("id", "code", "key"))
+            ]
             for col in cats:
                 clean_col = str(col).lower()
-                if clean_col in p or clean_col.replace('_', ' ') in p or clean_col.replace(' ', '') in p:
+                if (
+                    clean_col in p
+                    or clean_col.replace("_", " ") in p
+                    or clean_col.replace(" ", "") in p
+                ):
                     return col
-            m_by = re.search(r'\b(?:by|per|across|for each|split by|group by)\s+([a-zA-Z0-9_]+)', p)
+            m_by = re.search(
+                r"\b(?:by|per|across|for each|split by|group by)\s+([a-zA-Z0-9_]+)", p
+            )
             if m_by:
                 target_word = m_by.group(1).lower()
                 for col in target_df.columns:
@@ -358,24 +508,41 @@ class IntentEngine:
     def _detect_chart_type(self, p: str) -> Optional[str]:
         """Detect explicit chart type from prompt."""
         chart_map = {
-            "pie chart": "pie", "donut": "donut", "doughnut": "donut",
-            "line chart": "line", "line graph": "line", "trendline": "line", "dual-axis": "line", "trend line": "line",
-            "bar chart": "bar", "bar graph": "bar",
-            "scatter": "scatter", "scatter plot": "scatter",
-            "heatmap": "heatmap", "heat map": "heatmap",
-            "area chart": "area", "area graph": "area",
-            "box plot": "box", "boxplot": "box",
+            "pie chart": "pie",
+            "donut": "donut",
+            "doughnut": "donut",
+            "line chart": "line",
+            "line graph": "line",
+            "trendline": "line",
+            "dual-axis": "line",
+            "trend line": "line",
+            "bar chart": "bar",
+            "bar graph": "bar",
+            "scatter": "scatter",
+            "scatter plot": "scatter",
+            "heatmap": "heatmap",
+            "heat map": "heatmap",
+            "area chart": "area",
+            "area graph": "area",
+            "box plot": "box",
+            "boxplot": "box",
             "violin": "violin",
-            "funnel": "funnel", "waterfall": "waterfall",
-            "treemap": "treemap", "tree map": "treemap",
-            "stacked": "stacked_bar", "horizontal bar": "horizontal_bar",
+            "funnel": "funnel",
+            "waterfall": "waterfall",
+            "treemap": "treemap",
+            "tree map": "treemap",
+            "stacked": "stacked_bar",
+            "horizontal bar": "horizontal_bar",
         }
         for kw, ct in chart_map.items():
             if kw in p:
                 return ct
 
         # Heuristics
-        if any(w in p for w in ["monthly", "weekly", "daily", "yearly", "over time", "trend"]):
+        if any(
+            w in p
+            for w in ["monthly", "weekly", "daily", "yearly", "over time", "trend"]
+        ):
             return "line"
         if any(w in p for w in ["share", "proportion", "breakdown", "distribution"]):
             return "pie"
@@ -395,14 +562,16 @@ class IntentEngine:
                 for val in col_meta.sample_values:
                     val_str = str(val).lower()
                     if len(val_str) > 2 and val_str in p:
-                        filters.append({
-                            "column": col_meta.column_name,
-                            "operator": "=",
-                            "value": str(val)
-                        })
+                        filters.append(
+                            {
+                                "column": col_meta.column_name,
+                                "operator": "=",
+                                "value": str(val),
+                            }
+                        )
 
         # Numeric comparison patterns: "revenue greater than 50000"
-        numeric_pattern = r'(?:greater than|more than|above|over|exceeds?)\s+(\d+(?:,\d{3})*(?:\.\d+)?)'
+        numeric_pattern = r"(?:greater than|more than|above|over|exceeds?)\s+(\d+(?:,\d{3})*(?:\.\d+)?)"
         match = re.search(numeric_pattern, p)
         if match:
             value = float(match.group(1).replace(",", ""))
@@ -410,7 +579,9 @@ class IntentEngine:
             if metric:
                 filters.append({"column": metric, "operator": ">", "value": value})
 
-        lt_pattern = r'(?:less than|under|below|fewer than)\s+(\d+(?:,\d{3})*(?:\.\d+)?)'
+        lt_pattern = (
+            r"(?:less than|under|below|fewer than)\s+(\d+(?:,\d{3})*(?:\.\d+)?)"
+        )
         match = re.search(lt_pattern, p)
         if match:
             value = float(match.group(1).replace(",", ""))
@@ -423,7 +594,7 @@ class IntentEngine:
     def _detect_date_filter(self, p: str) -> Optional[Dict[str, Any]]:
         """Extract date/year filter from the prompt."""
         # Year pattern: capture ALL years mentioned (e.g. "2023, 2024, and 2025")
-        year_matches = re.findall(r'\b(20[12]\d)\b', p)
+        year_matches = re.findall(r"\b(20[12]\d)\b", p)
         if year_matches:
             unique_years = sorted(set(year_matches))
             from_year = unique_years[0]
@@ -431,7 +602,7 @@ class IntentEngine:
             return {"column": "Year", "from": from_year, "to": to_year}
 
         # Quarter pattern: "Q1 2025", "Q3"
-        q_match = re.search(r'\bQ([1-4])\b', p, re.IGNORECASE)
+        q_match = re.search(r"\bQ([1-4])\b", p, re.IGNORECASE)
         if q_match:
             quarter = f"Q{q_match.group(1)}"
             return {"column": "Quarter", "from": quarter, "to": quarter}
@@ -441,11 +612,13 @@ class IntentEngine:
     def _detect_limit(self, p: str) -> Optional[int]:
         """Detect top/bottom N from the prompt."""
         # "top 10", "bottom 5", "first 20"
-        match = re.search(r'\b(?:top|bottom|first|last|best|worst)\s+(\d+)\b', p, re.IGNORECASE)
+        match = re.search(
+            r"\b(?:top|bottom|first|last|best|worst)\s+(\d+)\b", p, re.IGNORECASE
+        )
         if match:
             return int(match.group(1))
         # "10 customers", "5 products" at start
-        match = re.search(r'^(?:show\s+)?(\d+)\s+(?:top\s+)?', p)
+        match = re.search(r"^(?:show\s+)?(\d+)\s+(?:top\s+)?", p)
         if match:
             n = int(match.group(1))
             if 1 < n <= 100:
@@ -464,7 +637,9 @@ class IntentEngine:
             if resolved:
                 plan["metric"] = resolved
             else:
-                logger.warning(f"[IntentEngine] Metric '{plan['metric']}' not found in schema")
+                logger.warning(
+                    f"[IntentEngine] Metric '{plan['metric']}' not found in schema"
+                )
                 plan["metric"] = None
 
         # Validate dimension column exists (support composite dimensions like "Year, Quarter")
@@ -482,7 +657,9 @@ class IntentEngine:
                         if resolved:
                             valid_parts.append(resolved)
                         else:
-                            logger.warning(f"[IntentEngine] Composite dimension part '{part}' not found")
+                            logger.warning(
+                                f"[IntentEngine] Composite dimension part '{part}' not found"
+                            )
                 if valid_parts:
                     plan["dimension"] = ", ".join(valid_parts)
                 else:
@@ -492,7 +669,9 @@ class IntentEngine:
                 if resolved:
                     plan["dimension"] = resolved
                 else:
-                    logger.warning(f"[IntentEngine] Dimension '{dim}' not found in schema")
+                    logger.warning(
+                        f"[IntentEngine] Dimension '{dim}' not found in schema"
+                    )
                     plan["dimension"] = None
 
         # Merge duplicate equality filters on the same column into IN filter
@@ -500,10 +679,15 @@ class IntentEngine:
         raw_filters = plan.get("filters", [])
         if raw_filters:
             from collections import defaultdict
+
             eq_groups = defaultdict(list)  # column → [values]
             non_eq_filters = []
             for f in raw_filters:
-                if f.get("operator") == "=" and f.get("column") and f.get("value") is not None:
+                if (
+                    f.get("operator") == "="
+                    and f.get("column")
+                    and f.get("value") is not None
+                ):
                     eq_groups[f["column"]].append(f["value"])
                 else:
                     non_eq_filters.append(f)
@@ -511,10 +695,16 @@ class IntentEngine:
             merged_filters = list(non_eq_filters)
             for col, values in eq_groups.items():
                 if len(values) > 1:
-                    merged_filters.append({"column": col, "operator": "IN", "value": values})
-                    logger.info(f"[IntentEngine] Merged {len(values)} equality filters on '{col}' into IN filter")
+                    merged_filters.append(
+                        {"column": col, "operator": "IN", "value": values}
+                    )
+                    logger.info(
+                        f"[IntentEngine] Merged {len(values)} equality filters on '{col}' into IN filter"
+                    )
                 else:
-                    merged_filters.append({"column": col, "operator": "=", "value": values[0]})
+                    merged_filters.append(
+                        {"column": col, "operator": "=", "value": values[0]}
+                    )
             raw_filters = merged_filters
 
         # Validate filters
@@ -535,18 +725,31 @@ class IntentEngine:
         date_filter = plan.get("date_filter")
         if date_filter and date_filter.get("column") == "Year":
             plan["filters"] = [
-                f for f in plan["filters"]
+                f
+                for f in plan["filters"]
                 if not (f.get("column") == "Year" and f.get("operator") in ("=", "IN"))
             ]
 
         # Detect composite dimension from multi-year prompts (LLM path)
         if plan.get("dimension") and ", " not in str(plan.get("dimension", "")):
             p = prompt.lower()
-            years = re.findall(r'\b(20[12]\d)\b', p)
+            years = re.findall(r"\b(20[12]\d)\b", p)
             multi_year = len(set(years)) > 1
-            quarterly_words = ["quarterly", "quarter", "by quarter", "per quarter", "each quarter"]
+            quarterly_words = [
+                "quarterly",
+                "quarter",
+                "by quarter",
+                "per quarter",
+                "each quarter",
+            ]
             monthly_words = ["monthly", "month", "by month", "per month", "each month"]
-            separately_words = ["separately", "each", "broken down", "split", "break down"]
+            separately_words = [
+                "separately",
+                "each",
+                "broken down",
+                "split",
+                "break down",
+            ]
 
             if multi_year:
                 dim = plan["dimension"]
@@ -565,9 +768,22 @@ class IntentEngine:
             plan["aggregation"] = "SUM"
 
         # Validate chart type
-        valid_charts = {"bar", "line", "pie", "donut", "scatter", "area", "heatmap",
-                       "box", "violin", "funnel", "waterfall", "treemap", "stacked_bar",
-                       "horizontal_bar"}
+        valid_charts = {
+            "bar",
+            "line",
+            "pie",
+            "donut",
+            "scatter",
+            "area",
+            "heatmap",
+            "box",
+            "violin",
+            "funnel",
+            "waterfall",
+            "treemap",
+            "stacked_bar",
+            "horizontal_bar",
+        }
         if plan.get("chart_type") and plan["chart_type"] not in valid_charts:
             plan["chart_type"] = "bar"
 
@@ -577,11 +793,15 @@ class IntentEngine:
             plan["intent"] = "chat"
 
         # Set defaults for analytical/ranking/graph if metric is missing
-        if plan["intent"] in ("analytical", "ranking", "graph") and not plan.get("metric"):
+        if plan["intent"] in ("analytical", "ranking", "graph") and not plan.get(
+            "metric"
+        ):
             measures = [k for k, v in meta.items() if getattr(v, "is_measure", False)]
             if measures:
                 plan["metric"] = measures[0]
-                plan["aggregation"] = getattr(meta[measures[0]], "default_aggregation", "SUM") or "SUM"
+                plan["aggregation"] = (
+                    getattr(meta[measures[0]], "default_aggregation", "SUM") or "SUM"
+                )
             else:
                 plan["metric"] = "*"
                 plan["aggregation"] = "COUNT"

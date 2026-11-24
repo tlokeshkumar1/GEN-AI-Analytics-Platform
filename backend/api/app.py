@@ -2,9 +2,7 @@ import sys
 from pathlib import Path
 
 # Ensure backend directory is in sys.path for module imports (e.g. from api....)
-BASE_DIR = Path(__file__).resolve().parent.parent
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,21 +27,27 @@ from api.routes.hanaadmin import router as hanaadmin_router
 app = FastAPI(
     title="GEN-AI Analytics Platform API",
     description="Enterprise Analytics & RAG Service powered by SAP HANA Cloud & SAP AI Core",
-    version="1.0.0"
+    version="1.0.0",
 )
+
 
 # Initialise chat history tables on startup
 @app.on_event("startup")
 def startup_init_chat_tables():
     try:
         from api.services.history_service import history_service
+
         history_service.init_tables()
     except Exception as e:
         import logging
+
         logging.getLogger("app").warning(f"Chat history table init skipped: {e}")
 
+
 # CORS configuration
-allowed_origins_list = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+allowed_origins_list = [
+    o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()
+]
 app.add_middleware(DatasetContextMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -70,14 +74,17 @@ app.include_router(system_router)
 app.include_router(database_router)
 app.include_router(hanaadmin_router)
 
+
 @app.get("/")
 def root():
     return {
         "message": "Welcome to GEN-AI Analytics Platform API",
         "docs": "/docs",
-        "health": "/api/health"
+        "health": "/api/health",
     }
+
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("app:app", host="0.0.0.0", port=settings.PORT, reload=True)

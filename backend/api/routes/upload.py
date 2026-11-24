@@ -16,7 +16,9 @@ HEARTBEAT_INTERVAL = 15.0
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 
 
-async def _read_upload_payload(file: UploadFile, plan: str | None) -> tuple[bytes, TransformationPlan | None]:
+async def _read_upload_payload(
+    file: UploadFile, plan: str | None
+) -> tuple[bytes, TransformationPlan | None]:
     """Validate uploaded spreadsheet, stream bounded bytes, and parse any transformation plan."""
     validate_excel_file(file.filename)
     max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
@@ -28,7 +30,7 @@ async def _read_upload_payload(file: UploadFile, plan: str | None) -> tuple[byte
         if len(buffer) > max_bytes:
             raise HTTPException(
                 status_code=413,
-                detail=f"File exceeds maximum allowed upload size of {settings.MAX_UPLOAD_SIZE_MB}MB."
+                detail=f"File exceeds maximum allowed upload size of {settings.MAX_UPLOAD_SIZE_MB}MB.",
             )
 
     try:
@@ -106,7 +108,9 @@ async def upload_dataset_stream(
 
             while True:
                 if await request.is_disconnected():
-                    logger.info("[UploadStream] Client disconnected, stopping SSE stream.")
+                    logger.info(
+                        "[UploadStream] Client disconnected, stopping SSE stream."
+                    )
                     return
 
                 try:
@@ -132,8 +136,17 @@ async def upload_dataset_stream(
         except asyncio.CancelledError:
             logger.info("[UploadStream] SSE generation cancelled.")
         except Exception as e:
-            logger.error("[UploadStream] SSE upload failed (%s): %s", type(e).__name__, e, exc_info=True)
-            detail = e.detail if isinstance(e, HTTPException) else f"Failed to process file: {str(e)}"
+            logger.error(
+                "[UploadStream] SSE upload failed (%s): %s",
+                type(e).__name__,
+                e,
+                exc_info=True,
+            )
+            detail = (
+                e.detail
+                if isinstance(e, HTTPException)
+                else f"Failed to process file: {str(e)}"
+            )
             yield f"data: {safe_json_dumps({'type': 'error', 'message': detail})}\n\n"
             yield f"data: {safe_json_dumps({'type': 'request_completed'})}\n\n"
 

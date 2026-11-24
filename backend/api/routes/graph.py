@@ -23,20 +23,29 @@ class AdvancedGraphRequest(BaseModel):
 
 @router.post("/advanced")
 def advanced_graph(req: AdvancedGraphRequest):
-    import os
     from api.models.execution_context import current_selection, require_dataset_access
     from api.platform.jobs import job_service
+
     selection = current_selection.get()
     if selection is None:
         raise HTTPException(409, "Select a dataset version first.")
     require_dataset_access(selection.entry, write=True)
-    return job_service.enqueue("custom_chart", {"dataset_id": selection.context.dataset_id,
-                               "context": selection.context.model_dump(), "query_plan": req.query_plan.model_dump(exclude_none=True, by_alias=True),
-                               "prompt": req.prompt}, req.idempotency_key)
+    return job_service.enqueue(
+        "custom_chart",
+        {
+            "dataset_id": selection.context.dataset_id,
+            "context": selection.context.model_dump(),
+            "query_plan": req.query_plan.model_dump(exclude_none=True, by_alias=True),
+            "prompt": req.prompt,
+        },
+        req.idempotency_key,
+    )
 
 
 class GraphRequest(BaseModel):
-    prompt: str = Field(..., description="Natural language description of requested visualization")
+    prompt: str = Field(
+        ..., description="Natural language description of requested visualization"
+    )
     query_plan: Optional[QueryPlan] = None
     chart_type: str = "bar"
     dataset_id: Optional[str] = None
@@ -67,16 +76,27 @@ def generate_graph(req: GraphRequest):
         raise HTTPException(status_code=400, detail="Graph prompt cannot be empty.")
 
     from api.platform.data_resolution import dataset_scope
+
     with dataset_scope(req.dataset_id):
         # Classify intent and structure query plan
-        plan = req.query_plan.model_dump(exclude_none=True, by_alias=True) if req.query_plan else intent_engine.classify(req.prompt)
+        plan = (
+            req.query_plan.model_dump(exclude_none=True, by_alias=True)
+            if req.query_plan
+            else intent_engine.classify(req.prompt)
+        )
         result = analytics_engine.execute(plan)
         if not result.success:
             raise HTTPException(422, result.error)
-        return GraphResponse(status="success", prompt=req.prompt,
-                             image_base64=render_chart(result.data, req.chart_type), chart_type=req.chart_type,
-                             message="Rendered from deterministic DataFrame results", query_plan=plan,
-                             records_matched=result.records_matched, records_in_source=result.records_total)
+        return GraphResponse(
+            status="success",
+            prompt=req.prompt,
+            image_base64=render_chart(result.data, req.chart_type),
+            chart_type=req.chart_type,
+            message="Rendered from deterministic DataFrame results",
+            query_plan=plan,
+            records_matched=result.records_matched,
+            records_in_source=result.records_total,
+        )
 
 
 class PythonGraphAgentRequest(BaseModel):
@@ -96,7 +116,6 @@ def generate_python_graph_agent(req: PythonGraphAgentRequest):
     Supports natural language prompt (Mode 2) OR structured data options without prompt (Mode 3).
     """
     from api.services.python_graph_agent import python_graph_agent
-    from api.services.dataset_service import dataset_service
     from api.models.execution_context import current_selection
     from api.platform.data_resolution import selected_dataset
 
@@ -124,14 +143,15 @@ def generate_python_graph_agent(req: PythonGraphAgentRequest):
 
     try:
         result = python_graph_agent.generate_custom_graph(
-            prompt=prompt,
-            query_plan=plan if plan else None
+            prompt=prompt, query_plan=plan if plan else None
         )
         return result
     except Exception as e:
         if isinstance(e, HTTPException):
             raise
-        raise HTTPException(status_code=500, detail=f"Custom graph generation failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Custom graph generation failed: {str(e)}"
+        )
     finally:
         if selection_token is not None:
             current_selection.reset(selection_token)
@@ -160,12 +180,13 @@ def generate_genai_dashboard(req: GenAIDashboardRequest):
         raise HTTPException(status_code=400, detail="Dashboard prompt cannot be empty.")
 
     from api.platform.data_resolution import dataset_scope
+
     try:
         with dataset_scope(req.dataset_id):
             return genai_dashboard_service.generate_dashboard(
                 prompt=req.prompt,
                 target_dataset_id=req.dataset_id,
-                conversation_history=req.conversation_history
+                conversation_history=req.conversation_history,
             )
     except HTTPException:
         raise
@@ -173,7 +194,9 @@ def generate_genai_dashboard(req: GenAIDashboardRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Gen AI dashboard generation failed")
-        raise HTTPException(status_code=500, detail="Dashboard generation failed. Retry the request.") from exc
+        raise HTTPException(
+            status_code=500, detail="Dashboard generation failed. Retry the request."
+        ) from exc
 
 
 @router.post("/genai-dashboard/generate-stream")
@@ -188,11 +211,17 @@ def generate_genai_dashboard_stream(req: GenAIDashboardRequest):
         raise HTTPException(status_code=400, detail="Dashboard prompt cannot be empty.")
 
     from api.platform.data_resolution import dataset_scope, selected_dataset
+
     selected_dataset(req.dataset_id)  # Authorize before opening the SSE response.
 
     def event_stream():
-        iterator = iter(genai_dashboard_service.generate_dashboard_stream(
-            prompt=req.prompt, target_dataset_id=req.dataset_id, conversation_history=req.conversation_history))
+        iterator = iter(
+            genai_dashboard_service.generate_dashboard_stream(
+                prompt=req.prompt,
+                target_dataset_id=req.dataset_id,
+                conversation_history=req.conversation_history,
+            )
+        )
         try:
             while True:
                 # Each next() can run in a different threadpool context. Reset before yielding.
@@ -220,16 +249,15 @@ def execute_genai_widget(req: GenAIWidgetExecutionRequest):
     from api.services.genai_dashboard_service import genai_dashboard_service
 
     from api.platform.data_resolution import dataset_scope
+
     try:
         with dataset_scope(req.dataset_id):
             return genai_dashboard_service.execute_single_widget(
-                widget_spec=req.widget,
-                target_dataset_id=req.dataset_id
+                widget_spec=req.widget, target_dataset_id=req.dataset_id
             )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Widget execution failed: {str(e)}")
-
-
-
+        raise HTTPException(
+            status_code=500, detail=f"Widget execution failed: {str(e)}"
+        )

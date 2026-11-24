@@ -1,4 +1,5 @@
 """Dedicated worker entry point: python -m api.worker [--once]."""
+
 import argparse
 import time
 import logging
@@ -11,6 +12,7 @@ def main():
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     from api.platform.jobs import job_service
+
     worker_id = uuid.uuid4().hex
     workspace = os.getenv("PLATFORM_WORKSPACE_ID", "default")
     next_heartbeat = 0

@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Literal
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from api.database.hana_table_service import hana_table_service
 from api.models.execution_context import require_admin
@@ -19,7 +19,9 @@ class QueryPayload(BaseModel):
 
 @router.get("")
 async def hana_admin_overview(
-    include_first_table: bool = Query(False, description="Include page-1 rows for the first table"),
+    include_first_table: bool = Query(
+        False, description="Include page-1 rows for the first table"
+    ),
     pageSize: int = Query(25, ge=1, le=500),
     refresh: bool = Query(False, description="Bypass cache and force refresh"),
 ):
@@ -44,7 +46,9 @@ async def hana_admin_overview(
             "initialTableData": overview.get("initialTableData"),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch HANA Admin overview: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch HANA Admin overview: {str(e)}"
+        )
 
 
 @router.get("/stats")
@@ -55,39 +59,56 @@ async def get_stats():
         stats = await run_in_threadpool(hana_table_service.get_database_stats)
         return stats
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch database statistics: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch database statistics: {str(e)}"
+        )
 
 
 @router.get("/views")
 async def list_metadata_views():
     require_admin()
     from api.services.metadata_views import browse_views
+
     return await run_in_threadpool(browse_views)
 
 
 @router.get("/views/{view_name}/data")
-async def get_metadata_view_data(view_name: str, page: int = Query(1, ge=1), pageSize: int = Query(25, ge=1, le=100), publication: Literal['all', 'published', 'unpublished'] = 'all'):
+async def get_metadata_view_data(
+    view_name: str,
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(25, ge=1, le=100),
+    publication: Literal["all", "published", "unpublished"] = "all",
+):
     require_admin()
     from api.services.metadata_views import browse_views
+
     return await run_in_threadpool(browse_views, view_name, page, pageSize, publication)
 
 
 @router.get("/tables")
-async def list_tables(include_internal: bool = Query(True, description="Include system and vector/chat internal tables")):
+async def list_tables(
+    include_internal: bool = Query(
+        True, description="Include system and vector/chat internal tables"
+    ),
+):
     """
     List all tables currently existing in the configured SAP HANA Cloud schema.
     Dynamically and automatically detects any newly created or future tables.
     """
     require_admin()
     try:
-        tables = await run_in_threadpool(hana_table_service.list_user_tables, include_internal=include_internal)
+        tables = await run_in_threadpool(
+            hana_table_service.list_user_tables, include_internal=include_internal
+        )
         return {
             "success": True,
             "totalTables": len(tables),
             "tables": tables,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to query HANA database tables: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to query HANA database tables: {str(e)}"
+        )
 
 
 @router.get("/tables/{table_name}")
@@ -97,11 +118,17 @@ async def get_table_details(table_name: str):
     try:
         exists = await run_in_threadpool(hana_table_service.table_exists, table_name)
         if not exists:
-            raise HTTPException(status_code=404, detail=f"Table '{table_name}' does not exist.")
+            raise HTTPException(
+                status_code=404, detail=f"Table '{table_name}' does not exist."
+            )
 
         cols = await run_in_threadpool(hana_table_service.get_table_columns, table_name)
-        tables = await run_in_threadpool(hana_table_service.list_user_tables, include_internal=True)
-        matched = next((t for t in tables if t["name"].upper() == table_name.upper()), None)
+        tables = await run_in_threadpool(
+            hana_table_service.list_user_tables, include_internal=True
+        )
+        matched = next(
+            (t for t in tables if t["name"].upper() == table_name.upper()), None
+        )
 
         return {
             "success": True,
@@ -115,7 +142,10 @@ async def get_table_details(table_name: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve details for table '{table_name}': {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve details for table '{table_name}': {str(e)}",
+        )
 
 
 @router.get("/tables/{table_name}/schema")
@@ -125,9 +155,13 @@ async def get_table_schema(table_name: str):
     try:
         cols = await run_in_threadpool(hana_table_service.get_table_columns, table_name)
         if not cols:
-            exists = await run_in_threadpool(hana_table_service.table_exists, table_name)
+            exists = await run_in_threadpool(
+                hana_table_service.table_exists, table_name
+            )
             if not exists:
-                raise HTTPException(status_code=404, detail=f"Table '{table_name}' not found.")
+                raise HTTPException(
+                    status_code=404, detail=f"Table '{table_name}' not found."
+                )
         return {
             "success": True,
             "tableName": table_name.upper(),
@@ -136,7 +170,10 @@ async def get_table_schema(table_name: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch schema for table '{table_name}': {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch schema for table '{table_name}': {str(e)}",
+        )
 
 
 @router.get("/tables/{table_name}/data")
@@ -145,7 +182,9 @@ async def get_table_data(
     page: int = Query(1, ge=1, description="Page number starting at 1"),
     pageSize: int = Query(25, ge=1, le=500, description="Number of records per page"),
     sortField: Optional[str] = Query(None, description="Column name to sort by"),
-    sortDir: Literal["asc", "desc", "ASC", "DESC"] = Query("asc", description="Sort direction"),
+    sortDir: Literal["asc", "desc", "ASC", "DESC"] = Query(
+        "asc", description="Sort direction"
+    ),
     search: str = Query("", description="Search term for string columns"),
 ):
     """
@@ -170,7 +209,10 @@ async def get_table_data(
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch data for table '{table_name}': {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch data for table '{table_name}': {str(e)}",
+        )
 
 
 @router.post("/query")
@@ -195,12 +237,16 @@ async def execute_sql_query(payload: QueryPayload):
 
 class DeleteRangePayload(BaseModel):
     mode: Literal["row_range", "id_range", "key_values"] = "row_range"
-    fromRow: Optional[int] = Field(None, ge=1, description="Starting row number (1-based)")
+    fromRow: Optional[int] = Field(
+        None, ge=1, description="Starting row number (1-based)"
+    )
     toRow: Optional[int] = Field(None, ge=1, description="Ending row number (1-based)")
     idColumn: Optional[str] = Field(None, description="Identifier column name")
     fromId: Optional[str] = Field(None, description="Starting ID")
     toId: Optional[str] = Field(None, description="Ending ID")
-    keyValues: Optional[Dict[str, List[Any]]] = Field(None, description="Map of column name to values for parameterized deletion")
+    keyValues: Optional[Dict[str, List[Any]]] = Field(
+        None, description="Map of column name to values for parameterized deletion"
+    )
 
 
 @router.post("/tables/{table_name}/delete-range")
@@ -226,13 +272,19 @@ async def delete_table_range(table_name: str, payload: DeleteRangePayload):
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete records from '{table_name}': {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete records from '{table_name}': {str(e)}",
+        )
 
 
 @router.delete("/tables/{table_name}")
 async def drop_table(
     table_name: str,
-    cascade_dataset: bool = Query(True, description="Also clean up matching dataset metadata & embeddings if table is a dataset table")
+    cascade_dataset: bool = Query(
+        True,
+        description="Also clean up matching dataset metadata & embeddings if table is a dataset table",
+    ),
 ):
     """
     Safely drop a column table from SAP HANA Cloud.
@@ -243,18 +295,24 @@ async def drop_table(
     try:
         clean_name = table_name.strip()
         protected = {
-            "DATASETS_METADATA", "PLATFORM_METADATA", "PLATFORM_DOCUMENTS",
-            "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS"
+            "DATASETS_METADATA",
+            "PLATFORM_METADATA",
+            "PLATFORM_DOCUMENTS",
+            "VECTOR_TABLE",
+            "CHAT_MESSAGES",
+            "CHAT_SESSIONS",
         }
         if clean_name.upper() in protected:
             raise HTTPException(
                 status_code=400,
-                detail=f"Dropping protected system table '{clean_name}' is strictly prohibited."
+                detail=f"Dropping protected system table '{clean_name}' is strictly prohibited.",
             )
 
         exists = await run_in_threadpool(hana_table_service.table_exists, clean_name)
         if not exists:
-            raise HTTPException(status_code=404, detail=f"Table '{clean_name}' does not exist.")
+            raise HTTPException(
+                status_code=404, detail=f"Table '{clean_name}' does not exist."
+            )
 
         # Identify if this table is associated with an uploaded dataset
         matched_dataset_id = None
@@ -262,12 +320,18 @@ async def drop_table(
         if cascade_dataset:
             try:
                 from api.services.dataset_service import dataset_service
+
                 catalog = await run_in_threadpool(dataset_service._catalog)
                 clean_upper = clean_name.upper()
                 for ds_id, entry in list(catalog.get("datasets", {}).items()):
                     phys = (entry.get("physical_table_name") or "").upper()
                     folder = (entry.get("folder") or "").upper()
-                    name_stem = Path(entry.get("name", "")).stem.upper().replace(" ", "_").replace("-", "_")
+                    name_stem = (
+                        Path(entry.get("name", ""))
+                        .stem.upper()
+                        .replace(" ", "_")
+                        .replace("-", "_")
+                    )
                     cand_names = {
                         phys,
                         folder,
@@ -277,13 +341,15 @@ async def drop_table(
                         f"DS_{folder[:18]}_V{entry.get('currentVersion', 1)}",
                         f"DS_{name_stem[:18]}",
                         f"DS_{name_stem[:18]}_V1",
-                        f"DS_{name_stem[:18]}_V{entry.get('currentVersion', 1)}"
+                        f"DS_{name_stem[:18]}_V{entry.get('currentVersion', 1)}",
                     }
                     if clean_upper in cand_names:
                         matched_dataset_id = ds_id
                         break
             except Exception as ex:
-                logger.warning(f"Error checking matching dataset for table '{clean_name}': {ex}")
+                logger.warning(
+                    f"Error checking matching dataset for table '{clean_name}': {ex}"
+                )
 
         # Drop the table in SAP HANA Cloud
         res = await run_in_threadpool(hana_table_service.drop_table, clean_name)
@@ -292,9 +358,12 @@ async def drop_table(
         if cascade_dataset and matched_dataset_id:
             try:
                 from api.services.dataset_service import dataset_service
+
                 await run_in_threadpool(dataset_service.delete, matched_dataset_id)
                 dataset_cleaned = True
-                logger.info(f"Cascaded dataset cleanup for dataset '{matched_dataset_id}' on table '{clean_name}'")
+                logger.info(
+                    f"Cascaded dataset cleanup for dataset '{matched_dataset_id}' on table '{clean_name}'"
+                )
             except Exception as ex:
                 logger.warning(f"Associated dataset cleanup notice: {ex}")
 
@@ -304,13 +373,13 @@ async def drop_table(
             "dropped": res.get("dropped", True),
             "datasetCleaned": dataset_cleaned,
             "matchedDatasetId": matched_dataset_id,
-            "message": f"Table '{clean_name.upper()}' has been successfully dropped from SAP HANA Cloud."
+            "message": f"Table '{clean_name.upper()}' has been successfully dropped from SAP HANA Cloud.",
         }
     except HTTPException:
         raise
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to drop table '{table_name}': {str(e)}")
-
-
+        raise HTTPException(
+            status_code=500, detail=f"Failed to drop table '{table_name}': {str(e)}"
+        )

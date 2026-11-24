@@ -1,4 +1,5 @@
 """Persisted workflow contracts; proposal certainty is never reported as accuracy."""
+
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from api.models.query_plan import Aggregation, QueryPlan, Measure
@@ -19,7 +20,9 @@ class ParseOptions(Contract):
     date_format: str | None = None
     timezone: str | None = None
     duplicate_policy: Literal["keep", "reject", "drop"] = "keep"
-    column_types: dict[str, Literal["string", "identifier", "integer", "decimal", "boolean", "date"]] = Field(default_factory=dict)
+    column_types: dict[
+        str, Literal["string", "identifier", "integer", "decimal", "boolean", "date"]
+    ] = Field(default_factory=dict)
     currencies: dict[str, str] = Field(default_factory=dict)
     units: dict[str, str] = Field(default_factory=dict)
 
@@ -63,17 +66,28 @@ class SemanticField(Contract):
     description: str = ""
     unit: str | None = None
     currency: str | None = None
-    aggregations: list[Aggregation] = Field(default_factory=lambda: ["COUNT", "COUNT_DISTINCT"])
+    aggregations: list[Aggregation] = Field(
+        default_factory=lambda: ["COUNT", "COUNT_DISTINCT"]
+    )
     default_aggregation: Aggregation | None = None
     evidence: str = "User review required"
 
     @model_validator(mode="after")
     def permitted_aggregation(self):
-        if self.default_aggregation and self.default_aggregation not in self.aggregations:
+        if (
+            self.default_aggregation
+            and self.default_aggregation not in self.aggregations
+        ):
             raise ValueError("Default aggregation must be permitted")
-        if self.role == "identifier" and set(self.aggregations) - {"COUNT", "COUNT_DISTINCT"}:
+        if self.role == "identifier" and set(self.aggregations) - {
+            "COUNT",
+            "COUNT_DISTINCT",
+        }:
             raise ValueError("Identifiers cannot be summed or averaged")
-        if set(self.aggregations) - {"COUNT", "COUNT_DISTINCT"} and self.type not in ("integer", "decimal"):
+        if set(self.aggregations) - {"COUNT", "COUNT_DISTINCT"} and self.type not in (
+            "integer",
+            "decimal",
+        ):
             raise ValueError("Arithmetic aggregation requires a numeric field")
         return self
 
@@ -116,7 +130,20 @@ class SemanticModel(Contract):
 class AnalyticsItem(Contract):
     id: str
     title: str
-    kind: Literal["kpi", "table", "bar", "line", "scatter", "pie", "area", "donut", "horizontal_bar", "gauge", "funnel", "radar"]
+    kind: Literal[
+        "kpi",
+        "table",
+        "bar",
+        "line",
+        "scatter",
+        "pie",
+        "area",
+        "donut",
+        "horizontal_bar",
+        "gauge",
+        "funnel",
+        "radar",
+    ]
     revision: int = Field(ge=1)
     semantic_revision: int = Field(ge=1)
     query_plan: QueryPlan

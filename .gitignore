@@ -24,3 +24,6 @@ backend/api/data/
 **/active_project_sessions.json
 **/project_user_logins.json
 
+
+ci-results/
+frontend/test-results.xml

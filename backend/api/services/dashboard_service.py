@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 import re
 import pandas as pd
 from api.services.data_service import data_service
@@ -16,7 +16,21 @@ def _format_metric(val: float, name: str) -> str:
     low = name.lower()
     if any(k in low for k in ("pct", "percent", "ratio", "rate")):
         return f"{val:.1f}%"
-    if any(k in low for k in ("usd", "revenue", "sales", "salary", "cost", "price", "margin", "amount", "budget", "profit")):
+    if any(
+        k in low
+        for k in (
+            "usd",
+            "revenue",
+            "sales",
+            "salary",
+            "cost",
+            "price",
+            "margin",
+            "amount",
+            "budget",
+            "profit",
+        )
+    ):
         return f"${val:,.0f}"
     return f"{val:,.0f}"
 
@@ -38,15 +52,37 @@ class DashboardService:
 
         if df is None or df.empty:
             formatted_kpis = [
-                {"title": "Primary Metric", "value": f"{kpis.get('total_revenue', 0):,.0f}", "change": "0.0%", "trend": "neutral"},
-                {"title": "Secondary Metric", "value": f"{kpis.get('total_quantity', 0):,}", "change": "0.0%", "trend": "neutral"},
-                {"title": "Average Value", "value": f"{kpis.get('avg_margin', 0):,.1f}", "change": "0.0%", "trend": "neutral"},
-                {"title": "Distinct Categories", "value": str(kpis.get('country_count', 0)), "change": "0.0%", "trend": "neutral"},
+                {
+                    "title": "Primary Metric",
+                    "value": f"{kpis.get('total_revenue', 0):,.0f}",
+                    "change": "0.0%",
+                    "trend": "neutral",
+                },
+                {
+                    "title": "Secondary Metric",
+                    "value": f"{kpis.get('total_quantity', 0):,}",
+                    "change": "0.0%",
+                    "trend": "neutral",
+                },
+                {
+                    "title": "Average Value",
+                    "value": f"{kpis.get('avg_margin', 0):,.1f}",
+                    "change": "0.0%",
+                    "trend": "neutral",
+                },
+                {
+                    "title": "Distinct Categories",
+                    "value": str(kpis.get("country_count", 0)),
+                    "change": "0.0%",
+                    "trend": "neutral",
+                },
             ]
         else:
             meta = schema_service._build_metadata(df)
             measures = [k for k, v in meta.items() if v.is_measure]
-            dimensions = [k for k, v in meta.items() if v.is_dimension and not v.is_identifier]
+            dimensions = [
+                k for k, v in meta.items() if v.is_dimension and not v.is_identifier
+            ]
             date_cols = [k for k, v in meta.items() if v.is_date]
 
             m1 = measures[0] if measures else None
@@ -62,10 +98,14 @@ class DashboardService:
                 try:
                     t_col = date_cols[0]
                     temp_df = df.copy()
-                    temp_df["_period_sort"] = pd.to_datetime(temp_df[t_col], errors="coerce")
+                    temp_df["_period_sort"] = pd.to_datetime(
+                        temp_df[t_col], errors="coerce"
+                    )
                     if temp_df["_period_sort"].notna().sum() >= 2:
                         temp_df = temp_df.dropna(subset=["_period_sort"])
-                        temp_df["_period_key"] = temp_df["_period_sort"].dt.to_period("M").astype(str)
+                        temp_df["_period_key"] = (
+                            temp_df["_period_sort"].dt.to_period("M").astype(str)
+                        )
                     else:
                         temp_df["_period_key"] = temp_df[t_col].astype(str)
                         temp_df = temp_df[temp_df["_period_key"].str.strip() != ""]
@@ -77,26 +117,58 @@ class DashboardService:
                     if m2:
                         agg_spec["m2_sum"] = (m2, "sum")
                     if d1:
-                        agg_spec["d1_uniq"] = (d1, lambda s: s.dropna().astype(str).str.strip().loc[lambda x: x != ""].nunique())
+                        agg_spec["d1_uniq"] = (
+                            d1,
+                            lambda s: (
+                                s.dropna()
+                                .astype(str)
+                                .str.strip()
+                                .loc[lambda x: x != ""]
+                                .nunique()
+                            ),
+                        )
 
-                    periods = temp_df.groupby("_period_key").agg(**agg_spec).reset_index().sort_values("_period_key")
+                    periods = (
+                        temp_df.groupby("_period_key")
+                        .agg(**agg_spec)
+                        .reset_index()
+                        .sort_values("_period_key")
+                    )
                     if len(periods) >= 2:
                         curr, prev = periods.iloc[-1], periods.iloc[-2]
                         if m1:
-                            m1_change, m1_trend = _pct_change(float(curr["m1_sum"]), float(prev["m1_sum"]))
-                            avg_change, avg_trend = _pct_change(float(curr["m1_avg"]), float(prev["m1_avg"]))
+                            m1_change, m1_trend = _pct_change(
+                                float(curr["m1_sum"]), float(prev["m1_sum"])
+                            )
+                            avg_change, avg_trend = _pct_change(
+                                float(curr["m1_avg"]), float(prev["m1_avg"])
+                            )
                         if m2:
-                            m2_change, m2_trend = _pct_change(float(curr["m2_sum"]), float(prev["m2_sum"]))
+                            m2_change, m2_trend = _pct_change(
+                                float(curr["m2_sum"]), float(prev["m2_sum"])
+                            )
                         else:
-                            m2_change, m2_trend = _pct_change(float(curr["row_cnt"]), float(prev["row_cnt"]))
+                            m2_change, m2_trend = _pct_change(
+                                float(curr["row_cnt"]), float(prev["row_cnt"])
+                            )
                         if d1:
-                            d1_change, d1_trend = _pct_change(float(curr["d1_uniq"]), float(prev["d1_uniq"]))
+                            d1_change, d1_trend = _pct_change(
+                                float(curr["d1_uniq"]), float(prev["d1_uniq"])
+                            )
                 except Exception as exc:
                     logger.debug(f"Period-over-period calculation skipped: {exc}")
 
-            m1_sum = float(pd.to_numeric(df[m1], errors="coerce").sum()) if m1 else float(len(df))
+            m1_sum = (
+                float(pd.to_numeric(df[m1], errors="coerce").sum())
+                if m1
+                else float(len(df))
+            )
             m1_avg = float(pd.to_numeric(df[m1], errors="coerce").mean()) if m1 else 0.0
-            m2_sum = float(pd.to_numeric(df[m2], errors="coerce").sum()) if m2 else float(len(df))
+            m2_sum = (
+                float(pd.to_numeric(df[m2], errors="coerce").sum())
+                if m2
+                else float(len(df))
+            )
             d1_uniq = int(df[d1].dropna().nunique()) if d1 else int(len(df))
 
             formatted_kpis = [

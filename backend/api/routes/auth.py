@@ -1,17 +1,28 @@
 """SAP login endpoints; every request validates its end-user access token."""
+
 import os
 import uuid
 from typing import Optional
 import requests
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel
-from api.xsuaa import authenticated_profile, validate_token, user_profile, xsuaa_credentials
-from api.services.project_login_service import record_project_login, record_project_logout
+from api.xsuaa import (
+    authenticated_profile,
+    validate_token,
+    user_profile,
+    xsuaa_credentials,
+)
+from api.services.project_login_service import (
+    record_project_login,
+    record_project_logout,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 REFRESH_COOKIE_NAME = "refresh_token"
-REFRESH_COOKIE_MAX_AGE = 43200  # 12 hours, matching xs-security.json refresh-token-validity
+REFRESH_COOKIE_MAX_AGE = (
+    43200  # 12 hours, matching xs-security.json refresh-token-validity
+)
 
 
 class SSOLoginRequest(BaseModel):
@@ -35,7 +46,9 @@ class RefreshRequest(BaseModel):
 def _is_https_request(request: Optional[Request]) -> bool:
     if request is None:
         return False
-    forwarded = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    forwarded = (
+        (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    )
     return forwarded == "https" or request.url.scheme == "https"
 
 
@@ -58,7 +71,9 @@ def _set_refresh_cookie(
     )
 
 
-def _clear_refresh_cookie(response: Optional[Response], request: Optional[Request]) -> None:
+def _clear_refresh_cookie(
+    response: Optional[Response], request: Optional[Request]
+) -> None:
     if response is None:
         return
     response.delete_cookie(
@@ -84,14 +99,20 @@ def _login(
 
     if not token:
         if not username or not password:
-            raise HTTPException(401, "Sign in through SAP or provide a valid SAP end-user token.")
+            raise HTTPException(
+                401, "Sign in through SAP or provide a valid SAP end-user token."
+            )
 
         sap_error = None
         if all(credentials.get(key) for key in ("url", "clientid", "clientsecret")):
             try:
                 oauth_res = requests.post(
                     credentials["url"].rstrip("/") + "/oauth/token",
-                    data={"grant_type": "password", "username": username, "password": password},
+                    data={
+                        "grant_type": "password",
+                        "username": username,
+                        "password": password,
+                    },
                     auth=(credentials["clientid"], credentials["clientsecret"]),
                     timeout=10,
                 )
@@ -103,15 +124,26 @@ def _login(
                 elif oauth_res.status_code in (400, 401, 403):
                     try:
                         err_json = oauth_res.json()
-                        desc = err_json.get("error_description") or err_json.get("error") or ""
+                        desc = (
+                            err_json.get("error_description")
+                            or err_json.get("error")
+                            or ""
+                        )
                         if isinstance(desc, str) and desc.startswith("{"):
                             import json
+
                             try:
                                 nested = json.loads(desc)
-                                desc = nested.get("error_description") or nested.get("error") or desc
+                                desc = (
+                                    nested.get("error_description")
+                                    or nested.get("error")
+                                    or desc
+                                )
                             except Exception:
                                 pass
-                        sap_error = desc or "Invalid corporate SAP credentials. Access denied."
+                        sap_error = (
+                            desc or "Invalid corporate SAP credentials. Access denied."
+                        )
                     except Exception:
                         sap_error = "Invalid corporate SAP credentials. Access denied."
             except (requests.RequestException, ValueError) as err:
@@ -122,22 +154,42 @@ def _login(
             if sap_error and "unavailable" not in sap_error.lower():
                 raise HTTPException(401, f"SAP authentication failed: {sap_error}")
 
-            allow_dev_bypass = os.getenv("ALLOW_DEV_AUTH_BYPASS", "false").lower() == "true"
-            is_dev = os.getenv("APP_ENV", "development") == "development" and not os.getenv("VCAP_APPLICATION")
+            allow_dev_bypass = (
+                os.getenv("ALLOW_DEV_AUTH_BYPASS", "false").lower() == "true"
+            )
+            is_dev = os.getenv(
+                "APP_ENV", "development"
+            ) == "development" and not os.getenv("VCAP_APPLICATION")
             if is_dev and (allow_dev_bypass or not credentials.get("clientid")):
                 from urllib.parse import quote
+
                 stripped_user = username.strip()
                 clean_user = quote(stripped_user, safe="@.")
-                raw_name = stripped_user.split("@")[0].replace(".", " ").title() if "@" in stripped_user else stripped_user
+                raw_name = (
+                    stripped_user.split("@")[0].replace(".", " ").title()
+                    if "@" in stripped_user
+                    else stripped_user
+                )
                 name_part = quote(raw_name, safe="")
-                token = f"dev-token-local:{clean_user}:{name_part}:{uuid.uuid4().hex[:8]}"
+                token = (
+                    f"dev-token-local:{clean_user}:{name_part}:{uuid.uuid4().hex[:8]}"
+                )
             else:
                 if sap_error:
-                    raise HTTPException(502 if "unavailable" in sap_error else 401, sap_error)
-                raise HTTPException(503, "The project XSUAA login binding is not configured.")
+                    raise HTTPException(
+                        502 if "unavailable" in sap_error else 401, sap_error
+                    )
+                raise HTTPException(
+                    503, "The project XSUAA login binding is not configured."
+                )
 
     context, claims = validate_token(token, credentials)
-    if expires_in is None and isinstance(claims, dict) and claims.get("exp") and claims.get("iat"):
+    if (
+        expires_in is None
+        and isinstance(claims, dict)
+        and claims.get("exp")
+        and claims.get("iat")
+    ):
         try:
             expires_in = max(1, int(claims["exp"]) - int(claims["iat"]))
         except (TypeError, ValueError):
@@ -155,9 +207,19 @@ def _login(
 @router.post("/sso")
 def sso_login(req: SSOLoginRequest, request: Request, response: Response):
     token = req.ias_token
-    if not token and req.password_or_passcode and req.password_or_passcode.count(".") == 2:
+    if (
+        not token
+        and req.password_or_passcode
+        and req.password_or_passcode.count(".") == 2
+    ):
         token = req.password_or_passcode
-    return _login(token, req.universal_id_or_email, req.password_or_passcode, request=request, response=response)
+    return _login(
+        token,
+        req.universal_id_or_email,
+        req.password_or_passcode,
+        request=request,
+        response=response,
+    )
 
 
 @router.post("/login")
@@ -179,7 +241,9 @@ def refresh_session(
     req: Optional[RefreshRequest] = None,
 ):
     """Exchange a valid HttpOnly XSUAA refresh_token cookie for a fresh access_token."""
-    refresh_token = request.cookies.get(REFRESH_COOKIE_NAME) or (req.refresh_token if req else None)
+    refresh_token = request.cookies.get(REFRESH_COOKIE_NAME) or (
+        req.refresh_token if req else None
+    )
     if not refresh_token:
         raise HTTPException(401, "Your SAP session has expired. Sign in again.")
 
@@ -201,12 +265,16 @@ def refresh_session(
         _clear_refresh_cookie(response, request)
         raise HTTPException(401, "Your SAP session has expired. Sign in again.")
     if oauth_res.status_code != 200:
-        raise HTTPException(502, f"SAP token refresh failed with status {oauth_res.status_code}.")
+        raise HTTPException(
+            502, f"SAP token refresh failed with status {oauth_res.status_code}."
+        )
 
     try:
         payload = oauth_res.json()
     except ValueError:
-        raise HTTPException(502, "SAP token refresh returned an invalid response.") from None
+        raise HTTPException(
+            502, "SAP token refresh returned an invalid response."
+        ) from None
 
     new_token = payload.get("access_token")
     if not new_token:
@@ -216,7 +284,12 @@ def refresh_session(
     next_refresh = payload.get("refresh_token") or refresh_token
     expires_in = payload.get("expires_in")
     context, claims = validate_token(new_token, credentials)
-    if expires_in is None and isinstance(claims, dict) and claims.get("exp") and claims.get("iat"):
+    if (
+        expires_in is None
+        and isinstance(claims, dict)
+        and claims.get("exp")
+        and claims.get("iat")
+    ):
         try:
             expires_in = max(1, int(claims["exp"]) - int(claims["iat"]))
         except (TypeError, ValueError):
@@ -264,4 +337,7 @@ def logout(
         record_project_logout(user_id=user_id, email=email)
 
     _clear_refresh_cookie(response, request)
-    return {"status": "success", "message": "Sign out through /logout to end the SAP router session."}
+    return {
+        "status": "success",
+        "message": "Sign out through /logout to end the SAP router session.",
+    }

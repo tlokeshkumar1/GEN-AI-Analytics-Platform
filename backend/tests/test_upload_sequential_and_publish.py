@@ -1,16 +1,15 @@
 """Tests for sequential 3-agent upload progress streaming and first-upload dashboard publishing."""
+
 import json
 import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-routes_package = types.ModuleType("api.routes")
-routes_package.__path__ = [str(Path(__file__).resolve().parents[1] / "api" / "routes")]
-sys.modules.setdefault("api.routes", routes_package)
+
+import _isolated_packages as _isolated_packages
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -75,7 +74,11 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
 
         p = patch(
             "api.database.hana_table_service.hana_table_service.persist_dataframe",
-            return_value={"success": True, "table_name": "DS_PROJECTS_V1", "rows_inserted": 2},
+            return_value={
+                "success": True,
+                "table_name": "DS_PROJECTS_V1",
+                "rows_inserted": 2,
+            },
         )
         p.start()
         self.addCleanup(p.stop)
@@ -87,7 +90,10 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-        p = patch("api.xsuaa.authenticated_profile", return_value={"user_id": "tester", "roles": ["Admin"]})
+        p = patch(
+            "api.xsuaa.authenticated_profile",
+            return_value={"user_id": "tester", "roles": ["Admin"]},
+        )
         p.start()
         self.addCleanup(p.stop)
 
@@ -99,7 +105,9 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
 
     def test_first_upload_publishes_recommended_charts_without_409(self):
         csv_bytes = b"ProjectID,ProjectName,OpenIssues\nP1,Alpha,3\nP2,Beta,5\n"
-        upload_res = self.client.post("/api/upload", files={"file": ("Projects.csv", csv_bytes)})
+        upload_res = self.client.post(
+            "/api/upload", files={"file": ("Projects.csv", csv_bytes)}
+        )
         self.assertEqual(upload_res.status_code, 200, upload_res.text)
         payload = upload_res.json()
         dataset_id = payload["dataset"]["id"]
@@ -128,21 +136,42 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
         self.assertEqual(pub_with_headers.status_code, 200, pub_with_headers.text)
         self.assertEqual(pub_with_headers.json()["published_count"], 1)
         publication_namespace = self.semantic_reg.namespace(
-            self.dataset_svc._catalog()['datasets'][dataset_id], version, 'dashboard:1')
-        published = self.semantic_reg.store.get(publication_namespace, 'published')['value']['items']
+            self.dataset_svc._catalog()["datasets"][dataset_id], version, "dashboard:1"
+        )
+        published = self.semantic_reg.store.get(publication_namespace, "published")[
+            "value"
+        ]["items"]
         self.assertEqual(len(published), len(recs[:2]))
         before_refs = list(published)
         # Changing IDs and titles cannot republish an equivalent analytical widget.
-        duplicate = {**recs[0], 'id': 'same-calculation-new-id', 'title': 'Renamed metric'}
-        duplicate_result = self.client.post('/api/dashboard/publish-recommended',
-                                            json={'items': [duplicate]})
+        duplicate = {
+            **recs[0],
+            "id": "same-calculation-new-id",
+            "title": "Renamed metric",
+        }
+        duplicate_result = self.client.post(
+            "/api/dashboard/publish-recommended", json={"items": [duplicate]}
+        )
         self.assertEqual(duplicate_result.status_code, 200, duplicate_result.text)
-        self.assertEqual(self.semantic_reg.store.get(publication_namespace, 'published')['value']['items'], before_refs)
-        new_metric = {**recs[0], 'kind': 'kpi', 'query_plan': {'metric': 'OpenIssues', 'aggregation': 'MAX'}}
-        if new_metric['query_plan'] != recs[0].get('query_plan'):
-            changed = self.client.post('/api/dashboard/publish-recommended', json={'items': [new_metric]})
+        self.assertEqual(
+            self.semantic_reg.store.get(publication_namespace, "published")["value"][
+                "items"
+            ],
+            before_refs,
+        )
+        new_metric = {
+            **recs[0],
+            "kind": "kpi",
+            "query_plan": {"metric": "OpenIssues", "aggregation": "MAX"},
+        }
+        if new_metric["query_plan"] != recs[0].get("query_plan"):
+            changed = self.client.post(
+                "/api/dashboard/publish-recommended", json={"items": [new_metric]}
+            )
             self.assertEqual(changed.status_code, 200, changed.text)
-            after_refs = self.semantic_reg.store.get(publication_namespace, 'published')['value']['items']
+            after_refs = self.semantic_reg.store.get(
+                publication_namespace, "published"
+            )["value"]["items"]
             self.assertTrue(all(ref in after_refs for ref in before_refs))
 
         # GET /api/dashboard returns the published widgets, not fallback auto-recommendations
@@ -161,7 +190,9 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
 
     def test_upload_stream_emits_stages_strictly_one_by_one(self):
         csv_bytes = b"ProjectID,ProjectName,OpenIssues\nP1,Alpha,3\nP2,Beta,5\n"
-        with self.client.stream("POST", "/api/upload/stream", files={"file": ("Projects.csv", csv_bytes)}) as resp:
+        with self.client.stream(
+            "POST", "/api/upload/stream", files={"file": ("Projects.csv", csv_bytes)}
+        ) as resp:
             if resp.status_code != 200:
                 resp.read()
                 self.fail(f"Expected 200, got {resp.status_code}: {resp.text}")
@@ -170,7 +201,9 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
                 if raw_line.startswith("data: "):
                     events.append(json.loads(raw_line[6:]))
 
-        stage_sequence = [(e["stage"], e["status"]) for e in events if e.get("type") == "stage"]
+        stage_sequence = [
+            (e["stage"], e["status"]) for e in events if e.get("type") == "stage"
+        ]
         self.assertEqual(
             stage_sequence,
             [
@@ -193,10 +226,16 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
         self.assertTrue(len(final_data["recommendations"]) > 0)
         self.assertEqual(final_data["semantic_model"]["status"], "approved")
 
-    def test_lifecycle_rules_direct_approval_guaranteed_recommendations_and_deletion(self):
+    def test_lifecycle_rules_direct_approval_guaranteed_recommendations_and_deletion(
+        self,
+    ):
         # Rule 1 & 2: Version 1 upload has direct approved semantic model and recommendations
-        csv_bytes = b"City,Department,Headcount\nTokyo,Engineering,45\nBerlin,Design,12\n"
-        upload_res = self.client.post("/api/upload", files={"file": ("Office.csv", csv_bytes)})
+        csv_bytes = (
+            b"City,Department,Headcount\nTokyo,Engineering,45\nBerlin,Design,12\n"
+        )
+        upload_res = self.client.post(
+            "/api/upload", files={"file": ("Office.csv", csv_bytes)}
+        )
         self.assertEqual(upload_res.status_code, 200, upload_res.text)
         payload = upload_res.json()
         dataset_id = payload["dataset"]["id"]
@@ -206,6 +245,7 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
 
         # Rule 1: Appending new rows creates version 2 and directly approves semantic model
         from api.services.dataset_service import dataset_service
+
         mutate_res = dataset_service.mutate(
             dataset_id,
             "append",
@@ -235,8 +275,9 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
 
         # Check metadata store has 0 documents left for this dataset
         remaining_docs = [
-            d for d in self.semantic_reg.store.list(f"default:dashboard:1:{dataset_id}:v1")
+            d
+            for d in self.semantic_reg.store.list(
+                f"default:dashboard:1:{dataset_id}:v1"
+            )
         ]
         self.assertEqual(len(remaining_docs), 0)
-
-

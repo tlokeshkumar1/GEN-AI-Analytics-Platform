@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 
+
 def validate_excel_file(filename: str):
     if not filename:
         raise HTTPException(status_code=400, detail="A filename is required.")
@@ -8,5 +9,5 @@ def validate_excel_file(filename: str):
     if ext not in allowed_extensions:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file type '{ext}'. Allowed types: {', '.join(allowed_extensions)}"
+            detail=f"Invalid file type '{ext}'. Allowed types: {', '.join(allowed_extensions)}",
         )

@@ -233,3 +233,29 @@ Audit tool installation used an isolated temporary target rather than changing t
 Prioritized remediation is consolidated here; recorded commands and embedded audit script sources are available in [audit results](../../audit-results.json). P0 fixes address approval/access policy, dynamic join correctness, SSRF trust boundaries and critical dependency advisories. P1 fixes address pool discard semantics, decimals, export formulas, real reports, tracked deployment, upload limits, stable encryption keys, historical right-side pins, frontend failures and readiness/rate budgets. P2 covers lint/config/duplicate cleanup and calibrated semantic-quality evaluation. P3 covers expanded domain/browser/soak evidence and reproducibility improvements after correctness gates.
 
 The current evidence supports **local implemented functionality with material defects**. It does not support enterprise deployment, compliance claims, unrestricted domain independence or proven production scalability. Unverified work is explicitly retained in the matrix rather than converted into a mock-backed success.
+
+
+## 16. CI failure remediation ? 24 November 2026
+
+Scope: the four jobs in `.github/workflows/enterprise-local-ci.yml`. Original audit findings and historical evidence above remain unchanged. The actual failed runs were [45223411202](https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45223411202) and [45225015183](https://github.com/tlokeshkumar1/GEN-AI-Analytics-Platform/actions/runs/45225015183). The checkout began at `6ca506beea9595ee105cd9967c03ffbb0aeb1d96` and was synchronized with the documentation-only `76c561d` update.
+
+- Backend: Ubuntu font discovery called `fc-list --help` inside the chart subprocess spy. Initialize Matplotlib fonts before installing that spy; retain the assertion that rendering starts no subprocess. Windows full offline suite: **270 passed, 0 failed, 0 skipped**, including a new recommendation-retry regression.
+- Frontend: five currently failing tests used the creation screen after saved definitions moved to the Widgets library. Render with the production route's `widgetsOnly` prop. Existing permission, preview, concurrent review and preservation assertions remain intact. Clean Windows install: **79/79 tests**, TypeScript and production build pass. Limit test workers to four for bounded memory on both operating systems.
+- Python quality: add a pinned toolchain and repository-owned Ruff configuration selecting E4/E7/E9/F correctness rules plus formatting over the complete existing scope. Fix undefined retry logger, preserve package exports explicitly, preserve side effects of unused calls, and consolidate isolated test package setup. Lint, formatting and compileall pass. This configuration intentionally defines the maintained gate; it does **not** mean all optional rules reported by `--isolated` defaults have been fixed. F18 remains partially fixed.
+- Dependencies: update frontend and HDI transitive lockfile resolutions, Happy DOM to 21.0.4, SAP App Router to 23.5.0 and cryptography to >=50.0.2,<51 in both runtime requirement files. All three npm audits report **zero vulnerabilities**; pip-audit over runtime and CI requirements reports **zero known vulnerabilities**. The initial PyPI timeout is retained as a failed attempt, followed by a successful retry.
+
+App Router migration: the installed SAP changelog drops Node 20 in v21 and supports Node 22/24. Declare these engines for the router. Offline tests validate the installed startup/middleware API, the existing routing schema (including XSUAA scopes and CSRF), and SAP logout navigation: **3/3 pass**. Cryptography [release notes](https://cryptography.io/en/latest/changelog/) require newer supported Python/OpenSSL and remove unused legacy APIs; the platform uses Fernet and RSA/serialization APIs covered by the full regression suite. No credential migration or encryption-key change is performed. Real SAP sign-in, encryption interoperability with existing production data and Cloud Foundry deployment still require authorized integration validation.
+
+Workflow: backend and frontend execute on Ubuntu and Windows with Python 3.12/Node 22. Backend JSON and frontend JUnit artifacts preserve evidence on failure. All jobs remain CI/testing/quality/security/build validation only. No deployment steps, production credentials, hosting changes, suppressed advisories or continue-on-error were added. SAP BTP Cloud Foundry deployment remains unchanged.
+
+Local command outcomes, complete Python dependency scan and finding statuses are recorded under `ci_remediation` in `audit-results.json`. Frontend commands ran in a clean temporary copy because the existing Vite development server locks native modules on Windows; that server was left running. Hosted verification: **PENDING** until the remediation commit completes Actions.
+
+| Finding | Scoped remediation status |
+|---|---|
+| F09 | FIXED for the dependency manifests scanned by this CI |
+| F12 | FIXED for the current frontend CI failures; 79/79 pass |
+| F13 | FIXED; isolated failure-path regression passes |
+| F18 | PARTIALLY FIXED; maintained checks pass, broader maintainability findings remain |
+| F01?F08, F10?F11, F14?F17 | OPEN; original findings retained, not reassessed as fixed by this CI repair |
+
+The enterprise readiness assessment remains **NO GO** pending the original security/data findings and live integration gates. Next SAP validation must use an explicitly authorized disposable HANA schema and test tenant, verify versioned joins and isolation, exercise real XSUAA token rejection and SAP logout, and then perform a manual Cloud Foundry build/deployment validation through the existing process. No cloud deployment was executed here.

@@ -1,4 +1,5 @@
 """Tests for complex Excel reports: title banners, merged multi-level headers, side notes, and footers."""
+
 import io
 import sys
 import unittest
@@ -57,7 +58,9 @@ class ComplexExcelIngestionTests(unittest.TestCase):
         for idx, rec in enumerate(records, start=4):
             for c_idx, val in enumerate(rec, start=1):
                 ws.cell(idx, c_idx, val)
-            ws.cell(idx, 10, 999.99)  # Unheaded scratch column outside empty col 8-9 gap
+            ws.cell(
+                idx, 10, 999.99
+            )  # Unheaded scratch column outside empty col 8-9 gap
 
         # Row 7: Totals row matching column sums with missing lead key
         ws.cell(7, 2, 331.5)
@@ -92,7 +95,9 @@ class ComplexExcelIngestionTests(unittest.TestCase):
             df, profile = self.service.prepare(
                 raw,
                 "plant_report.xlsx",
-                TransformationPlan(parsing=ParseOptions(sheet=sheet_opt, header_row=hr)),
+                TransformationPlan(
+                    parsing=ParseOptions(sheet=sheet_opt, header_row=hr)
+                ),
             )
             self.assertEqual(len(df), 3)
             self.assertEqual(
@@ -109,7 +114,9 @@ class ComplexExcelIngestionTests(unittest.TestCase):
             )
             types = {f.name: f.type for f in profile.fields}
             self.assertEqual(types["Date"], "date")
-            self.assertEqual(types["Opening Balance (Local + Import) - Domestic"], "decimal")
+            self.assertEqual(
+                types["Opening Balance (Local + Import) - Domestic"], "decimal"
+            )
             self.assertEqual(types["Total Stock"], "decimal")
             self.assertEqual(df["Receipts - Domestic"].iloc[0], Decimal("20.0"))
 
@@ -123,7 +130,15 @@ class ComplexExcelIngestionTests(unittest.TestCase):
         self.assertEqual(len(df), 3)
         self.assertEqual(
             list(df.columns),
-            ["Date", "Domestic", "Import", "Domestic_2", "Import_2", "Opening WIP", "Total Stock"],
+            [
+                "Date",
+                "Domestic",
+                "Import",
+                "Domestic_2",
+                "Import_2",
+                "Opening WIP",
+                "Total Stock",
+            ],
         )
 
     def test_side_by_side_tables_with_duplicate_headers_and_empty_spacer_columns(self):
@@ -154,27 +169,49 @@ class ComplexExcelIngestionTests(unittest.TestCase):
             )
         self.assertEqual(exc.exception.status_code, 409)
 
-    def test_upload_service_commit_does_not_reapply_raw_sheet_plan_to_clean_export(self):
+    def test_upload_service_commit_does_not_reapply_raw_sheet_plan_to_clean_export(
+        self,
+    ):
         raw = self._build_complex_workbook()
         plan = TransformationPlan(parsing=ParseOptions(sheet="APR-26", header_row=2))
         captured = {}
 
-        def fake_upload(content, filename, async_index=None, transformation_plan=None, **kwargs):
+        def fake_upload(
+            content, filename, async_index=None, transformation_plan=None, **kwargs
+        ):
             captured["transformation_plan"] = transformation_plan
-            df_check, _ = IngestionService().prepare(content, filename, transformation_plan)
+            df_check, _ = IngestionService().prepare(
+                content, filename, transformation_plan
+            )
             captured["rows"] = len(df_check)
             return {
-                "dataset": {"id": "ds-test", "folder": "plant_report", "currentFilename": filename, "embeddingStatus": "Ready"},
+                "dataset": {
+                    "id": "ds-test",
+                    "folder": "plant_report",
+                    "currentFilename": filename,
+                    "embeddingStatus": "Ready",
+                },
                 "version": 1,
                 "embeddings_generated": 0,
             }
 
         with (
-            patch("api.services.upload_service.dataset_service.upload", side_effect=fake_upload),
-            patch("api.services.upload_service.dataset_service._catalog", side_effect=RuntimeError("skip")),
-            patch("api.services.upload_service.hana_table_service.persist_dataframe", return_value={"success": True, "table_name": "PLANT_REPORT"}),
+            patch(
+                "api.services.upload_service.dataset_service.upload",
+                side_effect=fake_upload,
+            ),
+            patch(
+                "api.services.upload_service.dataset_service._catalog",
+                side_effect=RuntimeError("skip"),
+            ),
+            patch(
+                "api.services.upload_service.hana_table_service.persist_dataframe",
+                return_value={"success": True, "table_name": "PLANT_REPORT"},
+            ),
         ):
-            res = UploadService().process_file(raw, "plant_report.xlsx", False, plan, "PLANT_REPORT", "create")
+            res = UploadService().process_file(
+                raw, "plant_report.xlsx", False, plan, "PLANT_REPORT", "create"
+            )
 
         # Catalog persistence is deliberately disabled by this fixture. The raw
         # sheet plan still applies once, and the saved result exposes that partial state.
@@ -187,4 +224,3 @@ class ComplexExcelIngestionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

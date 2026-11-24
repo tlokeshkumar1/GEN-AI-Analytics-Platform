@@ -9,7 +9,9 @@ router = APIRouter(prefix="/api/users", tags=["User Management"])
 def get_users(
     response: Response,
     authorization: str | None = Header(None),
-    refresh: bool = Query(False, description="Force refresh user directory bypass cache"),
+    refresh: bool = Query(
+        False, description="Force refresh user directory bypass cache"
+    ),
 ):
     require_user_admin(authorization)
     response.headers["Cache-Control"] = "no-store"

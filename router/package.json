@@ -2,10 +2,13 @@
   "name": "gen-ai-analytics-platform-router",
   "version": "1.0.0",
   "description": "App Router service for SAP BTP",
+  "engines": {
+    "node": "^22.0.0 || ^24.0.0"
+  },
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@sap/approuter": "^16.0.0"
+    "@sap/approuter": "^23.5.0"
   }
 }

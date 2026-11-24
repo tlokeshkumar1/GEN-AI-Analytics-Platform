@@ -1,5 +1,4 @@
 import os
-import json
 import asyncio
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
@@ -8,7 +7,7 @@ from api.rag.pipeline import RAGPipeline
 from api.rag.catalog_chat import catalog_intent
 from api.services.history_service import history_service
 from api.utils.logger import get_logger
-from api.utils.json_encoder import safe_json_dumps, hana_json_default
+from api.utils.json_encoder import safe_json_dumps
 
 logger = get_logger("routes.chat_stream")
 
@@ -45,38 +44,59 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     # ── Resolve or create session ─────────────────────────────────────────
     from api.utils.auth import get_user_id_from_request
+
     user_id = get_user_id_from_request(request, req.user_id)
     session_id = None
     chat_history = []
-    defer_history = catalog_intent(req.message) == "greeting" and req.session_id in (None, "default")
+    defer_history = catalog_intent(req.message) == "greeting" and req.session_id in (
+        None,
+        "default",
+    )
+
     async def prepare_history():
         nonlocal session_id, chat_history
         try:
-            session_id = await asyncio.to_thread(history_service.get_or_create_session, req.session_id, user_id=user_id, first_message=req.message)
+            session_id = await asyncio.to_thread(
+                history_service.get_or_create_session,
+                req.session_id,
+                user_id=user_id,
+                first_message=req.message,
+            )
         except HTTPException as exc:
             if exc.status_code < 500:
                 raise
             session_id = f"ephemeral-{uuid.uuid4().hex[:8]}"
-            logger.warning("Chat history is unavailable; continuing without persistence.")
+            logger.warning(
+                "Chat history is unavailable; continuing without persistence."
+            )
         except Exception as exc:
             session_id = f"ephemeral-{uuid.uuid4().hex[:8]}"
-            logger.warning(f"HANA chat session creation failed ({exc}); using ephemeral session {session_id}.")
+            logger.warning(
+                f"HANA chat session creation failed ({exc}); using ephemeral session {session_id}."
+            )
 
         if not session_id.startswith("ephemeral-"):
             try:
-                await asyncio.to_thread(history_service.save_message,
+                await asyncio.to_thread(
+                    history_service.save_message,
                     session_id=session_id,
                     role="user",
                     content=req.message,
                 )
             except Exception as exc:
-                logger.warning(f"Failed to persist user message for session {session_id} ({exc}).")
+                logger.warning(
+                    f"Failed to persist user message for session {session_id} ({exc})."
+                )
 
             if catalog_intent(req.message) is None:
                 try:
-                    chat_history = await asyncio.to_thread(history_service.get_recent_history, session_id, limit=10)
+                    chat_history = await asyncio.to_thread(
+                        history_service.get_recent_history, session_id, limit=10
+                    )
                 except Exception as exc:
-                    logger.warning(f"Failed to load recent history for session {session_id} ({exc}); continuing with empty history.")
+                    logger.warning(
+                        f"Failed to load recent history for session {session_id} ({exc}); continuing with empty history."
+                    )
                     chat_history = []
 
     if defer_history:
@@ -97,7 +117,14 @@ async def chat_stream(req: ChatRequest, request: Request):
             # Run the STREAMING pipeline in a worker thread, passing the callback
             # This uses run_stream() which emits both stage AND token events
             pipeline_task = asyncio.ensure_future(
-                asyncio.to_thread(RAGPipeline().run_stream, req.message, req.top_k, stage_callback, chat_history, stop_event)
+                asyncio.to_thread(
+                    RAGPipeline().run_stream,
+                    req.message,
+                    req.top_k,
+                    stage_callback,
+                    chat_history,
+                    stop_event,
+                )
             )
 
             # Track time since last event for heartbeat
@@ -140,7 +167,8 @@ async def chat_stream(req: ChatRequest, request: Request):
             # Save the chatbot response to HANA Cloud if persistent
             try:
                 if not session_id.startswith("ephemeral-"):
-                    await asyncio.to_thread(history_service.save_message,
+                    await asyncio.to_thread(
+                        history_service.save_message,
                         session_id=session_id,
                         role="assistant",
                         content=result.get("reply", ""),
@@ -155,15 +183,24 @@ async def chat_stream(req: ChatRequest, request: Request):
                         },
                     )
             except Exception as exc:
-                logger.warning(f"Failed to persist assistant response ({exc}); session {session_id} is ephemeral.")
+                logger.warning(
+                    f"Failed to persist assistant response ({exc}); session {session_id} is ephemeral."
+                )
 
             # Inject session_id into result data
             result["session_id"] = session_id
             try:
-                result['session_title'] = await asyncio.to_thread(
-                    history_service.ensure_session_title, session_id, user_id, req.message, result.get('reply', ''))
+                result["session_title"] = await asyncio.to_thread(
+                    history_service.ensure_session_title,
+                    session_id,
+                    user_id,
+                    req.message,
+                    result.get("reply", ""),
+                )
             except Exception as exc:
-                logger.warning('Could not update conversation title (%s).', type(exc).__name__)
+                logger.warning(
+                    "Could not update conversation title (%s).", type(exc).__name__
+                )
 
             # Emit final_answer event (complete assembled text)
             final_answer_event = {
@@ -184,8 +221,21 @@ async def chat_stream(req: ChatRequest, request: Request):
 
         except Exception as e:
             stop_event.set()
-            logger.error("[ChatStream] SSE generation failed (%s): %s", type(e).__name__, e, exc_info=True)
-            detail = e.detail if isinstance(e, HTTPException) else (str(e) if os.getenv("APP_ENV", "development") == "development" and str(e) else "Chat processing failed. Please retry.")
+            logger.error(
+                "[ChatStream] SSE generation failed (%s): %s",
+                type(e).__name__,
+                e,
+                exc_info=True,
+            )
+            detail = (
+                e.detail
+                if isinstance(e, HTTPException)
+                else (
+                    str(e)
+                    if os.getenv("APP_ENV", "development") == "development" and str(e)
+                    else "Chat processing failed. Please retry."
+                )
+            )
 
             # Emit a failed stage event so the frontend can show the error
             error_stage = {

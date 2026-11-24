@@ -1,4 +1,5 @@
 """Run recoverable ingestion/indexing jobs independently of the API process."""
+
 import argparse
 import sys
 import time
@@ -10,7 +11,11 @@ from api.platform.jobs import job_service
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--once", action="store_true", help="Claim and execute at most one available job")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Claim and execute at most one available job",
+    )
     args = parser.parse_args()
     while True:
         job_service.run_next()

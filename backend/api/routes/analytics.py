@@ -6,6 +6,7 @@ from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
 
+
 @router.post("", response_model=AnalyticsResponse)
 async def execute_analytics(req: AnalyticsRequest):
     res = await run_in_threadpool(analytics_service.process_analytics_query, req.query)

@@ -49,27 +49,46 @@ class VectorService:
     def clear_cache(self):
         _query_cache.clear()
 
-    def search_similar_chunks(self, text_query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def search_similar_chunks(
+        self, text_query: str, top_k: int = 5
+    ) -> List[Dict[str, Any]]:
         from api.services.dataset_service import dataset_service
         from api.models.execution_context import current_selection, current_identity
 
-        if current_selection.get() is not None or dataset_service.repository is not None or dataset_service.catalog_path.exists():
+        if (
+            current_selection.get() is not None
+            or dataset_service.repository is not None
+            or dataset_service.catalog_path.exists()
+        ):
             # An explicitly named dataset narrows retrieval to that authorized dataset.
             catalog = dataset_service._catalog()
             query = text_query.casefold()
-            matches = {identifier for identifier, entry in catalog.get("datasets", {}).items()
-                       if any(str(name).casefold() in query for name in
-                              (entry.get("name"), entry.get("displayName"), entry.get("tableName"), identifier)
-                              if name and len(str(name)) > 3)}
+            matches = {
+                identifier
+                for identifier, entry in catalog.get("datasets", {}).items()
+                if any(
+                    str(name).casefold() in query
+                    for name in (
+                        entry.get("name"),
+                        entry.get("displayName"),
+                        entry.get("tableName"),
+                        identifier,
+                    )
+                    if name and len(str(name)) > 3
+                )
+            }
             selected_id = next(iter(matches)) if len(matches) == 1 else None
             if selected_id:
                 from api.models.execution_context import require_dataset_access
+
                 require_dataset_access(catalog["datasets"][selected_id], for_chat=True)
             return dataset_service.search(text_query, top_k, dataset_id=selected_id)
 
         # Check bounded cache with workspace isolation
         identity = current_identity.get()
-        workspace_id = identity.get("workspace_id", "default") if identity else "default"
+        workspace_id = (
+            identity.get("workspace_id", "default") if identity else "default"
+        )
         cache_key = f"{workspace_id}:{text_query}:{top_k}"
 
         cached = _query_cache.get(cache_key)
@@ -79,6 +98,7 @@ class VectorService:
 
         try:
             from api.database.vector_client import vector_client
+
             embedding = ai_core_service.generate_embedding(text_query)
             results = vector_client.similarity_search(embedding, top_k)
         except Exception as e:
@@ -94,6 +114,7 @@ class VectorService:
 
     def add_document_vector(self, doc_id: str, text: str, metadata: Any = None):
         from api.database.vector_client import vector_client
+
         embedding = ai_core_service.generate_embedding(text)
         vector_client.store_vector(doc_id, text, embedding, metadata)
 

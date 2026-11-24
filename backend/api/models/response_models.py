@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
+
 class HealthResponse(BaseModel):
     status: str
     app_name: str
@@ -9,11 +10,13 @@ class HealthResponse(BaseModel):
     ai_core_connected: Optional[bool] = None
     ai_core_configured: bool = False
 
+
 class KPICardData(BaseModel):
     title: str
     value: str
     change: str
-    trend: str # "up" | "down" | "neutral"
+    trend: str  # "up" | "down" | "neutral"
+
 
 class DashboardSummaryResponse(BaseModel):
     kpis: List[KPICardData]
@@ -23,6 +26,7 @@ class DashboardSummaryResponse(BaseModel):
     category_breakdown: List[Dict[str, Any]]
     quarterly_performance: List[Dict[str, Any]]
     top_products: List[Dict[str, Any]]
+
 
 class ChatResponse(BaseModel):
     cosine_score: Optional[float] = None
@@ -41,6 +45,7 @@ class ChatResponse(BaseModel):
     data: Optional[Dict[str, Any]] = None
     status: str = "success"
     query_plan: Optional[Dict[str, Any]] = None
+
 
 class AnalyticsResponse(BaseModel):
     query: str
@@ -63,6 +68,7 @@ class AnalyticsResponse(BaseModel):
     status: str = "success"
     query_plan: Optional[Dict[str, Any]] = None
 
+
 class UploadResponse(BaseModel):
     filename: str
     rows_processed: int
@@ -83,20 +89,24 @@ class UploadResponse(BaseModel):
 
 # ── Enhanced Response Models (v2) ─────────────────────────────────────────────
 
+
 class ProcessingStep(BaseModel):
     """Represents a single backend processing stage for real-time UI feedback."""
-    stage: str       # "intent", "schema", "filter", "retrieval", "calculation", "validation", "generation"
-    status: str      # "running", "completed", "error", "skipped"
+
+    stage: str  # "intent", "schema", "filter", "retrieval", "calculation", "validation", "generation"
+    status: str  # "running", "completed", "error", "skipped"
     message: str
     details: Optional[Dict[str, Any]] = None
+
 
 class EnhancedChatResponse(BaseModel):
     """
     Structured response for the upgraded hybrid RAG + analytics pipeline.
     Backward-compatible with ChatResponse fields.
     """
-    type: str = "chat"           # "chat", "graph", "analytical", "error"
-    status: str = "success"      # "success", "error", "partial"
+
+    type: str = "chat"  # "chat", "graph", "analytical", "error"
+    status: str = "success"  # "success", "error", "partial"
     reply: str = ""
     data: Optional[Dict[str, Any]] = None
     processing: List[ProcessingStep] = []

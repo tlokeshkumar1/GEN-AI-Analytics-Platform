@@ -4,12 +4,14 @@ from typing import Any
 
 try:
     import numpy as np
+
     NUMPY_AVAILABLE = True
 except ImportError:
     NUMPY_AVAILABLE = False
 
 try:
     import pandas as pd
+
     PANDAS_AVAILABLE = True
 except ImportError:
     PANDAS_AVAILABLE = False
@@ -61,5 +63,5 @@ def hana_json_default(obj: Any) -> Any:
 def safe_json_dumps(obj: Any, **kwargs) -> str:
     """Safe wrapper for json.dumps using the hana_json_default serializer."""
     import json
-    return json.dumps(obj, default=hana_json_default, **kwargs)
 
+    return json.dumps(obj, default=hana_json_default, **kwargs)

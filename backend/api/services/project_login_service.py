@@ -5,6 +5,7 @@ Persistence architecture:
 reserved system dataset id `__project_sessions__` and `PLATFORM_METADATA` store.
 Zero local disk dependencies or file creation.
 """
+
 import json
 import logging
 import os
@@ -27,6 +28,7 @@ def _load_from_hana() -> Tuple[dict[str, str], set[str]]:
     """Load logins and active sessions from SAP HANA Cloud DATASETS_METADATA."""
     try:
         from api.database.hana_client import hana_client
+
         if not hana_client:
             return {}, set()
 
@@ -39,7 +41,9 @@ def _load_from_hana() -> Tuple[dict[str, str], set[str]]:
         rows = hana_client.execute_query(sql, (workspace_id, HANA_SYSTEM_DATASET_ID))
         if rows and rows[0].get("METADATA_JSON"):
             meta_raw = rows[0]["METADATA_JSON"]
-            meta = json.loads(meta_raw) if isinstance(meta_raw, str) else (meta_raw or {})
+            meta = (
+                json.loads(meta_raw) if isinstance(meta_raw, str) else (meta_raw or {})
+            )
             logins = meta.get("logins") or {}
             active = set(meta.get("active_sessions") or [])
             logger.info(
@@ -48,7 +52,9 @@ def _load_from_hana() -> Tuple[dict[str, str], set[str]]:
             )
             return logins, active
     except Exception as exc:
-        logger.debug(f"[Cloud Persistence] Could not load from HANA DATASETS_METADATA: {exc}")
+        logger.debug(
+            f"[Cloud Persistence] Could not load from HANA DATASETS_METADATA: {exc}"
+        )
     return {}, set()
 
 
@@ -56,15 +62,19 @@ def _save_to_hana(logins: dict[str, str], active_sessions: set[str]) -> bool:
     """Persist logins and active sessions directly into SAP HANA Cloud DATASETS_METADATA."""
     try:
         from api.database.hana_client import hana_client
+
         if not hana_client:
             return False
 
         workspace_id = os.getenv("PLATFORM_WORKSPACE_ID", "default")
-        payload = json.dumps({
-            "logins": logins,
-            "active_sessions": sorted(list(active_sessions)),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }, ensure_ascii=False)
+        payload = json.dumps(
+            {
+                "logins": logins,
+                "active_sessions": sorted(list(active_sessions)),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            ensure_ascii=False,
+        )
 
         sql = """
             UPSERT DATASETS_METADATA (
@@ -76,7 +86,9 @@ def _save_to_hana(logins: dict[str, str], active_sessions: set[str]) -> bool:
         hana_client.execute_query(sql, (workspace_id, HANA_SYSTEM_DATASET_ID, payload))
         return True
     except Exception as exc:
-        logger.warning(f"[Cloud Persistence] Could not save to HANA DATASETS_METADATA: {exc}")
+        logger.warning(
+            f"[Cloud Persistence] Could not save to HANA DATASETS_METADATA: {exc}"
+        )
         return False
 
 
@@ -96,6 +108,7 @@ def _init_cache_if_needed():
         # 2. Supplemental PLATFORM_METADATA check
         try:
             from api.platform.store import metadata_store
+
             store = metadata_store()
             docs = store.list(NAMESPACE)
             for doc in docs:
@@ -143,6 +156,7 @@ def record_project_login(user_id: str | None = None, email: str | None = None) -
     # Invalidate cached user list so the updated status is reflected immediately
     try:
         from api.services.xsuaa_users_service import clear_users_cache
+
         clear_users_cache()
     except Exception:
         pass
@@ -154,6 +168,7 @@ def record_project_login(user_id: str | None = None, email: str | None = None) -
         # Also persist to PLATFORM_METADATA store for backwards compatibility
         try:
             from api.platform.store import metadata_store
+
             store = metadata_store()
             for key in keys:
                 existing = store.get(NAMESPACE, key)
@@ -161,7 +176,12 @@ def record_project_login(user_id: str | None = None, email: str | None = None) -
                 store.put(
                     NAMESPACE,
                     key,
-                    {"last_login": now_iso, "user_id": user_id, "email": email, "is_active": True},
+                    {
+                        "last_login": now_iso,
+                        "user_id": user_id,
+                        "email": email,
+                        "is_active": True,
+                    },
                     expected_revision=rev,
                 )
         except Exception as exc:
@@ -194,6 +214,7 @@ def record_project_logout(user_id: str | None = None, email: str | None = None) 
     # Invalidate cached user list so the updated status is reflected immediately
     try:
         from api.services.xsuaa_users_service import clear_users_cache
+
         clear_users_cache()
     except Exception:
         pass
@@ -205,6 +226,7 @@ def record_project_logout(user_id: str | None = None, email: str | None = None) 
         # Also persist to PLATFORM_METADATA
         try:
             from api.platform.store import metadata_store
+
             store = metadata_store()
             for key in keys:
                 existing = store.get(NAMESPACE, key)
@@ -212,14 +234,21 @@ def record_project_logout(user_id: str | None = None, email: str | None = None) 
                     val = dict(existing["value"])
                     val["is_active"] = False
                     val["last_logout"] = datetime.now(timezone.utc).isoformat()
-                    store.put(NAMESPACE, key, val, expected_revision=existing.get("revision", 0))
+                    store.put(
+                        NAMESPACE,
+                        key,
+                        val,
+                        expected_revision=existing.get("revision", 0),
+                    )
         except Exception as exc:
             logger.debug("Could not persist logout to MetadataStore: %s", exc)
 
     threading.Thread(target=_persist_remote_logout, daemon=True).start()
 
 
-def is_user_active_session(user_id: str | None = None, email: str | None = None) -> bool:
+def is_user_active_session(
+    user_id: str | None = None, email: str | None = None
+) -> bool:
     """Check if the user currently has an active project session (has logged in and not logged out)."""
     _init_cache_if_needed()
     with _LOGINS_LOCK:
@@ -244,7 +273,9 @@ def get_all_project_logins() -> dict[str, str]:
         return dict(_LOGINS_CACHE)
 
 
-def get_project_last_login(user_id: str | None = None, email: str | None = None) -> str | None:
+def get_project_last_login(
+    user_id: str | None = None, email: str | None = None
+) -> str | None:
     """Retrieve the project-specific last login timestamp for a user, or None if never logged into this project."""
     _init_cache_if_needed()
     with _LOGINS_LOCK:

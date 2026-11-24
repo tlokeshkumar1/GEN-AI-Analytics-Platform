@@ -1,4 +1,5 @@
 """Read live BTP users through XSUAA SCIM, including local service bindings."""
+
 import copy
 import logging
 import os
@@ -12,10 +13,8 @@ from fastapi import HTTPException
 from api.xsuaa import xsuaa_credentials, validate_token, bearer_token
 from api.services.project_login_service import (
     record_project_login,
-    record_project_logout,
     get_all_project_logins,
     get_project_last_login,
-    is_user_active_session,
     get_all_active_sessions,
 )
 
@@ -59,8 +58,12 @@ def get_project_role_collections() -> tuple[set[str], set[str], set[str]]:
 def require_user_admin(authorization: str | None) -> None:
     context, claims = validate_token(bearer_token(authorization), xsuaa_credentials())
     if not context.check_local_scope("Admin"):
-        raise HTTPException(403, "The project Administrator role collection is required to view users.")
-    if not context.check_scope("xs_user.read") or not context.check_scope("xs_authorization.read"):
+        raise HTTPException(
+            403, "The project Administrator role collection is required to view users."
+        )
+    if not context.check_scope("xs_user.read") or not context.check_scope(
+        "xs_authorization.read"
+    ):
         raise HTTPException(
             403,
             "Assign the 'GEN-AI Analytics Platform User Management (dev)' role collection in addition to Administrator in SAP BTP Cockpit, then sign out and sign in again.",
@@ -82,9 +85,13 @@ def normalize_user(
     primary = next((email for email in email_records if email.get("primary")), None)
     email = (primary or (email_records[0] if email_records else {})).get("value", "")
     name = user.get("name") or {}
-    full_name = name.get("formatted") or " ".join(filter(None, [name.get("givenName"), name.get("familyName")]))
+    full_name = name.get("formatted") or " ".join(
+        filter(None, [name.get("givenName"), name.get("familyName")])
+    )
 
-    admin_collections, member_collections, project_collections = get_project_role_collections()
+    admin_collections, member_collections, project_collections = (
+        get_project_role_collections()
+    )
 
     # STRICT: Only include role collections that belong to the project roles
     assigned_groups = set()
@@ -98,7 +105,11 @@ def normalize_user(
     collections = sorted(assigned_groups)
     is_admin = bool(set(collections).intersection(admin_collections))
     is_member = bool(set(collections).intersection(member_collections))
-    tier = "Administrator" if is_admin else ("Member" if is_member else "No direct platform role")
+    tier = (
+        "Administrator"
+        if is_admin
+        else ("Member" if is_member else "No direct platform role")
+    )
     active = user.get("active")
 
     user_id = str(user.get("id", "")).strip()
@@ -108,7 +119,9 @@ def normalize_user(
     # normalization must be pure and must not read unrelated process caches.
     project_last_login = None
     if project_logins is not None:
-        project_last_login = project_logins.get(user_id) or project_logins.get(clean_email)
+        project_last_login = project_logins.get(user_id) or project_logins.get(
+            clean_email
+        )
     else:
         project_last_login = login_timestamp(user.get("lastLogonTime"))
 
@@ -116,7 +129,9 @@ def normalize_user(
     is_currently_active = False
     if active is not False:
         if active_sessions is not None:
-            is_currently_active = bool(user_id in active_sessions or clean_email in active_sessions)
+            is_currently_active = bool(
+                user_id in active_sessions or clean_email in active_sessions
+            )
         else:
             is_currently_active = active is True
 
@@ -126,7 +141,11 @@ def normalize_user(
 
     return {
         "id": user_id,
-        "name": full_name or user.get("displayName") or user.get("userName") or email or user_id,
+        "name": full_name
+        or user.get("displayName")
+        or user.get("userName")
+        or email
+        or user_id,
         "email": email,
         "role": ", ".join(collections) or "No directly assigned role collections",
         "tier": tier,
@@ -165,15 +184,21 @@ def _resources(session: requests.Session, base_url: str, resource: str) -> list:
     start = 1
     while True:
         response = session.get(
-            f"{base_url}/{resource}", params={"startIndex": start, "count": 100}, timeout=20,
+            f"{base_url}/{resource}",
+            params={"startIndex": start, "count": 100},
+            timeout=20,
         )
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, dict) or not ({"resources", "Resources"} & data.keys()):
             raise ValueError("Directory response is missing its resources collection")
         page = data.get("resources", data.get("Resources"))
-        if not isinstance(page, list) or any(not isinstance(record, dict) for record in page):
-            raise ValueError("Directory response contains an invalid resources collection")
+        if not isinstance(page, list) or any(
+            not isinstance(record, dict) for record in page
+        ):
+            raise ValueError(
+                "Directory response contains an invalid resources collection"
+            )
         records.extend(page)
         total = int(data.get("totalResults", len(records)))
         if total < len(records):
@@ -181,22 +206,41 @@ def _resources(session: requests.Session, base_url: str, resource: str) -> list:
         if len(records) >= total:
             return records
         if not page:
-            raise ValueError("Directory pagination ended before all records were returned")
+            raise ValueError(
+                "Directory pagination ended before all records were returned"
+            )
         start += len(page)
 
 
 def list_users(authorization: str, force_refresh: bool = False) -> dict:
-    raw_auth = bearer_token(authorization) if "bearer " in (authorization or "").lower() else (authorization or "")
-    admin_collections, member_collections, project_collections = get_project_role_collections()
+    raw_auth = (
+        bearer_token(authorization)
+        if "bearer " in (authorization or "").lower()
+        else (authorization or "")
+    )
+    admin_collections, member_collections, project_collections = (
+        get_project_role_collections()
+    )
 
     # Handle local development token bypass
     if raw_auth.startswith("dev-token-"):
         from urllib.parse import unquote
+
         parts = raw_auth.split(":")
-        dev_email = unquote(parts[1]) if len(parts) > 1 else os.getenv("DEV_AUTH_EMAIL", "dev-admin@localhost")
-        dev_name = unquote(parts[2]) if len(parts) > 2 else os.getenv("DEV_AUTH_NAME", "Local Dev Admin")
+        dev_email = (
+            unquote(parts[1])
+            if len(parts) > 1
+            else os.getenv("DEV_AUTH_EMAIL", "dev-admin@localhost")
+        )
+        dev_name = (
+            unquote(parts[2])
+            if len(parts) > 2
+            else os.getenv("DEV_AUTH_NAME", "Local Dev Admin")
+        )
         dev_id = parts[3] if len(parts) > 3 else "dev-admin-user"
-        dev_login_time = get_project_last_login(dev_id, dev_email) or record_project_login(dev_id, dev_email)
+        dev_login_time = get_project_last_login(
+            dev_id, dev_email
+        ) or record_project_login(dev_id, dev_email)
         local_user = {
             "id": dev_id,
             "name": dev_name,
@@ -218,10 +262,14 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
 
     credentials = xsuaa_credentials()
     if not credentials.get("apiurl"):
-        raise HTTPException(503, "The project XSUAA application binding must include apiurl.")
+        raise HTTPException(
+            503, "The project XSUAA application binding must include apiurl."
+        )
 
     cache_key = (
-        credentials.get("identityzoneid") or credentials.get("url") or credentials.get("apiurl"),
+        credentials.get("identityzoneid")
+        or credentials.get("url")
+        or credentials.get("apiurl"),
         credentials.get("clientid"),
         tuple(sorted(project_collections)),
     )
@@ -239,10 +287,16 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
 
     try:
         base_url = credentials["apiurl"].rstrip("/")
-        auth_header = authorization if (authorization or "").lower().startswith("bearer ") else f"Bearer {authorization}"
+        auth_header = (
+            authorization
+            if (authorization or "").lower().startswith("bearer ")
+            else f"Bearer {authorization}"
+        )
 
         with requests.Session() as session:
-            session.headers.update({"Authorization": auth_header, "Accept": "application/json"})
+            session.headers.update(
+                {"Authorization": auth_header, "Accept": "application/json"}
+            )
             raw_users = _resources(session, base_url, "Users")
             raw_groups = _resources(session, base_url, "Groups")
 
@@ -251,7 +305,9 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
         for group in raw_groups:
             candidates = [
                 group.get("displayName"),
-                group.get("urn:sap:cloud:scim:schemas:extension:custom:2.0:Group", {}).get("name"),
+                group.get(
+                    "urn:sap:cloud:scim:schemas:extension:custom:2.0:Group", {}
+                ).get("name"),
             ]
             name = next((n for n in candidates if n and n in project_collections), None)
             if name:
@@ -264,7 +320,10 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
             name = groups.get(grp_id)
             if name and name in project_collections:
                 for member in group.get("members", []):
-                    if member.get("value") and str(member.get("type") or "USER").upper() == "USER":
+                    if (
+                        member.get("value")
+                        and str(member.get("type") or "USER").upper() == "USER"
+                    ):
                         memberships.setdefault(member["value"], set()).add(name)
 
         deduped_users: dict[str, dict] = {}
@@ -274,11 +333,16 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
             extra_groups = [{"display": name} for name in memberships.get(user_id, [])]
             raw_user["groups"] = list(raw_user.get("groups") or []) + extra_groups
             user = normalize_user(
-                raw_user, groups, project_logins=project_logins, active_sessions=active_sessions
+                raw_user,
+                groups,
+                project_logins=project_logins,
+                active_sessions=active_sessions,
             )
 
             # STRICT: Show ONLY users who have GEN-AI Analytics Platform Administrator (dev) or GEN-AI Analytics Platform Member (dev)
-            assigned = sorted(project_collections.intersection(user["role_collections"]))
+            assigned = sorted(
+                project_collections.intersection(user["role_collections"])
+            )
             if not assigned:
                 continue
 
@@ -291,12 +355,17 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
                 deduped_users[dedup_key] = user
             else:
                 existing = deduped_users[dedup_key]
-                merged_roles = sorted(set(existing["role_collections"]) | set(user["role_collections"]))
+                merged_roles = sorted(
+                    set(existing["role_collections"]) | set(user["role_collections"])
+                )
                 existing["role_collections"] = merged_roles
                 existing["role"] = ", ".join(merged_roles)
                 if user["status"] == "Active":
                     existing["status"] = "Active"
-                if user.get("last_login") and (not existing.get("last_login") or user["last_login"] > existing["last_login"]):
+                if user.get("last_login") and (
+                    not existing.get("last_login")
+                    or user["last_login"] > existing["last_login"]
+                ):
                     existing["last_login"] = user["last_login"]
                 if user.get("tier") == "Administrator":
                     existing["tier"] = "Administrator"
@@ -305,19 +374,29 @@ def list_users(authorization: str, force_refresh: bool = False) -> dict:
 
     except requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 401:
-            raise HTTPException(401, "SAP XSUAA directory session expired. Please sign out and sign in again.") from None
+            raise HTTPException(
+                401,
+                "SAP XSUAA directory session expired. Please sign out and sign in again.",
+            ) from None
         if exc.response is not None and exc.response.status_code == 403:
             raise HTTPException(
                 403,
                 "Assign the 'GEN-AI Analytics Platform User Management (dev)' role collection to your user in SAP BTP Cockpit to enable directory reading, then sign out and sign in again.",
             ) from None
-        raise HTTPException(502, f"Could not read project users from XSUAA (HTTP {exc.response.status_code if exc.response is not None else 'error'}).")
+        raise HTTPException(
+            502,
+            f"Could not read project users from XSUAA (HTTP {exc.response.status_code if exc.response is not None else 'error'}).",
+        )
     except (requests.RequestException, ValueError, KeyError, TypeError) as err:
         logger.error("Error reading XSUAA users (%s)", type(err).__name__)
-        raise HTTPException(502, "Could not read project users from the XSUAA application service.")
+        raise HTTPException(
+            502, "Could not read project users from the XSUAA application service."
+        )
 
-    display_roles = [os.getenv("XSUAA_ADMIN_ROLE_COLLECTION") or PRIMARY_ADMIN_ROLE,
-                     os.getenv("XSUAA_MEMBER_ROLE_COLLECTION") or PRIMARY_MEMBER_ROLE]
+    display_roles = [
+        os.getenv("XSUAA_ADMIN_ROLE_COLLECTION") or PRIMARY_ADMIN_ROLE,
+        os.getenv("XSUAA_MEMBER_ROLE_COLLECTION") or PRIMARY_MEMBER_ROLE,
+    ]
     result = {
         "users": users,
         "total": len(users),

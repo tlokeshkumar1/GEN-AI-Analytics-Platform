@@ -1,4 +1,5 @@
 """Persistent, immutable dataset versions and their matching RAG indexes."""
+
 import io
 import copy
 import hashlib
@@ -16,45 +17,53 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import HTTPException
-from api.models.execution_context import current_identity, current_selection, require_dataset_access, is_admin
+from api.models.execution_context import (
+    current_identity,
+    current_selection,
+    require_dataset_access,
+)
 
 
 import tempfile
 from api.utils.logger import get_logger
+
 logger = get_logger("datasets")
 OUTPUT_DIR = Path(tempfile.gettempdir()) / "platform_runtime"
 
 
 class DatasetService:
-    def __init__(self, output_dir=OUTPUT_DIR, default_async_index=True, repository=None):
+    def __init__(
+        self, output_dir=OUTPUT_DIR, default_async_index=True, repository=None
+    ):
         self.output_dir = Path(output_dir)
         self.catalog_path = self.output_dir / "datasets.json"
         self.default_async_index = default_async_index
         self._lock = threading.RLock()
         self._snapshot_cache = {}
         self._cache_lock = threading.Lock()
-        self._bg_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="dataset-indexer")
+        self._bg_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="dataset-indexer"
+        )
         self._active_futures = []
         self._futures_lock = threading.Lock()
         self.repository = None if repository is False else repository
-        use_durable = (
-            bool(os.getenv("VCAP_APPLICATION"))
-            or (
-                self.output_dir == OUTPUT_DIR
-                and (
-                    os.getenv("PLATFORM_DATASET_BACKEND") == "durable"
-                    or os.getenv("PLATFORM_METADATA_BACKEND", "hana") == "hana"
-                )
-                and os.getenv("PLATFORM_DATASET_BACKEND") != "local"
+        use_durable = bool(os.getenv("VCAP_APPLICATION")) or (
+            self.output_dir == OUTPUT_DIR
+            and (
+                os.getenv("PLATFORM_DATASET_BACKEND") == "durable"
+                or os.getenv("PLATFORM_METADATA_BACKEND", "hana") == "hana"
             )
+            and os.getenv("PLATFORM_DATASET_BACKEND") != "local"
         )
         if repository is not False and self.repository is None and use_durable:
             from api.platform.storage import DatasetRepository
+
             self.repository = DatasetRepository()
 
     @contextmanager
     def _writer(self):
         from api.platform.ai_settings import ai_settings, current_ai_settings
+
         token = current_ai_settings.set(ai_settings())
         try:
             with self._storage_writer():
@@ -78,12 +87,17 @@ class DatasetService:
             handle.seek(0)
             if os.name == "nt":
                 import msvcrt
+
                 try:
                     msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
                 except OSError as exc:
-                    raise HTTPException(503, "Another dataset update is still processing. Please retry shortly.") from exc
+                    raise HTTPException(
+                        503,
+                        "Another dataset update is still processing. Please retry shortly.",
+                    ) from exc
             else:
                 import fcntl
+
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
                 yield
@@ -99,8 +113,13 @@ class DatasetService:
             return self.repository.catalog()
         if self.output_dir == OUTPUT_DIR:
             try:
-                from api.platform.datasets_metadata_repository import datasets_metadata_repo
-                hana_cat = datasets_metadata_repo.get_catalog(seed_fallback_path=self.catalog_path)
+                from api.platform.datasets_metadata_repository import (
+                    datasets_metadata_repo,
+                )
+
+                hana_cat = datasets_metadata_repo.get_catalog(
+                    seed_fallback_path=self.catalog_path
+                )
                 if hana_cat is not None:
                     return hana_cat
             except Exception:
@@ -112,7 +131,10 @@ class DatasetService:
     def _write_json(self, path, value):
         if path == self.catalog_path and self.output_dir == OUTPUT_DIR:
             try:
-                from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                from api.platform.datasets_metadata_repository import (
+                    datasets_metadata_repo,
+                )
+
                 datasets_metadata_repo.save_catalog(value)
             except Exception as exc:
                 logger.warning(f"Failed to sync catalog to DATASETS_METADATA: {exc}")
@@ -121,14 +143,20 @@ class DatasetService:
             return
         if path == self.catalog_path and self.output_dir == OUTPUT_DIR:
             try:
-                from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                from api.platform.datasets_metadata_repository import (
+                    datasets_metadata_repo,
+                )
+
                 datasets_metadata_repo.save_catalog(value)
             except Exception:
                 pass
         import time
+
         temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
         try:
-            temporary.write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+            temporary.write_text(
+                json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8"
+            )
             for attempt in range(5):
                 try:
                     os.replace(temporary, path)
@@ -143,14 +171,18 @@ class DatasetService:
     @staticmethod
     def parse_file(content, filename):
         from api.utils.validation import validate_excel_file
+
         validate_excel_file(filename)
         if not content:
             raise HTTPException(400, "The uploaded file is empty.")
         from api.platform.ingestion import ingestion_service
+
         df, _ = ingestion_service.prepare(content, filename)
         df.columns = [str(c).strip() for c in df.columns]
         if not len(df.columns) or len(set(df.columns)) != len(df.columns):
-            raise HTTPException(400, "Dataset must have unique, non-empty column names.")
+            raise HTTPException(
+                400, "Dataset must have unique, non-empty column names."
+            )
         if any(not c or c == "__rowId" for c in df.columns):
             raise HTTPException(400, "Invalid or reserved column name: __rowId.")
         return df
@@ -161,7 +193,14 @@ class DatasetService:
         stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", Path(name).stem).strip(" .")
         # A frontend upload named Sales_V2 belongs to the Sales dataset.
         stem = re.sub(r"_V\d+$", "", stem, flags=re.IGNORECASE)
-        if not stem or stem.upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
+        if not stem or stem.upper() in {
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            *[f"COM{i}" for i in range(1, 10)],
+            *[f"LPT{i}" for i in range(1, 10)],
+        }:
             raise HTTPException(400, "Please use a valid dataset filename.")
         return stem[:120], Path(name).suffix.lower()
 
@@ -170,8 +209,14 @@ class DatasetService:
         if extension:
             return extension
         versions = entry.get("versions", [])
-        current = next((v for v in versions if v["version"] == entry.get("currentVersion")), {})
-        for name in (current.get("filename"), entry.get("sourceFilename"), entry.get("name")):
+        current = next(
+            (v for v in versions if v["version"] == entry.get("currentVersion")), {}
+        )
+        for name in (
+            current.get("filename"),
+            entry.get("sourceFilename"),
+            entry.get("name"),
+        ):
             suffix = Path(name or "").suffix.lower()
             if suffix in (".csv", ".xlsx", ".xls"):
                 return suffix
@@ -181,21 +226,36 @@ class DatasetService:
     def _columns(df):
         if df.attrs.get("columns"):
             return copy.deepcopy(df.attrs["columns"])
-        return [{"name": c, "type": "number" if pd.api.types.is_numeric_dtype(df[c]) else
-                 "date" if pd.api.types.is_datetime64_any_dtype(df[c]) else "string",
-                 "required": False} for c in df.columns]
+        return [
+            {
+                "name": c,
+                "type": "number"
+                if pd.api.types.is_numeric_dtype(df[c])
+                else "date"
+                if pd.api.types.is_datetime64_any_dtype(df[c])
+                else "string",
+                "required": False,
+            }
+            for c in df.columns
+        ]
 
     @staticmethod
     def _excel_export(df):
         """Excel binary numbers cannot preserve arbitrary Decimal/large integer precision."""
         from decimal import Decimal
         from numbers import Integral
+
         def value(cell):
-            if isinstance(cell, Decimal) or isinstance(cell, Integral) and abs(cell) >= 10**15:
+            if (
+                isinstance(cell, Decimal)
+                or isinstance(cell, Integral)
+                and abs(cell) >= 10**15
+            ):
                 return str(cell)
             if isinstance(cell, (datetime, pd.Timestamp)) and cell.tzinfo is not None:
                 return cell.isoformat()
             return cell
+
         return df.map(value)
 
     def _snapshot(self, entry, version=None):
@@ -205,7 +265,9 @@ class DatasetService:
         if self.repository is not None:
             item = next(v for v in entry["versions"] if v["version"] == number)
             if not item.get("snapshotKey"):
-                raise HTTPException(409, "Migrate this dataset version to durable storage before use.")
+                raise HTTPException(
+                    409, "Migrate this dataset version to durable storage before use."
+                )
             return self.repository.snapshot(item["snapshotKey"])
         cache_key = (entry["id"], number)
         with self._cache_lock:
@@ -215,10 +277,16 @@ class DatasetService:
         path = self.output_dir / entry["folder"] / f".version_{number}.json"
         if not path.exists():
             if number != max(v["version"] for v in entry["versions"]):
-                raise HTTPException(409, "This historical version has no immutable snapshot. Restore its snapshot before querying it.")
+                raise HTTPException(
+                    409,
+                    "This historical version has no immutable snapshot. Restore its snapshot before querying it.",
+                )
             cols = []
             try:
-                from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                from api.platform.datasets_metadata_repository import (
+                    datasets_metadata_repo,
+                )
+
                 hint = entry.get("physical_table_name") or entry.get("name")
                 cols = datasets_metadata_repo.load_schema_from_hana(hint)
             except Exception:
@@ -235,7 +303,7 @@ class DatasetService:
                     "embeddingCount": 0,
                     "embeddingStatus": "Ready",
                     "hanaSyncStatus": "Ready",
-                    "embeddingConfiguration": self._embedding_configuration()
+                    "embeddingConfiguration": self._embedding_configuration(),
                 }
                 with self._cache_lock:
                     self._snapshot_cache[cache_key] = snap
@@ -299,10 +367,15 @@ class DatasetService:
         self._write_json(folder / f".meta_{number}.json", meta)
 
     def _item(self, entry, active_id=None):
-        version = next((v for v in entry["versions"] if v["version"] == entry["currentVersion"]), entry["versions"][-1] if entry.get("versions") else {})
+        version = next(
+            (v for v in entry["versions"] if v["version"] == entry["currentVersion"]),
+            entry["versions"][-1] if entry.get("versions") else {},
+        )
         meta = self._version_meta(entry, version)
         snap = meta if meta is not None else self._snapshot(entry)
-        file_path = self.output_dir / entry["folder"] / version.get("filename", "data.xlsx")
+        file_path = (
+            self.output_dir / entry["folder"] / version.get("filename", "data.xlsx")
+        )
         size_bytes = version.get("sizeBytes", 0)
         if self.repository is None and file_path.exists():
             try:
@@ -310,10 +383,32 @@ class DatasetService:
             except Exception:
                 pass
 
-        table_name = version.get("tableName") or snap.get("active_table") or snap.get("tableName") or entry.get("tableName") or entry.get("table_name")
-        display_name = entry.get("displayName") or entry.get("display_name") or table_name or entry["name"]
-        sheet_name = entry.get("sheetName") or entry.get("sheet_name") or snap.get("sheet_name") or version.get("sheet_name")
-        source_file = entry.get("sourceFile") or entry.get("sourceFilename") or entry.get("source_filename") or version.get("sourceFilename") or entry["name"]
+        table_name = (
+            version.get("tableName")
+            or snap.get("active_table")
+            or snap.get("tableName")
+            or entry.get("tableName")
+            or entry.get("table_name")
+        )
+        display_name = (
+            entry.get("displayName")
+            or entry.get("display_name")
+            or table_name
+            or entry["name"]
+        )
+        sheet_name = (
+            entry.get("sheetName")
+            or entry.get("sheet_name")
+            or snap.get("sheet_name")
+            or version.get("sheet_name")
+        )
+        source_file = (
+            entry.get("sourceFile")
+            or entry.get("sourceFilename")
+            or entry.get("source_filename")
+            or version.get("sourceFilename")
+            or entry["name"]
+        )
 
         return {
             "id": entry["id"],
@@ -327,15 +422,23 @@ class DatasetService:
             "sourceFile": source_file,
             "sourceFilename": source_file,
             "description": "Uploaded dataset",
-            "rowCount": version.get("rowCount") if version.get("rowCount") is not None else (snap.get("rowCount") or len(snap.get("rows", []))),
+            "rowCount": version.get("rowCount")
+            if version.get("rowCount") is not None
+            else (snap.get("rowCount") or len(snap.get("rows", []))),
             "columnCount": len(snap.get("columns", [])),
             "columns": snap.get("columns", []),
             "lastUpdated": entry["updatedAt"],
             "format": Path(version.get("filename", ".xlsx")).suffix[1:] or "xlsx",
-            "source": "External connection" if version.get("sourceId") else "File upload",
+            "source": "External connection"
+            if version.get("sourceId")
+            else "File upload",
             "sizeBytes": size_bytes,
-            "status": "Error" if version.get("ingestionStatus", entry.get("ingestionStatus")) == "partial" else "Ready",
-            "ingestionStatus": version.get("ingestionStatus", entry.get("ingestionStatus")),
+            "status": "Error"
+            if version.get("ingestionStatus", entry.get("ingestionStatus")) == "partial"
+            else "Ready",
+            "ingestionStatus": version.get(
+                "ingestionStatus", entry.get("ingestionStatus")
+            ),
             "currentVersion": entry["currentVersion"],
             "currentFilename": version.get("filename", entry["name"]),
             "versions": entry.get("versions", []),
@@ -350,7 +453,11 @@ class DatasetService:
         parts = []
         for col in columns:
             val = row.get(col)
-            if val is None or val == "" or str(val).strip().lower() in ("nan", "none", "null"):
+            if (
+                val is None
+                or val == ""
+                or str(val).strip().lower() in ("nan", "none", "null")
+            ):
                 continue
             if isinstance(val, float) and val.is_integer():
                 val = int(val)
@@ -369,54 +476,94 @@ class DatasetService:
     def _index(self, chunks, previous=None, *, raise_on_error=False):
         from api.services.embedding_service import embedding_service
         from api.utils.logger import get_logger
+
         try:
-            reusable = dict(zip(previous["chunks"], previous["embeddings"])) if previous and previous["embeddingStatus"] == "Ready" and previous.get("embeddingConfiguration") == self._embedding_configuration() else {}
-            missing = list(dict.fromkeys(chunk for chunk in chunks if chunk not in reusable))
+            reusable = (
+                dict(zip(previous["chunks"], previous["embeddings"]))
+                if previous
+                and previous["embeddingStatus"] == "Ready"
+                and previous.get("embeddingConfiguration")
+                == self._embedding_configuration()
+                else {}
+            )
+            missing = list(
+                dict.fromkeys(chunk for chunk in chunks if chunk not in reusable)
+            )
             if missing:
-                reusable.update(zip(missing, embedding_service.batch_embeddings(missing)))
+                reusable.update(
+                    zip(missing, embedding_service.batch_embeddings(missing))
+                )
             vectors = [reusable[chunk] for chunk in chunks]
-            if len(vectors) != len(chunks) or any(not v or not all(math.isfinite(x) for x in v) for v in vectors):
+            if len(vectors) != len(chunks) or any(
+                not v or not all(math.isfinite(x) for x in v) for v in vectors
+            ):
                 raise ValueError("Embedding provider returned invalid vectors")
             return vectors, "Ready"
         except Exception:
-            get_logger("datasets").exception("Embedding generation failed; current source text remains available for retrieval")
+            get_logger("datasets").exception(
+                "Embedding generation failed; current source text remains available for retrieval"
+            )
             if raise_on_error:
                 raise
             return [], "Error"
 
     @staticmethod
-    def _sync_hana(entry, number, chunks, vectors, previous_version=None, previous_chunks=None):
+    def _sync_hana(
+        entry, number, chunks, vectors, previous_version=None, previous_chunks=None
+    ):
         if not vectors:
             return "Pending"
         from api.utils.logger import get_logger
+
         try:
             from api.database.vector_client import vector_client
+
             vector_client.replace_dataset_version(
-                DatasetService._vector_namespace(entry), number, chunks, vectors, entry["name"],
+                DatasetService._vector_namespace(entry),
+                number,
+                chunks,
+                vectors,
+                entry["name"],
                 previous_version=previous_version,
                 previous_chunks=previous_chunks,
-                metadata_extra={"workspace_id": entry.get("workspaceId"), "dataset_id": entry["id"], "embedding_configuration": DatasetService._embedding_configuration()}
+                metadata_extra={
+                    "workspace_id": entry.get("workspaceId"),
+                    "dataset_id": entry["id"],
+                    "embedding_configuration": DatasetService._embedding_configuration(),
+                },
             )
             return "Ready"
         except Exception:
-            get_logger("datasets").exception("HANA sync failed; using the persistent version index for retrieval")
+            get_logger("datasets").exception(
+                "HANA sync failed; using the persistent version index for retrieval"
+            )
             return "Error"
 
     def _submit_indexing(self, dataset_id: str, version: int):
         """Submit background vector indexing task."""
         from contextvars import copy_context
         from api.platform.ai_settings import ai_settings, current_ai_settings
+
         context = copy_context()
         context.run(current_ai_settings.set, ai_settings())
         context.run(current_selection.set, None)
-        if self.repository is not None and os.getenv("PLATFORM_EXTERNAL_WORKER") == "true":
+        if (
+            self.repository is not None
+            and os.getenv("PLATFORM_EXTERNAL_WORKER") == "true"
+        ):
             from api.platform.jobs import JobService
-            return context.run(JobService(store=self.repository.store, datasets=self).enqueue,
-                "index", {"dataset_id": dataset_id, "version": version},
-                f"index:{dataset_id}:{version}:{json.dumps(self._embedding_configuration(), sort_keys=True)}")
+
+            return context.run(
+                JobService(store=self.repository.store, datasets=self).enqueue,
+                "index",
+                {"dataset_id": dataset_id, "version": version},
+                f"index:{dataset_id}:{version}:{json.dumps(self._embedding_configuration(), sort_keys=True)}",
+            )
         with self._futures_lock:
             self._active_futures = [f for f in self._active_futures if not f.done()]
-            future = self._bg_executor.submit(context.run, self._async_index_version, dataset_id, version)
+            future = self._bg_executor.submit(
+                context.run, self._async_index_version, dataset_id, version
+            )
             self._active_futures.append(future)
             return future
 
@@ -445,6 +592,7 @@ class DatasetService:
             return
 
         from api.utils.logger import get_logger
+
         logger = get_logger("datasets")
         try:
             snap = json.loads(snap_path.read_text(encoding="utf-8"))
@@ -456,21 +604,30 @@ class DatasetService:
             # Find previous version snapshot for incremental embedding reuse and HANA delta sync
             previous = None
             prev_v = None
-            prev_versions = [v["version"] for v in entry["versions"] if v["version"] < version]
+            prev_versions = [
+                v["version"] for v in entry["versions"] if v["version"] < version
+            ]
             if prev_versions:
                 prev_v = max(prev_versions)
                 prev_snap_path = folder / f".version_{prev_v}.json"
                 if prev_snap_path.exists():
                     try:
-                        previous = json.loads(prev_snap_path.read_text(encoding="utf-8"))
+                        previous = json.loads(
+                            prev_snap_path.read_text(encoding="utf-8")
+                        )
                     except Exception:
                         previous = None
 
             vectors, embedding_status = self._index(snap["chunks"], previous)
             hana_status = self._sync_hana(
-                entry, version, snap["chunks"], vectors,
-                previous_version=prev_v if (previous and previous.get("embeddingStatus") == "Ready") else None,
-                previous_chunks=previous.get("chunks") if previous else None
+                entry,
+                version,
+                snap["chunks"],
+                vectors,
+                previous_version=prev_v
+                if (previous and previous.get("embeddingStatus") == "Ready")
+                else None,
+                previous_chunks=previous.get("chunks") if previous else None,
             )
 
             snap.update(
@@ -478,14 +635,18 @@ class DatasetService:
                 embeddingCount=len(vectors),
                 embeddingStatus=embedding_status,
                 hanaSyncStatus=hana_status,
-                embeddingConfiguration=self._embedding_configuration()
+                embeddingConfiguration=self._embedding_configuration(),
             )
             self._write_json(snap_path, snap)
             self._write_version_meta(folder, version, snap)
             self._invalidate()
-            logger.info(f"[Indexer] Version {version} for dataset {dataset_id} indexed: {len(vectors)} embeddings, HANA: {hana_status}")
+            logger.info(
+                f"[Indexer] Version {version} for dataset {dataset_id} indexed: {len(vectors)} embeddings, HANA: {hana_status}"
+            )
         except Exception as exc:
-            logger.exception(f"[Indexer] Failed to index dataset {dataset_id} v{version}: {exc}")
+            logger.exception(
+                f"[Indexer] Failed to index dataset {dataset_id} v{version}: {exc}"
+            )
 
     def _prune_old_versions(self, catalog, entry, max_versions=None):
         """Prune oldest non-active versions beyond max_versions to prevent disk bloat."""
@@ -494,7 +655,10 @@ class DatasetService:
             identity = current_identity.get()
             if identity is not None:
                 from api.platform.store import metadata_store
-                row = metadata_store().get(identity["workspace_id"] + ":settings", "retention")
+
+                row = metadata_store().get(
+                    identity["workspace_id"] + ":settings", "retention"
+                )
                 if row:
                     max_versions = row["value"]["max_versions"]
         if max_versions <= 0:
@@ -509,7 +673,10 @@ class DatasetService:
         if current_identity.get() is not None:
             # Reviewed semantic revisions and their dependent dashboards remain historical evidence.
             from api.platform.semantic import semantic_registry
-            candidates = [v for v in candidates if not semantic_registry.list(entry, v["version"])]
+
+            candidates = [
+                v for v in candidates if not semantic_registry.list(entry, v["version"])
+            ]
         to_prune_count = len(versions) - max_versions
         to_prune = candidates[:to_prune_count]
 
@@ -525,6 +692,7 @@ class DatasetService:
                     raw_path.unlink(missing_ok=True)
             try:
                 from api.database.vector_client import vector_client
+
                 vector_client.delete_dataset_version(entry["id"], v_num)
             except Exception:
                 pass
@@ -535,33 +703,92 @@ class DatasetService:
             catalog["datasets"][entry["id"]] = entry
             self._write_json(self.catalog_path, catalog)
 
-    def _save_version(self, catalog, entry, df, rows, operation, original=None, index=True, extension=None, provenance=None):
+    def _save_version(
+        self,
+        catalog,
+        entry,
+        df,
+        rows,
+        operation,
+        original=None,
+        index=True,
+        extension=None,
+        provenance=None,
+    ):
         columns = self._columns(df)
         previous = self._snapshot(entry) if entry["versions"] else None
         before = {row["__rowId"]: row for row in previous["rows"]} if previous else {}
         after = {row["__rowId"]: row for row in rows}
         shared = before.keys() & after.keys()
         changed = sum(before[key] != after[key] for key in shared)
-        provenance = {**(provenance or {}), "schemaRevision": hashlib.sha256(json.dumps(columns, sort_keys=True).encode()).hexdigest(),
-                      "transformationRevision": hashlib.sha256(json.dumps(df.attrs.get("transformation_plan"), sort_keys=True).encode()).hexdigest(),
-                      "semanticRevision": None, "createdBy": (current_identity.get() or {}).get("user_id"),
-                      "ingestionId": (provenance or {}).get("ingestionId") or "ing-" + uuid.uuid4().hex,
-                      "counts": (provenance or {}).get("counts") or {"inserted": len(after.keys() - before.keys()), "deleted": len(before.keys() - after.keys()), "updated": changed, "unchanged": len(shared) - changed}}
+        provenance = {
+            **(provenance or {}),
+            "schemaRevision": hashlib.sha256(
+                json.dumps(columns, sort_keys=True).encode()
+            ).hexdigest(),
+            "transformationRevision": hashlib.sha256(
+                json.dumps(df.attrs.get("transformation_plan"), sort_keys=True).encode()
+            ).hexdigest(),
+            "semanticRevision": None,
+            "createdBy": (current_identity.get() or {}).get("user_id"),
+            "ingestionId": (provenance or {}).get("ingestionId")
+            or "ing-" + uuid.uuid4().hex,
+            "counts": (provenance or {}).get("counts")
+            or {
+                "inserted": len(after.keys() - before.keys()),
+                "deleted": len(before.keys() - after.keys()),
+                "updated": changed,
+                "unchanged": len(shared) - changed,
+            },
+        }
         if not df.attrs.get("data_profile"):
             from api.services.analytics_engine import json_value
-            df.attrs["data_profile"] = {"row_count": len(df), "duplicate_count": int(df.duplicated().sum()), "warnings": [], "rejected_rows": [],
-                                        "source_hash": hashlib.sha256(json.dumps(rows, default=str, sort_keys=True).encode()).hexdigest(),
-                                        "fields": [{"name": column["name"], "type": column["type"],
-                                                    "missing_count": int(df[column["name"]].isna().sum()),
-                                                    "distinct_count": int(df[column["name"]].nunique()),
-                                                    "samples": [json_value(value) for value in df[column["name"]].head(5)], "warnings": []} for column in columns]}
+
+            df.attrs["data_profile"] = {
+                "row_count": len(df),
+                "duplicate_count": int(df.duplicated().sum()),
+                "warnings": [],
+                "rejected_rows": [],
+                "source_hash": hashlib.sha256(
+                    json.dumps(rows, default=str, sort_keys=True).encode()
+                ).hexdigest(),
+                "fields": [
+                    {
+                        "name": column["name"],
+                        "type": column["type"],
+                        "missing_count": int(df[column["name"]].isna().sum()),
+                        "distinct_count": int(df[column["name"]].nunique()),
+                        "samples": [
+                            json_value(value) for value in df[column["name"]].head(5)
+                        ],
+                        "warnings": [],
+                    }
+                    for column in columns
+                ],
+            }
         if self.repository is not None:
-            return self._save_durable_version(catalog, entry, df, rows, operation, original, index, extension, provenance)
+            return self._save_durable_version(
+                catalog,
+                entry,
+                df,
+                rows,
+                operation,
+                original,
+                index,
+                extension,
+                provenance,
+            )
         folder = self.output_dir / entry["folder"]
         folder.mkdir(parents=True, exist_ok=True)
         # Include orphaned staged files when allocating, so a failed write is never overwritten.
-        number = max([v["version"] for v in entry["versions"]] +
-                     [int(p.stem.split("_")[-1]) for p in folder.glob(".version_*.json")] + [0]) + 1
+        number = (
+            max(
+                [v["version"] for v in entry["versions"]]
+                + [int(p.stem.split("_")[-1]) for p in folder.glob(".version_*.json")]
+                + [0]
+            )
+            + 1
+        )
         suffix = self._version_suffix(entry, extension)
         # Write edited legacy XLS content as XLSX; openpyxl cannot write XLS.
         if suffix == ".xls" and original is None:
@@ -577,20 +804,41 @@ class DatasetService:
                 self._excel_export(df).to_excel(handle, index=False, engine="openpyxl")
         chunks = self._chunks(df, entry["name"], rows)
         previous = self._snapshot(entry) if entry["versions"] else None
-        vectors, embedding_status = self._index(chunks, previous) if index else ([], "Pending")
-        hana_status = self._sync_hana(entry, number, chunks, vectors) if index else "Pending"
-        snap = {"rows": rows, "columns": self._columns(df), "chunks": chunks,
-                "embeddings": vectors, "embeddingCount": len(vectors), "embeddingStatus": embedding_status,
-                "hanaSyncStatus": hana_status, "embeddingConfiguration": self._embedding_configuration(),
-                "dataProfile": df.attrs.get("data_profile"), "transformationPlan": df.attrs.get("transformation_plan")}
+        vectors, embedding_status = (
+            self._index(chunks, previous) if index else ([], "Pending")
+        )
+        hana_status = (
+            self._sync_hana(entry, number, chunks, vectors) if index else "Pending"
+        )
+        snap = {
+            "rows": rows,
+            "columns": self._columns(df),
+            "chunks": chunks,
+            "embeddings": vectors,
+            "embeddingCount": len(vectors),
+            "embeddingStatus": embedding_status,
+            "hanaSyncStatus": hana_status,
+            "embeddingConfiguration": self._embedding_configuration(),
+            "dataProfile": df.attrs.get("data_profile"),
+            "transformationPlan": df.attrs.get("transformation_plan"),
+        }
         self._write_json(folder / f".version_{number}.json", snap)
         self._write_version_meta(folder, number, snap)
         now = datetime.now(timezone.utc).isoformat()
-        entry["versions"].append({"version": number, "filename": filename, "createdAt": now,
-                                  "rowCount": len(rows), "operation": operation,
-                                  "columns": snap["columns"], "embeddingStatus": embedding_status,
-                                  "embeddingCount": len(vectors), "hanaSyncStatus": hana_status,
-                                  **(provenance or {})})
+        entry["versions"].append(
+            {
+                "version": number,
+                "filename": filename,
+                "createdAt": now,
+                "rowCount": len(rows),
+                "operation": operation,
+                "columns": snap["columns"],
+                "embeddingStatus": embedding_status,
+                "embeddingCount": len(vectors),
+                "hanaSyncStatus": hana_status,
+                **(provenance or {}),
+            }
+        )
         entry.update(currentVersion=number, updatedAt=now)
         catalog["datasets"][entry["id"]] = entry
         catalog["activeDatasetId"] = entry["id"]
@@ -603,63 +851,107 @@ class DatasetService:
         elif embedding_status == "Pending":
             warning = " Vector indexing running in background."
         if hana_status == "Error":
-            warning += " HANA sync is unavailable; chat uses the saved version embeddings."
-        return {"success": True, "message": f"Saved {filename} ({len(rows)} rows)." + warning,
-                "dataset": item, "version": number, "embeddings_generated": len(vectors)}
+            warning += (
+                " HANA sync is unavailable; chat uses the saved version embeddings."
+            )
+        return {
+            "success": True,
+            "message": f"Saved {filename} ({len(rows)} rows)." + warning,
+            "dataset": item,
+            "version": number,
+            "embeddings_generated": len(vectors),
+        }
 
     @staticmethod
     def _embedding_configuration():
         from api.platform.ai_settings import ai_settings
-        return {"model": ai_settings()["embedding_model"], "dimensions": 1536,
-                "projection": "first_1536_dimensions", "documentInputType": "passage", "queryInputType": "query", "textTemplateRevision": 2}
+
+        return {
+            "model": ai_settings()["embedding_model"],
+            "dimensions": 1536,
+            "projection": "first_1536_dimensions",
+            "documentInputType": "passage",
+            "queryInputType": "query",
+            "textTemplateRevision": 2,
+        }
 
     @staticmethod
     def _vector_namespace(entry):
         if not entry.get("workspaceId"):
             return entry["id"]
         workspace = hashlib.sha256(entry["workspaceId"].encode()).hexdigest()[:12]
-        configuration = hashlib.sha256(json.dumps(DatasetService._embedding_configuration(), sort_keys=True).encode()).hexdigest()[:12]
+        configuration = hashlib.sha256(
+            json.dumps(
+                DatasetService._embedding_configuration(), sort_keys=True
+            ).encode()
+        ).hexdigest()[:12]
         return f"w{workspace}:{entry['id']}:i{configuration}"
 
     @staticmethod
     def _rows(df):
         from api.services.analytics_engine import json_value
         from decimal import Decimal
+
         # Snapshot serialization must not round decimals through binary floats.
-        rows = [{c: str(value) if isinstance(value, Decimal) and value.is_finite() else json_value(value)
-                 for c, value in row.items()} for row in df.to_dict(orient="records")]
+        rows = [
+            {
+                c: str(value)
+                if isinstance(value, Decimal) and value.is_finite()
+                else json_value(value)
+                for c, value in row.items()
+            }
+            for row in df.to_dict(orient="records")
+        ]
         for row in rows:
             row["__rowId"] = uuid.uuid4().hex
         return rows
 
     @staticmethod
     def _frame(rows, columns):
-        from decimal import Decimal
         from api.services.analytics_engine import decimal
-        frame = pd.DataFrame([{c["name"]: r.get(c["name"]) for c in columns} for r in rows], columns=[c["name"] for c in columns])
+
+        frame = pd.DataFrame(
+            [{c["name"]: r.get(c["name"]) for c in columns} for r in rows],
+            columns=[c["name"] for c in columns],
+        )
         for column in columns:
             if column["type"] == "decimal":
-                frame[column["name"]] = frame[column["name"]].map(lambda v: None if pd.isna(v) or v == "" else decimal(v))
+                frame[column["name"]] = frame[column["name"]].map(
+                    lambda v: None if pd.isna(v) or v == "" else decimal(v)
+                )
             elif column["type"] == "number":
+
                 def number(value):
                     if pd.isna(value) or value == "":
                         return None
                     result = decimal(value)
-                    return int(result) if result == result.to_integral_value() else result
+                    return (
+                        int(result) if result == result.to_integral_value() else result
+                    )
+
                 values = [number(value) for value in frame[column["name"]]]
                 frame[column["name"]] = pd.Series(values, dtype=object)
-                if all(value is None or isinstance(value, int) and -(2**63) <= value < 2**63 for value in values):
+                if all(
+                    value is None
+                    or isinstance(value, int)
+                    and -(2**63) <= value < 2**63
+                    for value in values
+                ):
                     frame[column["name"]] = pd.Series(values, dtype="Int64")
             elif column["type"] == "boolean":
+
                 def boolean(value):
                     if pd.isna(value) or value == "":
                         return None
                     if str(value).lower() not in ("true", "false"):
                         raise ValueError("Boolean values must be true or false")
                     return str(value).lower() == "true"
+
                 frame[column["name"]] = frame[column["name"]].map(boolean)
             elif column["type"] == "date":
-                frame[column["name"]] = pd.to_datetime(frame[column["name"]], errors="raise")
+                frame[column["name"]] = pd.to_datetime(
+                    frame[column["name"]], errors="raise"
+                )
         frame.attrs["columns"] = copy.deepcopy(columns)
         return frame
 
@@ -668,15 +960,19 @@ class DatasetService:
         # Disk is authoritative, including after restart or a change by another worker.
         from api.services.excel_dataset_service import excel_dataset_service
         from api.services.schema_service import schema_service
+
         excel_dataset_service.clear_cache()
         schema_service._metadata = None
         from api.services.vector_service import vector_service
+
         vector_service.clear_cache()
         dataset_service._snapshot_cache.clear()
         try:
             from api.routes.dashboard import clear_dashboard_cache
+
             clear_dashboard_cache()
             from api.platform.planning import clear_intent_cache
+
             clear_intent_cache()
         except Exception:
             pass
@@ -685,22 +981,53 @@ class DatasetService:
         catalog = self._catalog()
         if not self.output_dir.exists():
             return
-        pending = [p for p in self.output_dir.iterdir() if p.is_file() and p.suffix.lower() in {".csv", ".xlsx", ".xls"}
-                   and not p.name.startswith("~$") and p.name not in catalog["importedFiles"]]
+        pending = [
+            p
+            for p in self.output_dir.iterdir()
+            if p.is_file()
+            and p.suffix.lower() in {".csv", ".xlsx", ".xls"}
+            and not p.name.startswith("~$")
+            and p.name not in catalog["importedFiles"]
+        ]
         if not pending:
             return
         with self._writer():
             catalog = self._catalog()
             changed = False
             for path in sorted(self.output_dir.iterdir()):
-                if not path.is_file() or path.suffix.lower() not in {".csv", ".xlsx", ".xls"} or path.name.startswith("~$") or path.name in catalog["importedFiles"]:
+                if (
+                    not path.is_file()
+                    or path.suffix.lower() not in {".csv", ".xlsx", ".xls"}
+                    or path.name.startswith("~$")
+                    or path.name in catalog["importedFiles"]
+                ):
                     continue
                 df = self.parse_file(path.read_bytes(), path.name)
                 stem, suffix = self._safe_name(path.name)
-                entry = next((d for d in catalog["datasets"].values() if d["folder"].casefold() == stem.casefold()), None)
+                entry = next(
+                    (
+                        d
+                        for d in catalog["datasets"].values()
+                        if d["folder"].casefold() == stem.casefold()
+                    ),
+                    None,
+                )
                 if entry is None:
-                    entry = {"id": "ds-" + uuid.uuid4().hex, "folder": stem, "name": stem + suffix, "versions": []}
-                    self._save_version(catalog, entry, df, self._rows(df), "import", path.read_bytes(), index=False)
+                    entry = {
+                        "id": "ds-" + uuid.uuid4().hex,
+                        "folder": stem,
+                        "name": stem + suffix,
+                        "versions": [],
+                    }
+                    self._save_version(
+                        catalog,
+                        entry,
+                        df,
+                        self._rows(df),
+                        "import",
+                        path.read_bytes(),
+                        index=False,
+                    )
                 catalog["importedFiles"].append(path.name)
                 changed = True
             if changed:
@@ -719,7 +1046,20 @@ class DatasetService:
             visible.append(self._item(entry, catalog["activeDatasetId"]))
         return visible
 
-    def upload(self, content, filename, async_index=None, transformation_plan=None, ingestion_id=None, target_dataset_id=None, source_id=None, table_name=None, display_name=None, sheet_name=None, prepared_frame=None):
+    def upload(
+        self,
+        content,
+        filename,
+        async_index=None,
+        transformation_plan=None,
+        ingestion_id=None,
+        target_dataset_id=None,
+        source_id=None,
+        table_name=None,
+        display_name=None,
+        sheet_name=None,
+        prepared_frame=None,
+    ):
         if async_index is None:
             async_index = self.default_async_index
         if prepared_frame is not None:
@@ -728,6 +1068,7 @@ class DatasetService:
             df = self.parse_file(content, filename)
         else:
             from api.platform.ingestion import ingestion_service
+
             df, _ = ingestion_service.prepare(content, filename, transformation_plan)
         stem, suffix = self._safe_name(filename)
         if source_id and not target_dataset_id:
@@ -735,20 +1076,25 @@ class DatasetService:
 
         # Derive sheet name if not passed explicitly (checking parsing.sheet contract)
         if not sheet_name and transformation_plan:
-            parsing_opt = getattr(transformation_plan, 'parsing', None)
-            if parsing_opt and getattr(parsing_opt, 'sheet', None):
+            parsing_opt = getattr(transformation_plan, "parsing", None)
+            if parsing_opt and getattr(parsing_opt, "sheet", None):
                 sheet_name = parsing_opt.sheet
-            elif getattr(transformation_plan, 'sheet', None):
+            elif getattr(transformation_plan, "sheet", None):
                 sheet_name = transformation_plan.sheet
 
         # Derive clean table and display identity
-        clean_display_name = display_name or table_name or (f"{stem} - {sheet_name}" if sheet_name else stem + suffix)
+        clean_display_name = (
+            display_name
+            or table_name
+            or (f"{stem} - {sheet_name}" if sheet_name else stem + suffix)
+        )
         folder_name = stem
         if table_name:
             folder_name = self._safe_name(table_name)[0].lower()
         elif sheet_name:
             import re
-            clean_sheet = re.sub(r'[^a-zA-Z0-9_]+', '_', sheet_name).strip('_').lower()
+
+            clean_sheet = re.sub(r"[^a-zA-Z0-9_]+", "_", sheet_name).strip("_").lower()
             folder_name = f"{stem}_{clean_sheet}"
 
         with self._writer():
@@ -756,12 +1102,45 @@ class DatasetService:
             if target_dataset_id:
                 entry = self._entry(catalog, target_dataset_id)
             elif table_name:
-                entry = next((d for d in catalog["datasets"].values() if (d.get("tableName") or d.get("table_name") or "").casefold() == table_name.casefold()), None)
+                entry = next(
+                    (
+                        d
+                        for d in catalog["datasets"].values()
+                        if (d.get("tableName") or d.get("table_name") or "").casefold()
+                        == table_name.casefold()
+                    ),
+                    None,
+                )
             elif sheet_name:
-                entry = next((d for d in catalog["datasets"].values() if (d.get("sourceFilename") or d.get("source_filename") or d.get("sourceFile") or "").casefold() == filename.casefold() and (d.get("sheetName") or d.get("sheet_name") or "").casefold() == sheet_name.casefold()), None)
+                entry = next(
+                    (
+                        d
+                        for d in catalog["datasets"].values()
+                        if (
+                            d.get("sourceFilename")
+                            or d.get("source_filename")
+                            or d.get("sourceFile")
+                            or ""
+                        ).casefold()
+                        == filename.casefold()
+                        and (d.get("sheetName") or d.get("sheet_name") or "").casefold()
+                        == sheet_name.casefold()
+                    ),
+                    None,
+                )
             else:
-                entry = next((d for d in catalog["datasets"].values() if d["folder"].casefold() == folder_name.casefold()
-                              and (not (d.get("tableName") or d.get("table_name")) or d.get("tableManagedByUpload"))), None)
+                entry = next(
+                    (
+                        d
+                        for d in catalog["datasets"].values()
+                        if d["folder"].casefold() == folder_name.casefold()
+                        and (
+                            not (d.get("tableName") or d.get("table_name"))
+                            or d.get("tableManagedByUpload")
+                        )
+                    ),
+                    None,
+                )
 
             if ingestion_id:
                 receipt = self._ingestion_receipt(catalog, ingestion_id)
@@ -784,7 +1163,12 @@ class DatasetService:
                 }
                 identity = current_identity.get()
                 if identity:
-                    entry.update(workspaceId=identity["workspace_id"], ownerId=identity["user_id"], readers=[], writers=[])
+                    entry.update(
+                        workspaceId=identity["workspace_id"],
+                        ownerId=identity["user_id"],
+                        readers=[],
+                        writers=[],
+                    )
             else:
                 require_dataset_access(entry, write=True)
                 if table_name:
@@ -801,9 +1185,23 @@ class DatasetService:
                 entry["sourceFile"] = filename
 
             # Re-upload is a complete replacement snapshot; append has its own endpoint.
-            result = self._save_version(catalog, entry, df, self._rows(df), "upload", content,
-                                        index=not async_index, extension=suffix,
-                                        provenance={"ingestionId": ingestion_id, "sourceId": source_id, "tableName": table_name, "sheet_name": sheet_name, "sourceFilename": filename})
+            result = self._save_version(
+                catalog,
+                entry,
+                df,
+                self._rows(df),
+                "upload",
+                content,
+                index=not async_index,
+                extension=suffix,
+                provenance={
+                    "ingestionId": ingestion_id,
+                    "sourceId": source_id,
+                    "tableName": table_name,
+                    "sheet_name": sheet_name,
+                    "sourceFilename": filename,
+                },
+            )
             dataset_id = entry["id"]
             version = result["version"]
             self._prune_old_versions(catalog, entry)
@@ -813,7 +1211,16 @@ class DatasetService:
 
         return result
 
-    def data(self, dataset_id, page=1, page_size=10, sort_field=None, sort_dir="asc", search="", version=None):
+    def data(
+        self,
+        dataset_id,
+        page=1,
+        page_size=10,
+        sort_field=None,
+        sort_dir="asc",
+        search="",
+        version=None,
+    ):
         catalog = self._catalog()
         entry = self._entry(catalog, dataset_id)
         if version is not None:
@@ -823,11 +1230,23 @@ class DatasetService:
         snap = self._snapshot(entry)
         if snap.get("source_backend") == "hana":
             try:
-                from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                from api.platform.datasets_metadata_repository import (
+                    datasets_metadata_repo,
+                )
                 from api.database.hana_table_service import hana_table_service
-                table_hint = entry.get("physical_table_name") or entry.get("tableName") or entry.get("folder") or entry.get("name")
+
+                table_hint = (
+                    entry.get("physical_table_name")
+                    or entry.get("tableName")
+                    or entry.get("folder")
+                    or entry.get("name")
+                )
                 phys_table = datasets_metadata_repo._resolve_physical_table(table_hint)
-                if sort_field and snap.get("columns") and sort_field not in {c["name"] for c in snap["columns"]}:
+                if (
+                    sort_field
+                    and snap.get("columns")
+                    and sort_field not in {c["name"] for c in snap["columns"]}
+                ):
                     raise HTTPException(400, "Unknown sort column.")
                 paged = hana_table_service.get_table_data(
                     phys_table,
@@ -840,7 +1259,9 @@ class DatasetService:
                 paged_rows = paged.get("rows", [])
                 for idx, r in enumerate(paged_rows):
                     if "__rowId" not in r:
-                        r["__rowId"] = str(r.get("id") or f"row_{(page - 1) * page_size + idx}")
+                        r["__rowId"] = str(
+                            r.get("id") or f"row_{(page - 1) * page_size + idx}"
+                        )
                     if "id" not in r:
                         r["id"] = r["__rowId"]
                 return {
@@ -855,8 +1276,15 @@ class DatasetService:
                 raise
             except Exception:
                 try:
-                    from api.platform.datasets_metadata_repository import datasets_metadata_repo
-                    table_name = entry.get("physical_table_name") or entry.get("folder") or entry.get("name")
+                    from api.platform.datasets_metadata_repository import (
+                        datasets_metadata_repo,
+                    )
+
+                    table_name = (
+                        entry.get("physical_table_name")
+                        or entry.get("folder")
+                        or entry.get("name")
+                    )
                     rows, cols = datasets_metadata_repo.load_rows_from_hana(table_name)
                     if rows:
                         snap["rows"] = rows
@@ -864,37 +1292,78 @@ class DatasetService:
                             snap["columns"] = cols
                 except Exception:
                     pass
-        rows = [dict(r, id=r["__rowId"]) if "id" not in r else dict(r) for r in snap.get("rows", [])]
+        rows = [
+            dict(r, id=r["__rowId"]) if "id" not in r else dict(r)
+            for r in snap.get("rows", [])
+        ]
         if search.strip():
             visible_columns = [c["name"] for c in snap["columns"]]
-            rows = [r for r in rows if any(search.strip().casefold() in str(r.get(c, "")).casefold() for c in visible_columns)]
+            rows = [
+                r
+                for r in rows
+                if any(
+                    search.strip().casefold() in str(r.get(c, "")).casefold()
+                    for c in visible_columns
+                )
+            ]
         if sort_field:
             if sort_field not in {c["name"] for c in snap["columns"]}:
                 raise HTTPException(400, "Unknown sort column.")
-            rows = sorted(rows, key=lambda r: (r.get(sort_field) is None,
-                          0 if isinstance(r.get(sort_field), (int, float)) else 1,
-                          r.get(sort_field) if isinstance(r.get(sort_field), (int, float)) else str(r.get(sort_field, ""))), reverse=sort_dir == "desc")
-        return {"dataset": self._item(entry, catalog["activeDatasetId"]), "rows": rows[(page-1)*page_size:page*page_size],
-                "totalRows": len(rows), "page": page, "pageSize": page_size, "totalPages": max(1, math.ceil(len(rows)/page_size))}
+            rows = sorted(
+                rows,
+                key=lambda r: (
+                    r.get(sort_field) is None,
+                    0 if isinstance(r.get(sort_field), (int, float)) else 1,
+                    r.get(sort_field)
+                    if isinstance(r.get(sort_field), (int, float))
+                    else str(r.get(sort_field, "")),
+                ),
+                reverse=sort_dir == "desc",
+            )
+        return {
+            "dataset": self._item(entry, catalog["activeDatasetId"]),
+            "rows": rows[(page - 1) * page_size : page * page_size],
+            "totalRows": len(rows),
+            "page": page,
+            "pageSize": page_size,
+            "totalPages": max(1, math.ceil(len(rows) / page_size)),
+        }
 
-    def mutate(self, dataset_id, operation, payload, async_index=None, expected_version=None):
+    def mutate(
+        self, dataset_id, operation, payload, async_index=None, expected_version=None
+    ):
         if async_index is None:
             async_index = self.default_async_index
         with self._writer():
             catalog = self._catalog()
             entry = self._entry(catalog, dataset_id)
             require_dataset_access(entry, write=True)
-            if expected_version is not None and entry["currentVersion"] != expected_version:
-                raise HTTPException(409, "The dataset changed after you opened it. Refresh before saving edits.")
+            if (
+                expected_version is not None
+                and entry["currentVersion"] != expected_version
+            ):
+                raise HTTPException(
+                    409,
+                    "The dataset changed after you opened it. Refresh before saving edits.",
+                )
             snap = self._snapshot(entry)
             rows, columns = copy.deepcopy(snap["rows"]), copy.deepcopy(snap["columns"])
 
             # Ensure rows and columns are loaded from physical HANA table if not present in snap
             if not rows:
                 try:
-                    from api.platform.datasets_metadata_repository import datasets_metadata_repo
-                    table_name = entry.get("physical_table_name") or entry.get("folder") or entry.get("name")
-                    hana_rows, hana_cols = datasets_metadata_repo.load_rows_from_hana(table_name)
+                    from api.platform.datasets_metadata_repository import (
+                        datasets_metadata_repo,
+                    )
+
+                    table_name = (
+                        entry.get("physical_table_name")
+                        or entry.get("folder")
+                        or entry.get("name")
+                    )
+                    hana_rows, hana_cols = datasets_metadata_repo.load_rows_from_hana(
+                        table_name
+                    )
                     if hana_rows:
                         rows = copy.deepcopy(hana_rows)
                         if hana_cols and not columns:
@@ -903,17 +1372,32 @@ class DatasetService:
                     pass
 
             names = {c["name"] for c in columns}
-            col_names = [c["name"] for c in columns if isinstance(c, dict) and c.get("name")]
-            pk_col = next((c for c in col_names if c.lower() in ("id", "row_id", "__rowid")), None)
+            col_names = [
+                c["name"] for c in columns if isinstance(c, dict) and c.get("name")
+            ]
+            pk_col = next(
+                (c for c in col_names if c.lower() in ("id", "row_id", "__rowid")), None
+            )
             if not pk_col:
-                pk_col = next((c for c in col_names if c.lower().endswith(("_id", "id", "_key", "_code"))), None)
+                pk_col = next(
+                    (
+                        c
+                        for c in col_names
+                        if c.lower().endswith(("_id", "id", "_key", "_code"))
+                    ),
+                    None,
+                )
             if not pk_col and col_names:
                 pk_col = col_names[0]
 
             def _pk_val(row_obj):
                 if not pk_col:
                     return None
-                return row_obj.get(pk_col) if row_obj.get(pk_col) is not None else row_obj.get(pk_col.upper())
+                return (
+                    row_obj.get(pk_col)
+                    if row_obj.get(pk_col) is not None
+                    else row_obj.get(pk_col.upper())
+                )
 
             if operation == "append":
                 if not payload:
@@ -922,8 +1406,16 @@ class DatasetService:
                     unknown = set(incoming) - names - {"id", "__rowId"}
                     missing = names - set(incoming)
                     if unknown or missing:
-                        raise HTTPException(400, f"Schema mismatch. Missing: {sorted(missing)}; extra: {sorted(unknown)}")
-                    rows.append({**{k: incoming.get(k) for k in names}, "__rowId": uuid.uuid4().hex})
+                        raise HTTPException(
+                            400,
+                            f"Schema mismatch. Missing: {sorted(missing)}; extra: {sorted(unknown)}",
+                        )
+                    rows.append(
+                        {
+                            **{k: incoming.get(k) for k in names},
+                            "__rowId": uuid.uuid4().hex,
+                        }
+                    )
             else:
                 lookup = {}
                 for r in rows:
@@ -938,12 +1430,18 @@ class DatasetService:
                 ids = []
                 for r in payload:
                     if operation == "edit":
-                        found_id = str(r.get("__rowId") or r.get("id") or _pk_val(r) or "")
+                        found_id = str(
+                            r.get("__rowId") or r.get("id") or _pk_val(r) or ""
+                        )
                         ids.append(found_id)
                     else:
                         ids.append(str(r))
 
-                if not ids or len(set(ids)) != len(ids) or any(i not in lookup for i in ids):
+                if (
+                    not ids
+                    or len(set(ids)) != len(ids)
+                    or any(i not in lookup for i in ids)
+                ):
                     raise HTTPException(400, "Select valid, unique row IDs.")
                 if operation == "edit":
                     for incoming, row_id in zip(payload, ids):
@@ -951,11 +1449,14 @@ class DatasetService:
                             raise HTTPException(400, "Unknown dataset column.")
                         target_row = lookup.get(row_id)
                         if target_row is not None:
-                            target_row.update({k: v for k, v in incoming.items() if k in names})
+                            target_row.update(
+                                {k: v for k, v in incoming.items() if k in names}
+                            )
                 elif operation == "delete_rows":
                     ids_set = set(ids)
                     rows = [
-                        r for r in rows
+                        r
+                        for r in rows
                         if str(r.get("__rowId")) not in ids_set
                         and str(r.get("id")) not in ids_set
                         and str(_pk_val(r)) not in ids_set
@@ -963,52 +1464,102 @@ class DatasetService:
 
             # ── 1. Direct Physical SAP HANA Cloud Table Update ──
             try:
-                from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                from api.platform.datasets_metadata_repository import (
+                    datasets_metadata_repo,
+                )
                 from api.database.hana_client import hana_client
-                phys_table = datasets_metadata_repo._resolve_physical_table(entry.get("physical_table_name") or entry.get("folder") or entry.get("name"))
+
+                phys_table = datasets_metadata_repo._resolve_physical_table(
+                    entry.get("physical_table_name")
+                    or entry.get("folder")
+                    or entry.get("name")
+                )
                 if phys_table and hana_client:
                     if operation == "edit" and pk_col:
                         for row_edit in payload:
-                            target_pk = row_edit.get(pk_col) or row_edit.get(pk_col.upper()) or row_edit.get("__rowId") or row_edit.get("id")
+                            target_pk = (
+                                row_edit.get(pk_col)
+                                or row_edit.get(pk_col.upper())
+                                or row_edit.get("__rowId")
+                                or row_edit.get("id")
+                            )
                             if target_pk is not None:
-                                update_fields = [k for k in row_edit.keys() if k in names and k.upper() != pk_col.upper() and k != "__rowId" and k != "id"]
+                                update_fields = [
+                                    k
+                                    for k in row_edit.keys()
+                                    if k in names
+                                    and k.upper() != pk_col.upper()
+                                    and k != "__rowId"
+                                    and k != "id"
+                                ]
                                 if update_fields:
-                                    set_clause = ", ".join([f'"{f.upper()}" = ?' for f in update_fields])
+                                    set_clause = ", ".join(
+                                        [f'"{f.upper()}" = ?' for f in update_fields]
+                                    )
                                     sql = f'UPDATE "{phys_table}" SET {set_clause} WHERE "{pk_col.upper()}" = ?'
-                                    params = tuple(row_edit[f] for f in update_fields) + (str(target_pk),)
+                                    params = tuple(
+                                        row_edit[f] for f in update_fields
+                                    ) + (str(target_pk),)
                                     hana_client.execute_query(sql, params)
-                                    logger.info(f"Updated record {target_pk} directly in HANA table {phys_table}")
+                                    logger.info(
+                                        f"Updated record {target_pk} directly in HANA table {phys_table}"
+                                    )
                     elif operation == "delete_rows" and pk_col:
                         for row_id in ids:
                             sql = f'DELETE FROM "{phys_table}" WHERE "{pk_col.upper()}" = ?'
                             hana_client.execute_query(sql, (str(row_id),))
                     elif operation == "append":
                         for row_add in payload:
-                            insert_cols = [k for k in row_add.keys() if k in names and k != "__rowId" and k != "id"]
+                            insert_cols = [
+                                k
+                                for k in row_add.keys()
+                                if k in names and k != "__rowId" and k != "id"
+                            ]
                             if insert_cols:
-                                col_str = ", ".join([f'"{c.upper()}"' for c in insert_cols])
+                                col_str = ", ".join(
+                                    [f'"{c.upper()}"' for c in insert_cols]
+                                )
                                 q_str = ", ".join(["?" for _ in insert_cols])
                                 sql = f'INSERT INTO "{phys_table}" ({col_str}) VALUES ({q_str})'
-                                hana_client.execute_query(sql, tuple(row_add[c] for c in insert_cols))
+                                hana_client.execute_query(
+                                    sql, tuple(row_add[c] for c in insert_cols)
+                                )
             except Exception as ex:
-                logger.warning(f"Direct HANA physical table sync encountered error: {ex}")
+                logger.warning(
+                    f"Direct HANA physical table sync encountered error: {ex}"
+                )
 
             # ── 2. Direct Incremental VECTOR_TABLE Update (No 20k vector clone!) ──
             if operation == "edit":
                 try:
                     from api.database.vector_client import vector_client
                     from api.services.ai_core_service import ai_core_service
+
                     for row_edit in payload:
-                        target_pk = str(row_edit.get("__rowId") or row_edit.get("id") or _pk_val(row_edit) or "")
+                        target_pk = str(
+                            row_edit.get("__rowId")
+                            or row_edit.get("id")
+                            or _pk_val(row_edit)
+                            or ""
+                        )
                         full_row = lookup.get(target_pk) or row_edit
-                        chunk_text = self._format_row_chunk(full_row, [c["name"] for c in columns], entry["name"])
+                        chunk_text = self._format_row_chunk(
+                            full_row, [c["name"] for c in columns], entry["name"]
+                        )
                         emb = ai_core_service.generate_embedding(chunk_text)
-                        vector_client.update_row_vector(dataset_id, target_pk, chunk_text, emb, {"source": entry["name"], "dataset_id": dataset_id})
+                        vector_client.update_row_vector(
+                            dataset_id,
+                            target_pk,
+                            chunk_text,
+                            emb,
+                            {"source": entry["name"], "dataset_id": dataset_id},
+                        )
                 except Exception as ex:
                     logger.warning(f"Incremental vector update encountered error: {ex}")
             elif operation == "delete_rows":
                 try:
                     from api.database.vector_client import vector_client
+
                     for row_id in ids:
                         vector_client.delete_row_vector(dataset_id, str(row_id))
                 except Exception as ex:
@@ -1017,34 +1568,72 @@ class DatasetService:
             try:
                 df = self._frame(rows, columns)
             except (ValueError, TypeError):
-                raise HTTPException(400, "Values do not match the dataset field types. Review the edited rows.") from None
+                raise HTTPException(
+                    400,
+                    "Values do not match the dataset field types. Review the edited rows.",
+                ) from None
             # Normalize numeric types while keeping stable row IDs.
             normalized = self._rows(df)
             for row, previous in zip(normalized, rows):
                 row["__rowId"] = previous["__rowId"]
-            result = self._save_version(catalog, entry, df, normalized, operation, index=False if operation == "edit" else not async_index)
-            result.update(rowsUpdated=len(payload) if operation == "edit" else 0, rowsAppended=len(payload) if operation == "append" else 0,
-                          totalRows=len(rows), remainingRows=len(rows))
+            result = self._save_version(
+                catalog,
+                entry,
+                df,
+                normalized,
+                operation,
+                index=False if operation == "edit" else not async_index,
+            )
+            result.update(
+                rowsUpdated=len(payload) if operation == "edit" else 0,
+                rowsAppended=len(payload) if operation == "append" else 0,
+                totalRows=len(rows),
+                remainingRows=len(rows),
+            )
             self._prune_old_versions(catalog, entry)
             version = result["version"]
 
             # ── 3. Carry Forward Semantic Model to New Version ──
             try:
                 from api.platform.semantic import semantic_registry
+
                 prev_models = semantic_registry.list(entry, entry["currentVersion"])
                 if not prev_models and entry["versions"]:
                     for prev_v_info in reversed(entry["versions"]):
                         if prev_v_info["version"] != version:
-                            prev_models = semantic_registry.list(entry, prev_v_info["version"])
+                            prev_models = semantic_registry.list(
+                                entry, prev_v_info["version"]
+                            )
                             if prev_models:
                                 break
                 if prev_models:
-                    latest_model = sorted(prev_models, key=lambda m: m.get("revision", 1) if isinstance(m, dict) else getattr(m, "revision", 1))[-1]
-                    overrides_dict = latest_model if isinstance(latest_model, dict) else latest_model.model_dump()
-                    carried = semantic_registry.propose(entry, version, snap, overrides=overrides_dict)
-                    if carried.status != "approved" and os.getenv("PLATFORM_AUTO_APPROVE_SEMANTICS", "true").lower() == "true":
-                        semantic_registry.review(entry, version, carried.revision, "approved")
-                    logger.info(f"Carried forward and directly approved semantic model for version {version}")
+                    latest_model = sorted(
+                        prev_models,
+                        key=lambda m: (
+                            m.get("revision", 1)
+                            if isinstance(m, dict)
+                            else getattr(m, "revision", 1)
+                        ),
+                    )[-1]
+                    overrides_dict = (
+                        latest_model
+                        if isinstance(latest_model, dict)
+                        else latest_model.model_dump()
+                    )
+                    carried = semantic_registry.propose(
+                        entry, version, snap, overrides=overrides_dict
+                    )
+                    if (
+                        carried.status != "approved"
+                        and os.getenv("PLATFORM_AUTO_APPROVE_SEMANTICS", "true").lower()
+                        == "true"
+                    ):
+                        semantic_registry.review(
+                            entry, version, carried.revision, "approved"
+                        )
+                    logger.info(
+                        f"Carried forward and directly approved semantic model for version {version}"
+                    )
             except Exception as exc:
                 logger.warning(f"Could not carry forward semantic model: {exc}")
 
@@ -1059,20 +1648,43 @@ class DatasetService:
             entry = self._entry(catalog, dataset_id)
             require_dataset_access(entry, write=True)
             self._snapshot(entry, version)  # Validate before publishing the pointer.
-            entry.setdefault("audit", []).append({"action": "rollback", "fromVersion": entry["currentVersion"], "toVersion": version,
-                                                  "userId": (current_identity.get() or {}).get("user_id"), "timestamp": datetime.now(timezone.utc).isoformat()})
-            entry.update(currentVersion=version, updatedAt=datetime.now(timezone.utc).isoformat())
-            entry["ingestionStatus"] = next((v.get("ingestionStatus") for v in entry["versions"] if v["version"] == version), None)
+            entry.setdefault("audit", []).append(
+                {
+                    "action": "rollback",
+                    "fromVersion": entry["currentVersion"],
+                    "toVersion": version,
+                    "userId": (current_identity.get() or {}).get("user_id"),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            entry.update(
+                currentVersion=version, updatedAt=datetime.now(timezone.utc).isoformat()
+            )
+            entry["ingestionStatus"] = next(
+                (
+                    v.get("ingestionStatus")
+                    for v in entry["versions"]
+                    if v["version"] == version
+                ),
+                None,
+            )
             catalog["activeDatasetId"] = dataset_id
             self._write_json(self.catalog_path, catalog)
             self._invalidate()
-            return {"success": True, "message": f"Restored version {version}. Analytics and chat now use this version.",
-                    "dataset": self._item(entry, dataset_id)}
+            return {
+                "success": True,
+                "message": f"Restored version {version}. Analytics and chat now use this version.",
+                "dataset": self._item(entry, dataset_id),
+            }
 
     def activate(self, dataset_id):
         catalog = self._catalog()
         entry = self._entry(catalog, dataset_id)
-        return {"success": True, "message": "Use the returned dataset version in your request context.", "dataset": self._item(entry, dataset_id)}
+        return {
+            "success": True,
+            "message": "Use the returned dataset version in your request context.",
+            "dataset": self._item(entry, dataset_id),
+        }
 
     def reindex(self, dataset_id):
         with self._writer():
@@ -1085,7 +1697,10 @@ class DatasetService:
             rows = snap.get("rows")
             if not rows:
                 try:
-                    from api.platform.datasets_metadata_repository import datasets_metadata_repo
+                    from api.platform.datasets_metadata_repository import (
+                        datasets_metadata_repo,
+                    )
+
                     hint = entry.get("physical_table_name") or entry.get("name")
                     hana_rows, _ = datasets_metadata_repo.load_rows_from_hana(hint)
                     if hana_rows:
@@ -1094,49 +1709,88 @@ class DatasetService:
                 except Exception:
                     pass
                 if not rows:
-                    version = next((v for v in entry["versions"] if v["version"] == entry["currentVersion"]), None)
+                    version = next(
+                        (
+                            v
+                            for v in entry["versions"]
+                            if v["version"] == entry["currentVersion"]
+                        ),
+                        None,
+                    )
                     if version:
-                        file_path = self.output_dir / entry["folder"] / version["filename"]
+                        file_path = (
+                            self.output_dir / entry["folder"] / version["filename"]
+                        )
                         if file_path.exists():
                             try:
-                                df = self.parse_file(file_path.read_bytes(), file_path.name)
+                                df = self.parse_file(
+                                    file_path.read_bytes(), file_path.name
+                                )
                                 rows = self._rows(df)
                                 snap["rows"] = rows
                             except Exception:
                                 pass
 
             if rows and snap.get("columns"):
+
                 class ColumnsProxy:
                     columns = [c["name"] for c in snap["columns"]]
+
                 snap["chunks"] = self._chunks(ColumnsProxy(), entry["name"], rows)
 
             from api.services.ai_core_service import EmbeddingProviderError
+
             try:
                 vectors, status = self._index(snap["chunks"], raise_on_error=True)
             except EmbeddingProviderError as exc:
                 raise HTTPException(503, f"{exc} Dataset is still saved.") from exc
             except Exception as exc:
-                raise HTTPException(503, "Embedding service unavailable. Dataset is still saved; please retry.") from exc
+                raise HTTPException(
+                    503,
+                    "Embedding service unavailable. Dataset is still saved; please retry.",
+                ) from exc
             if status != "Ready":
-                raise HTTPException(503, "Embedding service unavailable. Dataset is still saved; please retry.")
-            snap.update(embeddings=vectors, embeddingCount=len(vectors), embeddingStatus=status)
+                raise HTTPException(
+                    503,
+                    "Embedding service unavailable. Dataset is still saved; please retry.",
+                )
+            snap.update(
+                embeddings=vectors, embeddingCount=len(vectors), embeddingStatus=status
+            )
             snap["embeddingConfiguration"] = self._embedding_configuration()
-            snap["hanaSyncStatus"] = self._sync_hana(entry, entry["currentVersion"], snap["chunks"], vectors)
+            snap["hanaSyncStatus"] = self._sync_hana(
+                entry, entry["currentVersion"], snap["chunks"], vectors
+            )
             if self.repository is not None:
-                version = next(v for v in entry["versions"] if v["version"] == entry["currentVersion"])
+                version = next(
+                    v
+                    for v in entry["versions"]
+                    if v["version"] == entry["currentVersion"]
+                )
                 version["snapshotKey"] = self.repository.save_snapshot(snap)
                 version["embeddingStatus"] = status
                 version["embeddingCount"] = len(vectors)
                 version["hanaSyncStatus"] = snap["hanaSyncStatus"]
                 self._write_json(self.catalog_path, catalog)
             else:
-                self._write_json(self.output_dir / entry["folder"] / f".version_{entry['currentVersion']}.json", snap)
-                self._write_version_meta(self.output_dir / entry["folder"], entry["currentVersion"], snap)
+                self._write_json(
+                    self.output_dir
+                    / entry["folder"]
+                    / f".version_{entry['currentVersion']}.json",
+                    snap,
+                )
+                self._write_version_meta(
+                    self.output_dir / entry["folder"], entry["currentVersion"], snap
+                )
             self._invalidate()
             message = f"Current version embeddings refreshed ({len(vectors)} vectors)."
             if snap["hanaSyncStatus"] == "Error":
                 message += " HANA sync unavailable; chat uses saved version embeddings."
-            return {"success": True, "message": message, "dataset": self._item(entry, catalog["activeDatasetId"])}
+            return {
+                "success": True,
+                "message": message,
+                "dataset": self._item(entry, catalog["activeDatasetId"]),
+            }
 
     def delete(self, dataset_id):
         catalog = self._catalog()
@@ -1150,7 +1804,14 @@ class DatasetService:
         # 1. Cascade Purge: SAP HANA Cloud Physical Column Table
         dropped_tables = []
         candidate_tables = set()
-        for key in ["tableName", "table_name", "physical_table_name", "displayName", "display_name", "name"]:
+        for key in [
+            "tableName",
+            "table_name",
+            "physical_table_name",
+            "displayName",
+            "display_name",
+            "name",
+        ]:
             val = entry.get(key)
             if val and isinstance(val, str):
                 candidate_tables.add(val)
@@ -1163,52 +1824,84 @@ class DatasetService:
             if folder_name:
                 candidate_tables.add(f"DS_{folder_name[:18].upper()}_V{v_num}")
         if folder_name:
-            candidate_tables.add(f"DS_{folder_name[:18].upper()}_V{entry.get('currentVersion', 1)}")
+            candidate_tables.add(
+                f"DS_{folder_name[:18].upper()}_V{entry.get('currentVersion', 1)}"
+            )
             candidate_tables.add(f"DS_{folder_name[:18].upper()}")
             candidate_tables.add(folder_name.upper())
 
         try:
             from api.database.hana_table_service import hana_table_service
+
             for tbl in candidate_tables:
                 # Do not drop protected system tables
-                if tbl.upper() in {"DATASETS_METADATA", "PLATFORM_METADATA", "PLATFORM_DOCUMENTS", "VECTOR_TABLE", "CHAT_MESSAGES", "CHAT_SESSIONS"}:
+                if tbl.upper() in {
+                    "DATASETS_METADATA",
+                    "PLATFORM_METADATA",
+                    "PLATFORM_DOCUMENTS",
+                    "VECTOR_TABLE",
+                    "CHAT_MESSAGES",
+                    "CHAT_SESSIONS",
+                }:
                     continue
                 if hana_table_service.table_exists(tbl):
                     res = hana_table_service.drop_table(tbl)
                     if res.get("dropped"):
                         dropped_tables.append(tbl)
-                        logger.info(f"Dropped physical HANA table '{tbl}' for dataset {dataset_id}")
+                        logger.info(
+                            f"Dropped physical HANA table '{tbl}' for dataset {dataset_id}"
+                        )
         except Exception as e:
-            logger.warning(f"Error dropping physical table for dataset {dataset_id}: {e}")
+            logger.warning(
+                f"Error dropping physical table for dataset {dataset_id}: {e}"
+            )
 
         # 2. Cascade Purge: PLATFORM_METADATA / PLATFORM_DOCUMENTS (semantics, reviews, analytics items, dashboard widgets)
         purged_metadata_count = 0
         try:
             from api.platform.semantic import semantic_registry
-            if hasattr(semantic_registry, "store") and hasattr(semantic_registry.store, "delete_dataset_metadata"):
-                purged_metadata_count = semantic_registry.store.delete_dataset_metadata(workspace_id, dataset_id)
+
+            if hasattr(semantic_registry, "store") and hasattr(
+                semantic_registry.store, "delete_dataset_metadata"
+            ):
+                purged_metadata_count = semantic_registry.store.delete_dataset_metadata(
+                    workspace_id, dataset_id
+                )
             else:
                 from api.platform.store import metadata_store
-                purged_metadata_count = metadata_store().delete_dataset_metadata(workspace_id, dataset_id)
-            logger.info(f"Purged {purged_metadata_count} PLATFORM_METADATA records for dataset {dataset_id}")
+
+                purged_metadata_count = metadata_store().delete_dataset_metadata(
+                    workspace_id, dataset_id
+                )
+            logger.info(
+                f"Purged {purged_metadata_count} PLATFORM_METADATA records for dataset {dataset_id}"
+            )
         except Exception as e:
-            logger.warning(f"Error purging PLATFORM_METADATA for dataset {dataset_id}: {e}")
+            logger.warning(
+                f"Error purging PLATFORM_METADATA for dataset {dataset_id}: {e}"
+            )
 
         # 3. Cascade Purge: DATASETS_METADATA table in SAP HANA Cloud
         metadata_deleted = False
         try:
             from api.platform.datasets_metadata_repository import datasets_metadata_repo
+
             metadata_deleted = bool(datasets_metadata_repo.delete_dataset(dataset_id))
         except Exception as e:
-            logger.warning(f"Error deleting from DATASETS_METADATA for dataset {dataset_id}: {e}")
+            logger.warning(
+                f"Error deleting from DATASETS_METADATA for dataset {dataset_id}: {e}"
+            )
 
         # 4. Cascade Purge: VECTOR_TABLE in SAP HANA Cloud
         vectors_deleted = False
         try:
             from api.database.vector_client import vector_client
+
             vectors_deleted = vector_client.delete_dataset(dataset_id) is not False
         except Exception as e:
-            logger.warning(f"Error deleting from VECTOR_TABLE for dataset {dataset_id}: {e}")
+            logger.warning(
+                f"Error deleting from VECTOR_TABLE for dataset {dataset_id}: {e}"
+            )
 
         # 5. Cascade Purge: Local Storage & Caches
         # Purge local filesystem folder (raw CSV/XLSX and .version_*.json files)
@@ -1230,11 +1923,13 @@ class DatasetService:
         # Clear semantic registry and dashboard caches
         try:
             from api.platform.semantic import semantic_registry
+
             semantic_registry._clear_cache()
         except Exception:
             pass
         try:
             from api.routes.dashboard import clear_dashboard_cache
+
             clear_dashboard_cache()
         except Exception:
             pass
@@ -1262,7 +1957,7 @@ class DatasetService:
                 "vector_table_purged": vectors_deleted,
                 "vector_rows_deleted": vectors_deleted,
                 "local_files_removed": True,
-            }
+            },
         }
 
     def active(self):
@@ -1277,13 +1972,19 @@ class DatasetService:
         selection = current_selection.get()
         if selection is not None:
             entry = selection.entry
-            version = next(v for v in entry["versions"] if v["version"] == selection.context.version)
+            version = next(
+                v
+                for v in entry["versions"]
+                if v["version"] == selection.context.version
+            )
             return self.output_dir / entry["folder"] / version["filename"]
         catalog = self._catalog()
         entry = catalog["datasets"].get(catalog["activeDatasetId"])
         if not entry:
             return None
-        version = next(v for v in entry["versions"] if v["version"] == entry["currentVersion"])
+        version = next(
+            v for v in entry["versions"] if v["version"] == entry["currentVersion"]
+        )
         return self.output_dir / entry["folder"] / version["filename"]
 
     def search(self, query, top_k, dataset_id=None):
@@ -1292,7 +1993,11 @@ class DatasetService:
         """
         entry = None
         try:
-            if dataset_id and str(dataset_id).strip().lower() not in ("all", "*", "default"):
+            if dataset_id and str(dataset_id).strip().lower() not in (
+                "all",
+                "*",
+                "default",
+            ):
                 catalog = self._catalog()
                 entry = self._entry(catalog, dataset_id, for_chat=True)
             else:
@@ -1304,21 +2009,35 @@ class DatasetService:
 
         # Only restrict to a single dataset when explicitly passed a non-global dataset_id
         scoped_id = None
-        if dataset_id and str(dataset_id).strip().lower() not in ("all", "*", "default"):
+        if dataset_id and str(dataset_id).strip().lower() not in (
+            "all",
+            "*",
+            "default",
+        ):
             scoped_id = dataset_id
 
         selection = current_selection.get()
-        version = selection.context.version if selection and entry and selection.context.dataset_id == entry["id"] else (entry["currentVersion"] if entry else 1)
+        version = (
+            selection.context.version
+            if selection and entry and selection.context.dataset_id == entry["id"]
+            else (entry["currentVersion"] if entry else 1)
+        )
 
         from api.services.embedding_service import embedding_service
         from api.database.vector_client import vector_client
+
         try:
             vector = embedding_service.get_embedding(query)
         except Exception as exc:
-            logger.warning('Query embedding unavailable (%s); trying identifier retrieval from VECTOR_TABLE.', type(exc).__name__)
+            logger.warning(
+                "Query embedding unavailable (%s); trying identifier retrieval from VECTOR_TABLE.",
+                type(exc).__name__,
+            )
             vector = None
         try:
-            results = vector_client.search_dataset_version(scoped_id, version, vector, top_k, text_query=query)
+            results = vector_client.search_dataset_version(
+                scoped_id, version, vector, top_k, text_query=query
+            )
             if results:
                 return results
         except Exception as exc:
@@ -1327,7 +2046,11 @@ class DatasetService:
         # Fallback to local snapshot only if HANA Vector Engine is unreachable
         try:
             catalog = self._catalog()
-            all_entries = [entry] if (scoped_id and entry) else list(catalog.get("datasets", {}).values())
+            all_entries = (
+                [entry]
+                if (scoped_id and entry)
+                else list(catalog.get("datasets", {}).values())
+            )
             all_chunks = []
             for e in all_entries:
                 if not e:
@@ -1336,13 +2059,19 @@ class DatasetService:
                     require_dataset_access(e, for_chat=True)
                 except HTTPException:
                     continue
-                v = selection.context.version if selection and selection.context.dataset_id == e["id"] else e.get("currentVersion", 1)
+                v = (
+                    selection.context.version
+                    if selection and selection.context.dataset_id == e["id"]
+                    else e.get("currentVersion", 1)
+                )
                 snap = self._snapshot(e, v)
                 for chunk in snap.get("chunks", []):
                     all_chunks.append((e, v, chunk))
+
             def terms(value):
-                value = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', value)
-                return set(re.findall(r'[^\W_]+', value.casefold()))
+                value = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value)
+                return set(re.findall(r"[^\W_]+", value.casefold()))
+
             words = terms(query)
             scored = []
             for idx, (e, v, chunk) in enumerate(all_chunks):
@@ -1355,17 +2084,37 @@ class DatasetService:
                     "TEXT_CHUNK": chunk,
                     "SCORE": None,
                     "LEXICAL_SCORE": score / max(len(words), 1),
-                    "METADATA": json.dumps({"source": e.get("name", "Unknown"), "dataset_id": e.get("id"),
-                                             "version": v, "retrieval": "snapshot_lexical", "score_type": "lexical",
-                                             "lexical_score": score / max(len(words), 1), "source_table": None})
+                    "METADATA": json.dumps(
+                        {
+                            "source": e.get("name", "Unknown"),
+                            "dataset_id": e.get("id"),
+                            "version": v,
+                            "retrieval": "snapshot_lexical",
+                            "score_type": "lexical",
+                            "lexical_score": score / max(len(words), 1),
+                            "source_table": None,
+                        }
+                    ),
                 }
-                for score, e, v, chunk, idx in scored[:top_k] if score > 0
+                for score, e, v, chunk, idx in scored[:top_k]
+                if score > 0
             ]
         except Exception:
             pass
         return []
 
-    def _save_durable_version(self, catalog, entry, df, rows, operation, original, index, extension, provenance):
+    def _save_durable_version(
+        self,
+        catalog,
+        entry,
+        df,
+        rows,
+        operation,
+        original,
+        index,
+        extension,
+        provenance,
+    ):
         number = max([v["version"] for v in entry["versions"]] + [0]) + 1
         suffix = self._version_suffix(entry, extension)
         if suffix == ".xls" and original is None:
@@ -1386,38 +2135,80 @@ class DatasetService:
 
         def _index_and_sync():
             vecs, st = self._index(chunks, previous) if index else ([], "Pending")
-            h_status = self._sync_hana(entry, number, chunks, vecs) if index else "Pending"
+            h_status = (
+                self._sync_hana(entry, number, chunks, vecs) if index else "Pending"
+            )
             return vecs, st, h_status
 
         ctx_index = contextvars.copy_context()
         ctx_raw = contextvars.copy_context()
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="durable-save") as pool:
+        with ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="durable-save"
+        ) as pool:
             index_future = pool.submit(ctx_index.run, _index_and_sync)
             raw_future = pool.submit(ctx_raw.run, self.repository.objects.put, raw)
             vectors, status, hana_status = index_future.result()
             raw_key = raw_future.result()
 
         prov = provenance or {}
-        active_tbl = prov.get("tableName") or entry.get("tableName") or entry.get("table_name")
-        sheet_nm = prov.get("sheet_name") or entry.get("sheetName") or entry.get("sheet_name")
-        src_file = prov.get("sourceFilename") or entry.get("sourceFilename") or entry.get("sourceFile") or entry.get("name")
-        snapshot = dict(rows=rows, columns=self._columns(df), chunks=chunks, embeddings=vectors,
-                        embeddingCount=len(vectors), embeddingStatus=status, hanaSyncStatus=hana_status,
-                        embeddingConfiguration=self._embedding_configuration(), dataProfile=df.attrs.get("data_profile"),
-                        transformationPlan=df.attrs.get("transformation_plan"),
-                        active_table=active_tbl, tableName=active_tbl, sheet_name=sheet_nm, sourceFilename=src_file)
+        active_tbl = (
+            prov.get("tableName") or entry.get("tableName") or entry.get("table_name")
+        )
+        sheet_nm = (
+            prov.get("sheet_name") or entry.get("sheetName") or entry.get("sheet_name")
+        )
+        src_file = (
+            prov.get("sourceFilename")
+            or entry.get("sourceFilename")
+            or entry.get("sourceFile")
+            or entry.get("name")
+        )
+        snapshot = dict(
+            rows=rows,
+            columns=self._columns(df),
+            chunks=chunks,
+            embeddings=vectors,
+            embeddingCount=len(vectors),
+            embeddingStatus=status,
+            hanaSyncStatus=hana_status,
+            embeddingConfiguration=self._embedding_configuration(),
+            dataProfile=df.attrs.get("data_profile"),
+            transformationPlan=df.attrs.get("transformation_plan"),
+            active_table=active_tbl,
+            tableName=active_tbl,
+            sheet_name=sheet_nm,
+            sourceFilename=src_file,
+        )
         reference = self.repository.save_snapshot(snapshot)
         now = datetime.now(timezone.utc).isoformat()
-        entry["versions"].append(dict(version=number, filename=filename, createdAt=now, operation=operation,
-                                      rowCount=len(rows), snapshotKey=reference, rawKey=raw_key, sizeBytes=len(raw),
-                                      columns=snapshot["columns"], embeddingStatus=status,
-                                      embeddingCount=len(vectors), hanaSyncStatus=hana_status, **(provenance or {})))
+        entry["versions"].append(
+            dict(
+                version=number,
+                filename=filename,
+                createdAt=now,
+                operation=operation,
+                rowCount=len(rows),
+                snapshotKey=reference,
+                rawKey=raw_key,
+                sizeBytes=len(raw),
+                columns=snapshot["columns"],
+                embeddingStatus=status,
+                embeddingCount=len(vectors),
+                hanaSyncStatus=hana_status,
+                **(provenance or {}),
+            )
+        )
         entry.update(currentVersion=number, updatedAt=now)
         catalog["datasets"][entry["id"]] = entry
         catalog["activeDatasetId"] = entry["id"]
         self._write_json(self.catalog_path, catalog)
-        return {"success": True, "message": f"Saved immutable data version {number}. Vector status: {status}.",
-                "dataset": self._item(entry, entry["id"]), "version": number, "embeddings_generated": len(vectors)}
+        return {
+            "success": True,
+            "message": f"Saved immutable data version {number}. Vector status: {status}.",
+            "dataset": self._item(entry, entry["id"]),
+            "version": number,
+            "embeddings_generated": len(vectors),
+        }
 
     def _index_durable_version(self, dataset_id, number):
         catalog = self._catalog()
@@ -1425,11 +2216,20 @@ class DatasetService:
         if entry is None or not any(v["version"] == number for v in entry["versions"]):
             return
         snapshot = self._snapshot(entry, number)
-        previous_versions = [v["version"] for v in entry["versions"] if v["version"] < number]
-        previous = self._snapshot(entry, max(previous_versions)) if previous_versions else None
+        previous_versions = [
+            v["version"] for v in entry["versions"] if v["version"] < number
+        ]
+        previous = (
+            self._snapshot(entry, max(previous_versions)) if previous_versions else None
+        )
         vectors, status = self._index(snapshot["chunks"], previous)
         hana_status = self._sync_hana(entry, number, snapshot["chunks"], vectors)
-        snapshot.update(embeddings=vectors, embeddingCount=len(vectors), embeddingStatus=status, hanaSyncStatus=hana_status)
+        snapshot.update(
+            embeddings=vectors,
+            embeddingCount=len(vectors),
+            embeddingStatus=status,
+            hanaSyncStatus=hana_status,
+        )
         snapshot["embeddingConfiguration"] = self._embedding_configuration()
         reference = self.repository.save_snapshot(snapshot)
         with self._writer():
@@ -1437,7 +2237,9 @@ class DatasetService:
             current = catalog["datasets"].get(dataset_id)
             if current is None:
                 return
-            version = next((v for v in current["versions"] if v["version"] == number), None)
+            version = next(
+                (v for v in current["versions"] if v["version"] == number), None
+            )
             if version is not None:
                 version["snapshotKey"] = reference
                 version["embeddingStatus"] = status
@@ -1452,14 +2254,37 @@ class DatasetService:
                     require_dataset_access(entry, write=True)
                     pinned = copy.deepcopy(entry)
                     pinned["currentVersion"] = version["version"]
-                    return {"success": True, "message": "Previously committed ingestion reused.", "dataset": self._item(pinned),
-                            "version": version["version"], "embeddings_generated": self._snapshot(pinned).get("embeddingCount", 0)}
+                    return {
+                        "success": True,
+                        "message": "Previously committed ingestion reused.",
+                        "dataset": self._item(pinned),
+                        "version": version["version"],
+                        "embeddings_generated": self._snapshot(pinned).get(
+                            "embeddingCount", 0
+                        ),
+                    }
         return None
 
-    def ingest_rows(self, dataset_id, incoming, mode, ingestion_id, source_id, keys=None, duplicate_policy="keep", deletion_field=None):
+    def ingest_rows(
+        self,
+        dataset_id,
+        incoming,
+        mode,
+        ingestion_id,
+        source_id,
+        keys=None,
+        duplicate_policy="keep",
+        deletion_field=None,
+    ):
         """Atomic append/upsert with explicit source identities and idempotency receipt."""
-        if mode not in ("append", "upsert") or duplicate_policy not in ("keep", "drop", "reject"):
-            raise HTTPException(422, "Choose append/upsert and an explicit duplicate policy.")
+        if mode not in ("append", "upsert") or duplicate_policy not in (
+            "keep",
+            "drop",
+            "reject",
+        ):
+            raise HTTPException(
+                422, "Choose append/upsert and an explicit duplicate policy."
+            )
         with self._writer():
             catalog = self._catalog()
             receipt = self._ingestion_receipt(catalog, ingestion_id)
@@ -1473,18 +2298,37 @@ class DatasetService:
             incoming = copy.deepcopy(incoming)
             normalized = []
             for row in incoming:
-                deleting = deletion_field is not None and row.get(deletion_field) is True
-                if deletion_field and deletion_field in row and not isinstance(row[deletion_field], bool):
-                    raise HTTPException(422, "Source deletion indicators must be boolean values.")
+                deleting = (
+                    deletion_field is not None and row.get(deletion_field) is True
+                )
+                if (
+                    deletion_field
+                    and deletion_field in row
+                    and not isinstance(row[deletion_field], bool)
+                ):
+                    raise HTTPException(
+                        422, "Source deletion indicators must be boolean values."
+                    )
                 fields = set(row) - ({deletion_field} if deletion_field else set())
-                if fields != names and not (mode == "upsert" and deleting and keys and fields == set(keys)):
-                    raise HTTPException(422, "Incoming fields do not match the dataset. Review the schema change before syncing.")
+                if fields != names and not (
+                    mode == "upsert" and deleting and keys and fields == set(keys)
+                ):
+                    raise HTTPException(
+                        422,
+                        "Incoming fields do not match the dataset. Review the schema change before syncing.",
+                    )
                 try:
-                    columns = [column for column in snapshot["columns"] if column["name"] in fields]
+                    columns = [
+                        column
+                        for column in snapshot["columns"]
+                        if column["name"] in fields
+                    ]
                     clean = self._rows(self._frame([row], columns))[0]
                     clean.pop("__rowId", None)
                 except (ValueError, TypeError, OverflowError) as exc:
-                    raise HTTPException(422, "Incoming values do not match the reviewed column types.") from exc
+                    raise HTTPException(
+                        422, "Incoming values do not match the reviewed column types."
+                    ) from exc
                 if deletion_field:
                     clean[deletion_field] = deleting
                 normalized.append(clean)
@@ -1492,57 +2336,112 @@ class DatasetService:
             counts = dict(inserted=0, updated=0, deleted=0, unchanged=0)
             if mode == "upsert":
                 if not keys or not set(keys) <= names:
-                    raise HTTPException(422, "Upsert requires an approved stable key or composite key.")
+                    raise HTTPException(
+                        422, "Upsert requires an approved stable key or composite key."
+                    )
+
                 def key(row):
                     values = tuple(str(row.get(name)) for name in keys)
-                    if any(row.get(name) is None or row.get(name) == "" for name in keys):
-                        raise HTTPException(422, "Upsert keys cannot contain missing values.")
+                    if any(
+                        row.get(name) is None or row.get(name) == "" for name in keys
+                    ):
+                        raise HTTPException(
+                            422, "Upsert keys cannot contain missing values."
+                        )
                     return values
+
                 lookup = {key(row): row for row in rows}
-                if len(lookup) != len(rows) or len({key(row) for row in incoming}) != len(incoming):
-                    raise HTTPException(422, "The selected source key is not unique at this dataset grain.")
-                numeric_fields = {column["name"] for column in snapshot["columns"] if column["type"] in ("number", "decimal")}
+                if len(lookup) != len(rows) or len(
+                    {key(row) for row in incoming}
+                ) != len(incoming):
+                    raise HTTPException(
+                        422,
+                        "The selected source key is not unique at this dataset grain.",
+                    )
+                numeric_fields = {
+                    column["name"]
+                    for column in snapshot["columns"]
+                    if column["type"] in ("number", "decimal")
+                }
+
                 def equivalent(previous, incoming_row):
                     from decimal import Decimal
+
                     for name in names:
                         left, right = previous.get(name), incoming_row.get(name)
-                        if left is not None and right is not None and name in numeric_fields:
+                        if (
+                            left is not None
+                            and right is not None
+                            and name in numeric_fields
+                        ):
                             if Decimal(str(left)) != Decimal(str(right)):
                                 return False
                         elif left != right:
                             return False
                     return True
+
                 for row in incoming:
                     identity = key(row)
-                    deleting = deletion_field is not None and row.pop(deletion_field, False) is True
+                    deleting = (
+                        deletion_field is not None
+                        and row.pop(deletion_field, False) is True
+                    )
                     previous = lookup.get(identity)
                     if deleting:
                         if previous:
-                            del lookup[identity]; counts["deleted"] += 1
+                            del lookup[identity]
+                            counts["deleted"] += 1
                         else:
                             counts["unchanged"] += 1
                     elif previous is None:
-                        lookup[identity] = {**row, "__rowId": uuid.uuid4().hex}; counts["inserted"] += 1
+                        lookup[identity] = {**row, "__rowId": uuid.uuid4().hex}
+                        counts["inserted"] += 1
                     elif equivalent(previous, row):
                         counts["unchanged"] += 1
                     else:
-                        lookup[identity] = {**row, "__rowId": previous["__rowId"]}; counts["updated"] += 1
+                        lookup[identity] = {**row, "__rowId": previous["__rowId"]}
+                        counts["updated"] += 1
                 rows = list(lookup.values())
             else:
                 if deletion_field:
-                    raise HTTPException(422, "Deletion events require upsert with stable source keys.")
-                signatures = {json.dumps({name: row.get(name) for name in sorted(names)}, default=str, sort_keys=True) for row in rows}
+                    raise HTTPException(
+                        422, "Deletion events require upsert with stable source keys."
+                    )
+                signatures = {
+                    json.dumps(
+                        {name: row.get(name) for name in sorted(names)},
+                        default=str,
+                        sort_keys=True,
+                    )
+                    for row in rows
+                }
                 for row in incoming:
                     signature = json.dumps(row, default=str, sort_keys=True)
                     if signature in signatures and duplicate_policy != "keep":
                         if duplicate_policy == "reject":
-                            raise HTTPException(409, "Duplicate incoming transaction requires review.")
+                            raise HTTPException(
+                                409, "Duplicate incoming transaction requires review."
+                            )
                         counts["unchanged"] += 1
                         continue
-                    rows.append({**row, "__rowId": uuid.uuid4().hex}); signatures.add(signature); counts["inserted"] += 1
+                    rows.append({**row, "__rowId": uuid.uuid4().hex})
+                    signatures.add(signature)
+                    counts["inserted"] += 1
             frame = self._frame(rows, snapshot["columns"])
-            result = self._save_version(catalog, entry, frame, rows, mode, index=False,
-                                        provenance={"ingestionId": ingestion_id, "sourceId": source_id, "counts": counts, "sourceKeys": keys})
+            result = self._save_version(
+                catalog,
+                entry,
+                frame,
+                rows,
+                mode,
+                index=False,
+                provenance={
+                    "ingestionId": ingestion_id,
+                    "sourceId": source_id,
+                    "counts": counts,
+                    "sourceKeys": keys,
+                },
+            )
             number = result["version"]
         self._submit_indexing(dataset_id, number)
         return result

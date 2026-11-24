@@ -46,9 +46,12 @@ class RAGGenerator:
 
     # ── Synchronous Generation ────────────────────────────────────────────────
 
-    def generate(self, formatted_prompt: str,
-                 system_prompt: str = "You explain approved enterprise dataset definitions and evidence.",
-                 generation_config: Optional[dict] = None) -> str:
+    def generate(
+        self,
+        formatted_prompt: str,
+        system_prompt: str = "You explain approved enterprise dataset definitions and evidence.",
+        generation_config: Optional[dict] = None,
+    ) -> str:
         """
         Synchronous completion via NVIDIA NIM.
         Used by: /api/chat, _handle_analytical, _generate_analytical_response, etc.
@@ -56,9 +59,12 @@ class RAGGenerator:
         """
         if not self.api_key:
             logger.error("[RAGGenerator] NVIDIA_API_KEY not configured")
-            raise RuntimeError("NVIDIA API key is not configured in environment settings.")
+            raise RuntimeError(
+                "NVIDIA API key is not configured in environment settings."
+            )
 
         from api.platform.ai_settings import ai_settings
+
         config = generation_config or ai_settings()
         headers = self._get_headers()
 
@@ -67,7 +73,7 @@ class RAGGenerator:
             if m and m not in models_to_try:
                 models_to_try.append(m)
 
-        if config.get('fallback_models') is False:
+        if config.get("fallback_models") is False:
             models_to_try = models_to_try[:1]
         for idx, model_name in enumerate(models_to_try):
             payload = {
@@ -82,7 +88,12 @@ class RAGGenerator:
             }
             t_start = time.perf_counter()
             try:
-                res = requests.post(self.api_url, headers=headers, json=payload, timeout=config.get('timeout', 60))
+                res = requests.post(
+                    self.api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=config.get("timeout", 60),
+                )
                 elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
                 if res.status_code == 200:
                     data = res.json()
@@ -90,54 +101,69 @@ class RAGGenerator:
                     if content and content.strip():
                         try:
                             from calculate_token_usage import record_token_usage
+
                             record_token_usage(
                                 "RAG Generator",
                                 model_name,
                                 data.get("usage", {}).get("prompt_tokens", 0),
                                 data.get("usage", {}).get("completion_tokens", 0),
-                                latency_ms=elapsed_ms
+                                latency_ms=elapsed_ms,
                             )
                         except ImportError:
                             try:
                                 import sys
                                 from pathlib import Path
+
                                 root_p = str(Path(__file__).resolve().parents[3])
                                 if root_p not in sys.path:
                                     sys.path.insert(0, root_p)
                                 from calculate_token_usage import record_token_usage
+
                                 record_token_usage(
                                     "RAG Generator",
                                     model_name,
                                     data.get("usage", {}).get("prompt_tokens", 0),
                                     data.get("usage", {}).get("completion_tokens", 0),
-                                    latency_ms=elapsed_ms
+                                    latency_ms=elapsed_ms,
                                 )
                             except Exception:
                                 pass
                         except Exception:
                             pass
                         if idx == 0:
-                            logger.info(f"[RAGGenerator] Model {model_name} completed successfully.")
+                            logger.info(
+                                f"[RAGGenerator] Model {model_name} completed successfully."
+                            )
                         else:
-                            logger.info(f"[RAGGenerator] Fallback model {model_name} completed successfully.")
+                            logger.info(
+                                f"[RAGGenerator] Fallback model {model_name} completed successfully."
+                            )
                         return content
                 else:
-                    logger.warning(f"[RAGGenerator] Model {model_name} returned status {res.status_code}: {res.text[:150]}")
+                    logger.warning(
+                        f"[RAGGenerator] Model {model_name} returned status {res.status_code}: {res.text[:150]}"
+                    )
             except requests.exceptions.Timeout:
-                logger.warning(f"[RAGGenerator] Model {model_name} timed out, trying next fallback...")
+                logger.warning(
+                    f"[RAGGenerator] Model {model_name} timed out, trying next fallback..."
+                )
             except Exception as e:
-                logger.warning(f"[RAGGenerator] Model {model_name} failed ({e}), trying next fallback...")
+                logger.warning(
+                    f"[RAGGenerator] Model {model_name} failed ({e}), trying next fallback..."
+                )
 
         logger.error("[RAGGenerator] All NVIDIA NIM models failed or timed out.")
         raise RuntimeError("All NVIDIA NIM models failed or timed out.")
 
     # ── Streaming Generation ──────────────────────────────────────────────────
 
-    def generate_stream(self, formatted_prompt: str,
-                        system_prompt: str = "You explain approved enterprise dataset definitions and evidence.",
-                        stop_event: Optional[threading.Event] = None,
-                        generation_config: Optional[dict] = None
-                        ) -> Generator[str, None, None]:
+    def generate_stream(
+        self,
+        formatted_prompt: str,
+        system_prompt: str = "You explain approved enterprise dataset definitions and evidence.",
+        stop_event: Optional[threading.Event] = None,
+        generation_config: Optional[dict] = None,
+    ) -> Generator[str, None, None]:
         """
         Token-by-token streaming generator via NVIDIA NIM (stream=True).
         Yields text chunks as they arrive from the model.
@@ -148,9 +174,12 @@ class RAGGenerator:
         """
         if not self.api_key:
             logger.error("[RAGGenerator] NVIDIA_API_KEY not configured")
-            raise RuntimeError("NVIDIA API key is not configured in environment settings.")
+            raise RuntimeError(
+                "NVIDIA API key is not configured in environment settings."
+            )
 
         from api.platform.ai_settings import ai_settings
+
         config = generation_config or ai_settings()
         payload = {
             "model": config["llm_model"],
@@ -190,6 +219,7 @@ class RAGGenerator:
             # Monitor stop_event and close the response socket immediately on disconnect
             # so iter_lines() is interrupted instead of hanging on socket inactivity.
             if stop_event:
+
                 def _close_on_stop():
                     while not monitor_stop.is_set():
                         if stop_event.wait(timeout=0.1):
@@ -205,21 +235,27 @@ class RAGGenerator:
 
             if resp.status_code != 200:
                 if stop_event and stop_event.is_set():
-                    logger.info("[RAGGenerator] Stream stopped; aborting fallback generation.")
+                    logger.info(
+                        "[RAGGenerator] Stream stopped; aborting fallback generation."
+                    )
                     return
                 logger.warning(
                     f"[RAGGenerator] Streaming request returned {resp.status_code}, "
                     f"falling back to synchronous generation."
                 )
                 # Fallback: yield the complete response as a single chunk
-                full = self.generate(formatted_prompt, system_prompt, generation_config=generation_config)
+                full = self.generate(
+                    formatted_prompt, system_prompt, generation_config=generation_config
+                )
                 yield full
                 return
 
             streamed_parts = []
             for line in resp.iter_lines():
                 if stop_event and stop_event.is_set():
-                    logger.info("[Generator] Aborting stream and thread exits immediately; no dangling HTTP requests to NIM.")
+                    logger.info(
+                        "[Generator] Aborting stream and thread exits immediately; no dangling HTTP requests to NIM."
+                    )
                     return
 
                 if not line:
@@ -233,28 +269,37 @@ class RAGGenerator:
                 if data_str == "[DONE]":
                     elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
                     try:
-                        from calculate_token_usage import record_token_usage, estimate_tokens
+                        from calculate_token_usage import (
+                            record_token_usage,
+                            estimate_tokens,
+                        )
+
                         record_token_usage(
                             "RAG Stream",
                             self.model,
                             estimate_tokens(formatted_prompt),
                             estimate_tokens("".join(streamed_parts)),
-                            latency_ms=elapsed_ms
+                            latency_ms=elapsed_ms,
                         )
                     except ImportError:
                         try:
                             import sys
                             from pathlib import Path
+
                             root_p = str(Path(__file__).resolve().parents[3])
                             if root_p not in sys.path:
                                 sys.path.insert(0, root_p)
-                            from calculate_token_usage import record_token_usage, estimate_tokens
+                            from calculate_token_usage import (
+                                record_token_usage,
+                                estimate_tokens,
+                            )
+
                             record_token_usage(
                                 "RAG Stream",
                                 self.model,
                                 estimate_tokens(formatted_prompt),
                                 estimate_tokens("".join(streamed_parts)),
-                                latency_ms=elapsed_ms
+                                latency_ms=elapsed_ms,
                             )
                         except Exception:
                             pass
@@ -282,26 +327,44 @@ class RAGGenerator:
             logger.warning("[RAGGenerator] Streaming request timed out.")
             if not streamed_any:
                 if stop_event and stop_event.is_set():
-                    logger.info("[RAGGenerator] Stream stopped; aborting fallback request.")
+                    logger.info(
+                        "[RAGGenerator] Stream stopped; aborting fallback request."
+                    )
                     return
-                logger.info("[RAGGenerator] Falling back to synchronous generation after stream timeout.")
-                full = self.generate(formatted_prompt, system_prompt, generation_config=generation_config)
+                logger.info(
+                    "[RAGGenerator] Falling back to synchronous generation after stream timeout."
+                )
+                full = self.generate(
+                    formatted_prompt, system_prompt, generation_config=generation_config
+                )
                 yield full
         except Exception as e:
             if stop_event and stop_event.is_set():
-                logger.info(f"[RAGGenerator] Streaming generation aborted via stop_event ({type(e).__name__}).")
+                logger.info(
+                    f"[RAGGenerator] Streaming generation aborted via stop_event ({type(e).__name__})."
+                )
                 return
             logger.error(f"[RAGGenerator] Streaming generation error: {e}")
             if not streamed_any:
                 if stop_event and stop_event.is_set():
-                    logger.info("[RAGGenerator] Stream stopped; aborting fallback request.")
+                    logger.info(
+                        "[RAGGenerator] Stream stopped; aborting fallback request."
+                    )
                     return
-                logger.info("[RAGGenerator] Falling back to synchronous generation after stream error.")
+                logger.info(
+                    "[RAGGenerator] Falling back to synchronous generation after stream error."
+                )
                 try:
-                    full = self.generate(formatted_prompt, system_prompt, generation_config=generation_config)
+                    full = self.generate(
+                        formatted_prompt,
+                        system_prompt,
+                        generation_config=generation_config,
+                    )
                     yield full
                 except Exception as fallback_err:
-                    logger.error(f"[RAGGenerator] Synchronous fallback also failed: {fallback_err}")
+                    logger.error(
+                        f"[RAGGenerator] Synchronous fallback also failed: {fallback_err}"
+                    )
                     raise
         finally:
             monitor_stop.set()

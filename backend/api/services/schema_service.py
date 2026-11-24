@@ -8,7 +8,6 @@ per-column metadata dynamically for any dataset or connector source.
 import re
 from decimal import Decimal
 import pandas as pd
-import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from difflib import SequenceMatcher
 from api.utils.logger import get_logger
@@ -19,11 +18,33 @@ logger = get_logger("services.schema_service")
 SCHEMA_MAPPING_VERSION = "2.0.0"
 
 _AVG_HINTS = (
-    "percent", "pct", "ratio", "rate", "avg", "average", "mean",
-    "discount", "score", "price", "fx", "index", "temp", "humidity", "speed",
+    "percent",
+    "pct",
+    "ratio",
+    "rate",
+    "avg",
+    "average",
+    "mean",
+    "discount",
+    "score",
+    "price",
+    "fx",
+    "index",
+    "temp",
+    "humidity",
+    "speed",
 )
 _DATE_TOKENS = ("date", "timestamp", "datetime", "month", "quarter", "year", "period")
-_DURATION_HINTS = ("duration", "uptime", "downtime", "latency", "elapsed", "age", "lead_time", "cycle_time")
+_DURATION_HINTS = (
+    "duration",
+    "uptime",
+    "downtime",
+    "latency",
+    "elapsed",
+    "age",
+    "lead_time",
+    "cycle_time",
+)
 
 
 def _is_identifier_name(column_name: str) -> bool:
@@ -48,7 +69,10 @@ def _is_decimal_series(series: pd.Series) -> bool:
     if series.empty:
         return False
     non_null = series.dropna().head(10)
-    return len(non_null) > 0 and all(isinstance(v, (Decimal, int, float)) and not isinstance(v, bool) for v in non_null)
+    return len(non_null) > 0 and all(
+        isinstance(v, (Decimal, int, float)) and not isinstance(v, bool)
+        for v in non_null
+    )
 
 
 class ColumnMetadata:
@@ -58,11 +82,18 @@ class ColumnMetadata:
         self.column_name = column_name
         self.data_type = str(series.dtype)
         is_bool = pd.api.types.is_bool_dtype(series)
-        self.is_numeric = (pd.api.types.is_numeric_dtype(series) and not is_bool) or _is_decimal_series(series)
+        self.is_numeric = (
+            pd.api.types.is_numeric_dtype(series) and not is_bool
+        ) or _is_decimal_series(series)
         self.is_identifier = _is_identifier_name(column_name)
         is_dt = pd.api.types.is_datetime64_any_dtype(series)
-        self.is_date = is_dt or (_is_temporal_name(column_name) and not (self.is_numeric and pd.api.types.is_float_dtype(series)))
-        self.is_measure = self.is_numeric and not self.is_identifier and not self.is_date
+        self.is_date = is_dt or (
+            _is_temporal_name(column_name)
+            and not (self.is_numeric and pd.api.types.is_float_dtype(series))
+        )
+        self.is_measure = (
+            self.is_numeric and not self.is_identifier and not self.is_date
+        )
         self.is_dimension = not self.is_measure
         self.is_filterable = True
         self.is_aggregatable = self.is_measure
@@ -82,7 +113,9 @@ class ColumnMetadata:
 
         if self.is_aggregatable:
             self.aggregations = ["SUM", "AVG", "MIN", "MAX", "COUNT"]
-            self.default_aggregation = "AVG" if any(h in low for h in _AVG_HINTS) else "SUM"
+            self.default_aggregation = (
+                "AVG" if any(h in low for h in _AVG_HINTS) else "SUM"
+            )
         else:
             self.aggregations = ["COUNT", "COUNT_DISTINCT"]
             self.default_aggregation = "COUNT"
@@ -92,7 +125,10 @@ class ColumnMetadata:
         if self.is_numeric and not series.empty:
             clean = series.dropna()
             if len(clean) > 0:
-                self.value_range = {"min": float(clean.min()), "max": float(clean.max())}
+                self.value_range = {
+                    "min": float(clean.min()),
+                    "max": float(clean.max()),
+                }
                 self.sample_values = [float(v) for v in clean.head(5).tolist()]
             else:
                 self.value_range = None
@@ -129,7 +165,9 @@ class ColumnMetadata:
         if self.is_aggregatable:
             parts.append(f"agg={self.default_aggregation}")
         if self.value_range:
-            parts.append(f"range={self.value_range['min']:.0f}..{self.value_range['max']:.0f}")
+            parts.append(
+                f"range={self.value_range['min']:.0f}..{self.value_range['max']:.0f}"
+            )
         elif self.sample_values:
             samples = ", ".join(str(s) for s in self.sample_values[:4])
             parts.append(f"values=[{samples}]")
@@ -165,16 +203,27 @@ class SchemaService:
     def get_metadata(self) -> Dict[str, ColumnMetadata]:
         """Get metadata, auto-loading from DataService if needed."""
         from api.services.data_service import data_service
+
         df = data_service.get_dataframe()
         from api.models.execution_context import current_selection
+
         selection = current_selection.get()
         if selection is not None:
             from api.platform.semantic import semantic_registry
-            model = semantic_registry.get(selection.entry, selection.context.version,
-                                          selection.context.semantic_revision, approved=True)
+
+            model = semantic_registry.get(
+                selection.entry,
+                selection.context.version,
+                selection.context.semantic_revision,
+                approved=True,
+            )
             metadata = {}
             for field in model.fields:
-                series = df[field.name] if field.name in df.columns else pd.Series(dtype=object)
+                series = (
+                    df[field.name]
+                    if field.name in df.columns
+                    else pd.Series(dtype=object)
+                )
                 item = ColumnMetadata(field.name, series)
                 item.is_numeric = field.type in ("integer", "decimal")
                 item.is_measure = field.role == "measure"
@@ -216,43 +265,67 @@ class SchemaService:
         """
         return self.resolve_column_with_ambiguity_check(user_term)["resolved_col"]
 
-    def resolve_column_with_ambiguity_check(
-        self, user_term: str
-    ) -> Dict[str, Any]:
+    def resolve_column_with_ambiguity_check(self, user_term: str) -> Dict[str, Any]:
         """
         Resolve a user term to an actual column name in the active dataset, detecting ambiguity.
         """
         from api.models.execution_context import current_selection
+
         selection = current_selection.get()
         term = user_term.strip().casefold()
         term_norm = re.sub(r"[^a-z0-9]", "", term)
 
         if selection is not None:
             from api.platform.semantic import semantic_registry
-            model = semantic_registry.get(selection.entry, selection.context.version, selection.context.semantic_revision, approved=True)
+
+            model = semantic_registry.get(
+                selection.entry,
+                selection.context.version,
+                selection.context.semantic_revision,
+                approved=True,
+            )
             matches = [
-                f.name for f in model.fields
-                if term in {f.name.casefold(), f.semantic_name.casefold(), *[a.casefold() for a in f.aliases]}
-                or (term_norm and term_norm in {re.sub(r"[^a-z0-9]", "", f.name.casefold()), re.sub(r"[^a-z0-9]", "", f.semantic_name.casefold())})
+                f.name
+                for f in model.fields
+                if term
+                in {
+                    f.name.casefold(),
+                    f.semantic_name.casefold(),
+                    *[a.casefold() for a in f.aliases],
+                }
+                or (
+                    term_norm
+                    and term_norm
+                    in {
+                        re.sub(r"[^a-z0-9]", "", f.name.casefold()),
+                        re.sub(r"[^a-z0-9]", "", f.semantic_name.casefold()),
+                    }
+                )
             ]
             if not matches and term_norm:
                 matches = [
-                    f.name for f in model.fields
-                    if term in f.name.casefold() or term in f.semantic_name.casefold()
+                    f.name
+                    for f in model.fields
+                    if term in f.name.casefold()
+                    or term in f.semantic_name.casefold()
                     or any(term in a.casefold() for a in f.aliases)
                 ]
             return {
                 "resolved_col": matches[0] if len(matches) == 1 else None,
                 "matches": matches,
                 "is_ambiguous": len(matches) > 1,
-                "clarification_prompt": f"Choose the intended field: {', '.join(matches)}." if len(matches) > 1 else None,
+                "clarification_prompt": f"Choose the intended field: {', '.join(matches)}."
+                if len(matches) > 1
+                else None,
             }
 
         meta = self.get_metadata()
 
         # 1. Exact or normalized column name match
         for col_name in meta:
-            if col_name.casefold() == term or (term_norm and re.sub(r"[^a-z0-9]", "", col_name.casefold()) == term_norm):
+            if col_name.casefold() == term or (
+                term_norm and re.sub(r"[^a-z0-9]", "", col_name.casefold()) == term_norm
+            ):
                 return {
                     "resolved_col": col_name,
                     "matches": [col_name],
@@ -261,14 +334,26 @@ class SchemaService:
                 }
 
         # 2. Substring match across actual dataset columns (for ambiguity detection)
-        partial_matches = [col_name for col_name in meta if term and (term in col_name.casefold() or term in col_name.replace("_", " ").casefold())]
+        partial_matches = [
+            col_name
+            for col_name in meta
+            if term
+            and (
+                term in col_name.casefold()
+                or term in col_name.replace("_", " ").casefold()
+            )
+        ]
         if len(partial_matches) > 1:
-            options = [f"  • {col} ({meta[col].semantic_type})" for col in partial_matches]
+            options = [
+                f"  • {col} ({meta[col].semantic_type})" for col in partial_matches
+            ]
             return {
                 "resolved_col": None,
                 "matches": partial_matches,
                 "is_ambiguous": True,
-                "clarification_prompt": f"The term \"{user_term}\" could refer to multiple columns:\n" + "\n".join(options) + "\nPlease specify which one you mean.",
+                "clarification_prompt": f'The term "{user_term}" could refer to multiple columns:\n'
+                + "\n".join(options)
+                + "\nPlease specify which one you mean.",
             }
         if len(partial_matches) == 1:
             return {
@@ -294,7 +379,9 @@ class SchemaService:
             "clarification_prompt": None,
         }
 
-    def resolve_filter_value(self, column: str, user_value: str) -> Tuple[Optional[str], List[str]]:
+    def resolve_filter_value(
+        self, column: str, user_value: str
+    ) -> Tuple[Optional[str], List[str]]:
         """
         Resolve a user's filter value to an actual dataset value.
         Returns (resolved_value, possible_matches).
@@ -305,6 +392,7 @@ class SchemaService:
             return (user_value, [])
 
         from api.services.data_service import data_service
+
         df = data_service.get_dataframe()
         if column not in df.columns:
             return (None, [])
@@ -319,7 +407,11 @@ class SchemaService:
                 return (val, [])
 
         # Substring match
-        matches = [v for v in actual_values if user_lower in v.lower() or v.lower() in user_lower]
+        matches = [
+            v
+            for v in actual_values
+            if user_lower in v.lower() or v.lower() in user_lower
+        ]
         if len(matches) == 1:
             return (matches[0], [])
         if len(matches) > 1:
@@ -374,5 +466,6 @@ class SchemaService:
             f"DIMENSIONS (grouping attributes): {', '.join(dims)}\n"
             f"TEMPORAL (time periods): {', '.join(dates)}"
         )
+
 
 schema_service = SchemaService()
