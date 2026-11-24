@@ -1,4 +1,5 @@
 import './RAGChat.css';
+import { ApprovedPublicationAction } from '../components/PublishToFiles';
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Rows3, ChartNoAxesCombined, ChartColumnIncreasing, Database, ArrowRight, ArrowUp, LoaderCircle } from 'lucide-react';
 import {
@@ -1694,14 +1695,7 @@ export const RAGChat: React.FC<RAGChatProps> = ({
                         <span>Open in Studio</span>
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => showToast('Insight pinned to Executive Dashboard')}
-                        className="px-2.5 py-1 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-900 flex items-center gap-1 transition-colors cursor-pointer"
-                      >
-                        <span className="material-symbols-outlined text-[15px]">push_pin</span>
-                        <span>Pin</span>
-                      </button>
+                      <ApprovedPublicationAction navigate={onNavigate}/>
                     </div>
                   </div>
                 </div>

@@ -12,6 +12,7 @@ from api.utils.context_middleware import DatasetContextMiddleware
 from api.routes.health import router as health_router
 from api.routes.auth import router as auth_router
 from api.routes.users import router as users_router
+from api.routes.content import router as content_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.analytics import router as analytics_router
 from api.routes.chat import router as chat_router
@@ -62,6 +63,7 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(content_router)
 app.include_router(dashboard_router)
 app.include_router(analytics_router)
 app.include_router(chat_router)

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getDatasets } from '../services/datasetService';
+import { ApprovedPublicationAction } from '../components/PublishToFiles';
 import { getSemanticModels, SemanticModel } from '../services/semanticService';
 import { selectedContext, ensureDefaultContext } from '../services/executionContext';
 
@@ -267,6 +268,7 @@ export const AIAgents: React.FC<AIAgentsProps> = ({ onNavigate }) => {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          <ApprovedPublicationAction navigate={onNavigate}/>
           <button
             onClick={() => onNavigate('ai-dashboards-rag-chat')}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-element)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] text-xs font-medium border border-[var(--color-border)] transition-colors shadow-[var(--shadow-2xs)] cursor-pointer"

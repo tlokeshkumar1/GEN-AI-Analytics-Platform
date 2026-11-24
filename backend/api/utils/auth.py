@@ -17,6 +17,7 @@ class UserContext:
         scopes: List[str],
         role: str,
         roles: List[str],
+        tenant_id: Optional[str] = None,
     ):
         self.user_id = user_id
         self.email = email
@@ -24,6 +25,7 @@ class UserContext:
         self.scopes = scopes
         self.role = role
         self.roles = roles
+        self.tenant_id = tenant_id
 
     def to_dict(self) -> Dict[str, Any]:
         return vars(self).copy()

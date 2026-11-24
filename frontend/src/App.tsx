@@ -6,6 +6,9 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
+import { ContentFiles } from './components/ContentFiles';
+const PersonalDashboard = lazy(() => import('./screens/PersonalDashboard').then(m => ({default:m.PersonalDashboard})));
+const personalRoute = (path:string) => /^dashboards\/[a-f0-9]{32}$/.test(path) || path === 'my-files';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { CommandPalette } from './components/CommandPalette';
 import { AgentActivityModal } from './components/AgentActivityModal';
@@ -74,6 +77,7 @@ export default function App() {
   const [activePath, setActivePath] = useState<string>(() => {
     try {
       const pathname = window.location.pathname.replace(/^\/+/, '').toLowerCase();
+      if (personalRoute(pathname)) return pathname;
       if (pathname === 'hanaadmin' || pathname === 'hana-admin') return 'hanaadmin';
       const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
       if (hash === 'hanaadmin' || hash === 'hana-admin') return 'hanaadmin';
@@ -145,9 +149,11 @@ export default function App() {
     const handlePopState = () => {
       try {
         const pathname = window.location.pathname.replace(/^\/+/, '').toLowerCase();
-        if (pathname === 'hanaadmin' || pathname === 'hana-admin') {
+        if (personalRoute(pathname)) setActivePath(pathname);
+        else if (window.history.state?.screen) setActivePath(window.history.state.screen);
+        else if (pathname === 'hanaadmin' || pathname === 'hana-admin') {
           setActivePath('hanaadmin');
-        } else if (!pathname || pathname === 'executive-dashboard') {
+        } else if (!pathname || pathname === 'app' || pathname === 'executive-dashboard') {
           setActivePath('executive-dashboard');
         }
       } catch {
@@ -303,11 +309,14 @@ export default function App() {
       url.searchParams.delete('datasetId');
       window.history.replaceState({}, '', url.toString());
     }
-    if (path === 'hanaadmin') {
+    if (personalRoute(path)) {
+      window.history.replaceState({screen:activePath}, '');
+      window.history.pushState({screen:path}, '', '/'+path);
+    } else if (path === 'hanaadmin') {
       window.history.pushState({}, '', '/hanaadmin');
     } else if (path === 'executive-dashboard') {
       window.history.pushState({}, '', '/');
-    }
+    } else if (personalRoute(activePath)) window.history.pushState({screen:path}, '', '/app');
     setActivePath(path);
     setSidebarOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -392,7 +401,7 @@ export default function App() {
             if (user) {
               setCurrentUser(user);
             }
-            handleNavigate('executive-dashboard');
+            handleNavigate(personalRoute(activePath) ? activePath : 'executive-dashboard');
           }}
         />
       </Suspense>
@@ -438,6 +447,8 @@ export default function App() {
         <main className="w-full pt-14 bg-[var(--color-background-body)] min-h-screen min-h-dvh pb-28 lg:pb-32">
           <Suspense fallback={<ScreenFallback />}>
             <div className="w-full max-w-[var(--content-max-width)] mx-auto px-4 sm:px-5 lg:px-8 py-5">
+              {activePath.startsWith('dashboards/') && <PersonalDashboard key={currentUser?.user_id+activePath} id={activePath.slice(11)} navigate={handleNavigate}/>}
+              {activePath === 'my-files' && <ContentFiles key={currentUser?.user_id} userKey={currentUser?.email || ''} active={activePath} navigate={handleNavigate}/>}
               {activePath === 'executive-dashboard' && (
                 <ExecutiveDashboard onNavigate={handleNavigate} />
               )}

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { ApprovedPublicationAction } from '../components/PublishToFiles';
 import api, { getApiErrorMessage } from '../services/api';
 import { selectedContext, ensureDefaultContext, selectContext } from '../services/executionContext';
 import { hasAdminRole } from '../services/authService';
@@ -534,7 +535,9 @@ export function GraphStudio({
       const updated = await reviewDefinition(item, decision);
       setItems(previous =>
         previous.map(existing =>
-          existing.id === item.id && existing.revision === item.revision
+          existing.id === item.id && existing.revision === item.revision &&
+            existing.dataset_id === item.dataset_id && existing.version === item.version &&
+            existing.semantic_revision === item.semantic_revision
             ? { ...existing, ...updated, status: updated?.status || decision }
             : existing
         )
@@ -922,6 +925,7 @@ export function GraphStudio({
       </div>
 
       {/* Global Alerts */}
+      <ApprovedPublicationAction items={items} navigate={onNavigate}/>
       {error && (
         <div role="alert" className="p-4 bg-[var(--color-danger-subtle)] border border-[var(--color-danger-border)] text-[var(--color-danger)] rounded-[var(--radius-container)] flex items-start gap-3 shadow-[var(--shadow-2xs)]">
           <span className="material-symbols-outlined text-[var(--color-danger)] text-xl mt-0.5">error</span>
@@ -2373,6 +2377,7 @@ export function GraphStudio({
                             <span>{isCardDeleting ? 'Deleting...' : 'Delete'}</span>
                           </button>
 
+                          {item.status==='approved' && item.reviewer==='system' && <button className="rounded border px-2 py-1 text-xs" disabled={busy || isCardReviewing} onClick={()=>void handleReviewItem(item,'approved')}>Confirm for My Files</button>}
                           {item.status === 'proposed' && (
                             <div className="flex items-center gap-1.5 pl-1.5 border-l border-[var(--color-border)]">
                               <button

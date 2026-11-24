@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { ContentFiles } from './ContentFiles';
 import { hasAdminRole, getRoleLabel } from '../services/authService';
 
 export interface SidebarProps {
@@ -438,6 +439,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
 
+            {effectiveCollapsed ? renderNavItem({id:'my-files',label:'My Files',badge:null,icon:'folder'}) :
+              <ContentFiles key={user?.email} userKey={user?.email || ''} navigate={onNavigate} active={activePath}/>}
             {/* 2) Administration Section (Admin / Admin+User only) */}
             {isAdmin && (
               <>

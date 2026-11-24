@@ -19,12 +19,13 @@ except ImportError:
 
 
 class HANAConnectionManager:
-    def __init__(self):
+    def __init__(self, *, user=None, password=None, schema=None):
         self.address = settings.HANA_ADDRESS
         self.port = settings.HANA_PORT
-        self.user = settings.HANA_USER
-        self.password = settings.HANA_PASSWORD
-        self.schema = settings.HANA_SCHEMA
+        self.user = user or settings.HANA_USER
+        self.password = password or settings.HANA_PASSWORD
+        self.schema = schema or settings.HANA_SCHEMA
+        self.validate_cert = True if user else settings.HANA_VALIDATE_CERT
         self._max_pool_size = settings.HANA_POOL_SIZE
         if self._max_pool_size <= 0:
             raise ValueError(
@@ -46,9 +47,7 @@ class HANAConnectionManager:
                 user=self.user,
                 password=self.password,
                 encrypt="true",
-                sslValidateCertificate="true"
-                if settings.HANA_VALIDATE_CERT
-                else "false",
+                sslValidateCertificate="true" if self.validate_cert else "false",
             )
             if self.schema:
                 cursor = conn.cursor()
@@ -150,6 +149,14 @@ class HANAConnectionManager:
                 self._semaphore.release()
             except ValueError:
                 pass
+
+    def discard_connection(self, conn):
+        try:
+            with self._last_used_lock:
+                self._last_used.pop(id(conn), None)
+            conn.close()
+        finally:
+            self._semaphore.release()
 
     def is_connected(self) -> bool:
         conn = self.get_connection(timeout=5.0, validate=True)

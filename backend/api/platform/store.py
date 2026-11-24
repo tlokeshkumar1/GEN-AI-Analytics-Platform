@@ -46,7 +46,8 @@ class MetadataStore:
             return
         conn = cursor = None
         token = None
-        failed = False
+        discard = False
+        autocommit = None
         try:
             if self.backend == "sqlite":
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,39 +58,55 @@ class MetadataStore:
                 )
                 conn.execute("BEGIN IMMEDIATE")
             else:
-                from api.database.connection import db_manager
-
+                db_manager = self.connection_pool()
                 conn = db_manager.get_connection()
                 if conn is None:
                     raise HTTPException(
                         503, "Persistent metadata storage is unavailable."
                     )
+                autocommit = conn.getautocommit()
+                if autocommit:
+                    conn.setautocommit(False)
             cursor = conn.cursor()
             token = self._cursor.set(cursor)
             yield cursor
             conn.commit()
         except Exception as exc:
-            failed = True
             if conn:
                 try:
                     conn.rollback()
                 except Exception:
-                    pass
+                    discard = True
             if isinstance(exc, (HTTPException, ValueError)):
                 raise
-            raise HTTPException(503, f"Metadata storage failed: {exc}") from None
+            if getattr(exc, "errorcode", None) == 301:
+                raise HTTPException(
+                    409, "Concurrent creation. Reload and retry."
+                ) from None
+            raise HTTPException(503, "Metadata storage is unavailable.") from None
         finally:
             if token is not None:
                 self._cursor.reset(token)
             if cursor:
                 cursor.close()
             if conn:
-                if self.backend == "sqlite" or failed:
+                if self.backend == "sqlite":
                     conn.close()
                 else:
-                    from api.database.connection import db_manager
+                    if autocommit and not discard:
+                        try:
+                            conn.setautocommit(True)
+                        except Exception:
+                            discard = True
+                    if discard:
+                        db_manager.discard_connection(conn)
+                    else:
+                        db_manager.return_connection(conn)
 
-                    db_manager.return_connection(conn)
+    def connection_pool(self):
+        from api.database.connection import db_manager
+
+        return db_manager
 
     @staticmethod
     def _decode(row):

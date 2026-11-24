@@ -24,7 +24,7 @@
       "cacheControl": "no-cache, no-store, must-revalidate"
     },
     {
-      "source": "^/app(?:\\?.*)?$",
+      "source": "^/(?:app|my-files|dashboards/[0-9a-f]{32})(?:\\?.*)?$",
       "target": "index.html",
       "localDir": "resources",
       "authenticationType": "xsuaa",

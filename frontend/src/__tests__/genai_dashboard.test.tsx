@@ -251,7 +251,7 @@ describe('Generative AI Dashboards (10-Step Analysis-First Workflow)', () => {
     } else {
       expect(await screen.findByText('Live Preview & Verification Mode')).toBeTruthy();
       expect(screen.getByText('Software')).toBeTruthy();
-      expect(screen.getByText('800,000')).toBeTruthy();
+      expect(screen.getByText((800_000).toLocaleString())).toBeTruthy();
       expect(screen.getAllByRole('checkbox', { name: /for publishing/i }).length).toBe(originalWidgetCount);
       expect(screen.getByRole('button', { name: /Publish Selected Widgets/i }).textContent).toBe(publicationLabel);
       if (action === 'accept') {

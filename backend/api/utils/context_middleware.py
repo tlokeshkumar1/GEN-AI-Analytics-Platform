@@ -38,6 +38,13 @@ class DatasetContextMiddleware:
             from api.xsuaa import authenticated_profile
 
             headers = Headers(scope=scope)
+            if path.startswith("/api/content/"):
+                from api.xsuaa import bearer_token
+
+                if bearer_token(headers.get("authorization")).startswith("dev-token-"):
+                    raise HTTPException(
+                        401, "My Files requires a verified SAP end-user session."
+                    )
             identity = await run_in_threadpool(
                 authenticated_profile, headers.get("authorization")
             )

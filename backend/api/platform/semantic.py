@@ -501,7 +501,12 @@ class SemanticRegistry:
         if row is None:
             raise HTTPException(404, "Analytics definition not found.")
         item = AnalyticsItem.model_validate(row["value"])
-        if item.status != "proposed":
+        confirming = (
+            item.status == "approved"
+            and item.reviewer == "system"
+            and decision == "approved"
+        )
+        if item.status != "proposed" and not confirming:
             raise HTTPException(
                 409, "Create a new definition revision to change a reviewed item."
             )

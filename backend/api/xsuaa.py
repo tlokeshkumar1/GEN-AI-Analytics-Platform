@@ -228,6 +228,7 @@ def user_profile(context, claims: dict) -> dict:
     name = " ".join(filter(None, [claims.get("given_name"), claims.get("family_name")]))
     return {
         "user_id": user_id,
+        "tenant_id": claims.get("zid"),
         "email": claims.get("email", ""),
         "name": name or claims.get("name") or claims.get("user_name") or user_id,
         "scopes": claims.get("scope", []),
