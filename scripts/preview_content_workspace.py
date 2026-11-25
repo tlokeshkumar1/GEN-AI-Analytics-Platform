@@ -31,7 +31,8 @@ def main():
                 "personal_files_to_create": 0,
                 "ownership_assignments": 0,
                 "content_table_readable": True,
-                "uses_application_pool": content.connection_pool() is legacy.connection_pool(),
+                "uses_application_pool": content.connection_pool()
+                is legacy.connection_pool(),
             },
             indent=2,
         )
