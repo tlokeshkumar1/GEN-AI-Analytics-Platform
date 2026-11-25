@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { SidebarSection, sidebarChildren, sidebarItem } from './SidebarNavigation';
 import api, { getApiErrorMessage } from '../services/api';
 
 export interface FileEntry {
@@ -87,7 +88,7 @@ export function FileDialog({
   return (
     <dialog
       ref={ref}
-      onCancel={close}
+      onCancel={(event) => { event.preventDefault(); close(); }}
       aria-label={title}
       className="m-auto w-[min(92vw,32rem)] rounded-xl p-6 shadow-xl backdrop:bg-black/40"
     >
@@ -108,7 +109,9 @@ export function FileForm({
   item,
   saved,
   close,
+  embedded = false,
 }: {
+  embedded?: boolean;
   kind: FileEntry['kind'];
   files: FileEntry[];
   parent: string | null;
@@ -122,8 +125,7 @@ export function FileForm({
   const [destination, setDestination] = useState(parent || '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  return (
-    <FileDialog title={`${item ? 'Edit' : 'Create'} ${kind}`} close={close}>
+  const body = (
       <form
         className="grid gap-3"
         onSubmit={async (e) => {
@@ -176,7 +178,7 @@ export function FileForm({
             value={destination}
             onChange={(e) => setDestination(e.target.value)}
           >
-            <option value="">My Files</option>
+            <option value="" disabled={kind === 'dashboard' && !item}>{kind === 'folder' ? 'My Files' : 'Choose folder'}</option>
             {files
               .filter((f) => f.kind === 'folder' && f.id !== item?.id)
               .map((f) => (
@@ -186,7 +188,7 @@ export function FileForm({
               ))}
           </select>
         </label>
-        {kind === 'folder' && !item && (
+        {kind === 'folder' && !item && !embedded && (
           <label className="grid">
             First dashboard name (optional)
             <input
@@ -198,12 +200,13 @@ export function FileForm({
           </label>
         )}
         {error && <p role="alert">{error}</p>}
-        <button disabled={busy || !name.trim()} className={control}>
+        <button disabled={busy || !name.trim() || (kind === 'dashboard' && !item && !destination)} className={control}>
           {busy ? 'Saving…' : 'Save'}
         </button>
+        {embedded && <button type="button" className={control} onClick={close}>Cancel creation</button>}
       </form>
-    </FileDialog>
   );
+  return embedded ? body : <FileDialog title={`${item ? 'Edit' : 'Create'} ${kind}`} close={close}>{body}</FileDialog>;
 }
 export function ContentFiles({
   navigate,
@@ -218,7 +221,12 @@ export function ContentFiles({
   const bin = view === 'Recycle bin';
   const archive = view === 'Archive';
   const flat = view !== 'My Files';
-  const { files, error, loading } = useFiles(bin, archive);
+  const { files: activeFiles, error: activeError, loading } = useFiles();
+  const { files: archivedFiles, error: archiveError } = useFiles(false, true);
+  const { files: deletedFiles, error: binError } = useFiles(true);
+  const files = bin ? deletedFiles : archive ? archivedFiles : activeFiles;
+  const error = activeError || archiveError || binError;
+  const isActive = active === 'my-files' || active.startsWith('dashboards/');
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState('');
   const [message, setMessage] = useState('');
@@ -228,6 +236,16 @@ export function ContentFiles({
     item?: FileEntry;
   }>();
   const [folded, setFolded] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isActive) return;
+    const ancestors = ['root'];
+    let parent = activeFiles.find(f => active === 'dashboards/' + f.id)?.parent_id;
+    while (parent && !ancestors.includes(parent)) {
+      ancestors.push(parent);
+      parent = activeFiles.find(f => f.id === parent)?.parent_id;
+    }
+    setFolded(prev => prev.filter(id => !ancestors.includes(id)));
+  }, [active, activeFiles]);
   const revision = useRef(0);
   const saving = useRef(false);
   useEffect(() => {
@@ -239,7 +257,7 @@ export function ContentFiles({
           throw new Error('The folder preferences response is invalid.');
         if (!request.signal.aborted) {
           revision.current = data.revision;
-          setFolded(data.folded);
+          setFolded(isActive ? data.folded.filter((id: string) => id !== 'root') : data.folded);
         }
       } catch (err) {
         if (!request.signal.aborted) setMessage(fileError(err));
@@ -298,9 +316,9 @@ export function ContentFiles({
   function row(f: FileEntry): React.ReactNode {
     return (
       <li key={f.id}>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 min-w-0">
           <button
-            className="flex items-center gap-1 truncate flex-1 text-left p-1"
+            className={sidebarItem(active === 'dashboards/' + f.id)}
             aria-current={active === 'dashboards/' + f.id ? 'page' : undefined}
             aria-expanded={f.kind === 'folder' ? !folded.includes(f.id) : undefined}
             onClick={() => {
@@ -316,19 +334,22 @@ export function ContentFiles({
             }}
             disabled={bin || archive}
           >
-            <span aria-hidden className="material-symbols-outlined text-sm">
+            {active === 'dashboards/' + f.id && <span aria-hidden className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full bg-[var(--color-primary)]" />}
+            <span className="flex items-center gap-2.5 min-w-0">
+            <span aria-hidden className="material-symbols-outlined text-[17px] text-black shrink-0">
               {f.kind === 'folder' ? 'folder' : 'dashboard'}
             </span>
-            <span className={active === 'dashboards/' + f.id ? 'font-bold truncate' : 'truncate'}>
+            <span className="truncate text-black font-medium">
               {query ? filePath(files, f) : f.name}
-            </span>
+            </span></span>
+            {f.kind === 'folder' && <span aria-hidden className={`material-symbols-outlined text-[16px] transition-transform ${folded.includes(f.id) ? '' : 'rotate-180'}`}>keyboard_arrow_down</span>}
           </button>
           {
             <button
               aria-label={'Actions for ' + f.name}
               onClick={() => setMenu(menu === f.id ? '' : f.id)}
             >
-              ⋯
+              <span aria-hidden className="material-symbols-outlined text-[17px]">more_horiz</span>
             </button>
           }
         </div>
@@ -389,57 +410,27 @@ export function ContentFiles({
           </div>
         )}
         {!query && !flat && f.kind === 'folder' && !folded.includes(f.id) && (
-          <ul className="pl-3 border-l">{files.filter((c) => c.parent_id === f.id).map(row)}</ul>
+          <ul className={sidebarChildren}>{files.filter((c) => c.parent_id === f.id).map(row)}</ul>
         )}
       </li>
     );
   }
   return (
     <section aria-label="Personal files" className="text-xs py-1">
-      <button
-        className="font-semibold p-2"
-        aria-expanded={!folded.includes('root')}
-        onClick={() => toggle('root')}
-      >
-        My Files
-      </button>
-      {!folded.includes('root') && (
-        <div className="pl-3">
-          <button
-            onClick={() => setMenu(menu === 'add' ? '' : 'add')}
-            aria-expanded={menu === 'add'}
-          >
-            + Add Files
-          </button>
-          {menu === 'add' && (
-            <div className="grid gap-1 p-1">
-              {(['folder', 'dashboard'] as const).map((kind) => (
-                <button
-                  key={kind}
-                  onClick={() => {
-                    setView('My Files');
-                    setForm({ kind, parent: null });
-                  }}
-                >
-                  Create {kind}
-                </button>
-              ))}
-              {['Shared with me', 'Favourites', 'Recently viewed', 'Archive', 'Recycle bin'].map(
-                (v) => (
-                  <button
-                    key={v}
-                    onClick={() => {
-                      setView(v);
-                      setQuery('');
-                      setMenu('');
-                    }}
-                  >
-                    {v}
-                  </button>
-                ),
-              )}
-            </div>
-          )}
+      <SidebarSection label="My Files" icon="folder" active={isActive}
+        open={!folded.includes('root')} toggle={() => toggle('root')}>
+          <button className={sidebarItem()} onClick={() => {
+            setView('My Files'); setForm({ kind: 'folder', parent: null });
+          }}><span className="flex items-center gap-2.5"><span aria-hidden className="material-symbols-outlined text-[17px]">add</span><span>+ Add Files</span></span></button>
+          {[
+            ...(activeFiles.some(f => f.permission && f.permission !== 'owner') ? ['Shared with me'] : []),
+            ...(activeFiles.some(f => f.favourite) ? ['Favourites'] : []),
+            ...(activeFiles.some(f => f.last_opened) ? ['Recently viewed'] : []),
+            ...(archivedFiles.length ? ['Archive'] : []),
+            ...(deletedFiles.length ? ['Recycle bin'] : []),
+          ].map(v => <button key={v} className={sidebarItem(view === v)} onClick={() => {
+            setView(v); setQuery(''); setMenu('');
+          }}>{v}</button>)}
           {flat && (
             <button className="block" onClick={() => setView('My Files')}>
               ← {view}
@@ -491,15 +482,15 @@ export function ContentFiles({
               )
               .map(row)}
           </ul>
-        </div>
-      )}
+      </SidebarSection>
       {form && (
         <FileForm
+          key={`${form.kind}:${form.parent}:${form.item?.id || 'new'}`}
           {...form}
-          files={files}
+          files={activeFiles}
           close={() => setForm(undefined)}
           saved={(f) => {
-            setForm(undefined);
+            setForm(f.kind === 'folder' && !form.item ? { kind: 'dashboard', parent: f.id } : undefined);
             setMenu('');
             let p = f.parent_id;
             const ancestors = ['root'];

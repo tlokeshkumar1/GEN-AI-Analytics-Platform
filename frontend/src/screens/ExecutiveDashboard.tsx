@@ -1,3 +1,5 @@
+import { SaveDashboardDialog } from '../components/SaveDashboard';
+import { contentChanged, control, Dashboard, fileError } from '../components/ContentFiles';
 import React, { useEffect, useState } from 'react';
 import api, { getApiErrorMessage } from '../services/api';
 import { ensureDefaultContext, selectedContext } from '../services/executionContext';
@@ -137,6 +139,11 @@ function resolveSourceInfo(
 }
 
 export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) => void }) {
+  const [savedDoc, setSavedDoc] = useState<Dashboard>();
+  const [saveAs, setSaveAs] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
+  const [saveMenu, setSaveMenu] = useState(false);
   const [dashboard, setDashboard] = useState<DashboardData | null>(cachedDashboardPayload);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(!cachedDashboardPayload);
@@ -191,9 +198,12 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
       cachedDashboardPayload = null;
       void load(true);
     };
+    const clearSaved = () => { setSavedDoc(undefined); setSaveMessage(''); };
+    window.addEventListener('dataset-context-changed', clearSaved);
     window.addEventListener('dashboard_updated', handleDashboardUpdated);
     window.addEventListener('dataset-context-changed', handleDashboardUpdated);
     return () => {
+      window.removeEventListener('dataset-context-changed', clearSaved);
       window.removeEventListener('dashboard_updated', handleDashboardUpdated);
       window.removeEventListener('dataset-context-changed', handleDashboardUpdated);
     };
@@ -237,6 +247,15 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
             <span className="material-symbols-outlined text-[15px] text-[var(--color-primary)]">add_chart</span>
             <span>Configure KPIs</span>
           </button>
+          <button className={control} disabled={saving || loading} onClick={async () => {
+            if (!savedDoc) { setSaveAs(true); return; }
+            setSaving(true); setError('');
+            try {
+              const { data } = await api.post('/content/dashboards/save', { dashboard_id: savedDoc.id, revision: savedDoc.revision,
+                sources: widgets.map(({ definition: { id, revision, dataset_id, version, semantic_revision } }) => ({ id, revision, dataset_id, version, semantic_revision })) });
+              setSavedDoc(data); contentChanged(); setSaveMessage('Saved ' + data.name);
+            } catch (err) { setError(fileError(err)); } finally { setSaving(false); }
+          }}>{saving ? 'Saving...' : 'Save'}</button>
           <button
             disabled={loading}
             onClick={() => void load(true)}
@@ -247,8 +266,17 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
             </span>
             <span>{loading ? 'Refreshing…' : 'Refresh'}</span>
           </button>
+          <div className="relative">
+            <button className={control} aria-label="Dashboard actions" aria-expanded={saveMenu} onClick={() => setSaveMenu(!saveMenu)}><span aria-hidden className="material-symbols-outlined text-[17px]">more_horiz</span></button>
+            {saveMenu && <button className={control} onClick={() => { setSaveMenu(false); setSaveAs(true); }}>Save As</button>}
+          </div>
         </div>
       </div>
+      {saveMessage && <p role="status">{saveMessage}</p>}
+      {saveAs && <SaveDashboardDialog items={widgets.map(w => w.definition)} close={() => setSaveAs(false)} saved={doc => {
+        setSavedDoc(doc); setSaveAs(false); setSaveMessage('Saved ' + doc.name);
+        onNavigate('dashboards/' + doc.id);
+      }} />}
 
       {/* Error Alert */}
       {error && (

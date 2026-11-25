@@ -16,7 +16,7 @@ afterEach(cleanup);
 const draft = (id: string, kind: string, dataset = 'projects'): GeneratedWidget => ({ definition: {
   id, title: id, kind, revision: 1, semantic_revision: 2, dataset_id: dataset, version: 3,
   query_plan: { metric: 'Revenue', aggregation: 'SUM', ...(kind === 'kpi' ? {} : { dimension: 'Region' }) },
-  dependencies: ['Revenue'], explanation: '', status: 'proposed',
+  dependencies: ['Revenue'], explanation: '', status: 'approved', reviewer: 'alice',
 }, result: { success: true, data: [{ Revenue: 42, Region: 'East' }], summary: {},
   records_matched: 1, execution_time_ms: 1, execution_backend: 'dataframe' } });
 
@@ -25,28 +25,47 @@ it('hides the results area until widgets are generated', () => {
   expect(screen.queryByLabelText('Generated results')).toBeNull();
   expect(screen.queryByRole('button', { name: /Publish Selected/ })).toBeNull();
 });
-it('groups previews and publishes only selected widgets using their original dataset context', async () => {
-  vi.mocked(api.post).mockResolvedValue({ data: {} });
+const folder = { id: 'f'.repeat(32), kind: 'folder', name: 'Reports', permission: 'owner' };
+const target = { id: 'a'.repeat(32), kind: 'dashboard', name: 'Sales', parent_id: folder.id, revision: 4, permission: 'owner', pages: [{ id: 'b'.repeat(32), name: 'Overview', widgets: [] }] };
+function setupDestination() {
+  vi.mocked(api.get).mockImplementation(async url => ({ data: url === '/content/tree' ? [folder, target] : target }));
+}
+it('groups previews and requires a confirmed destination with the original dataset reference', async () => {
+  setupDestination();
+  vi.mocked(api.post).mockResolvedValue({ data: { placements_written: 1 } });
   const published = vi.fn();
   render(<GeneratedWidgetSections widgets={[draft('Revenue KPI', 'kpi'), draft('Readiness', 'gauge'), draft('Regional chart', 'bar', 'sales')]} onPublished={published} />);
   expect(within(screen.getByRole('region', { name: 'KPI Generation' })).getByRole('checkbox', { name: /Revenue KPI/ })).toBeTruthy();
-  expect(within(screen.getByRole('region', { name: 'KPI Generation' })).getByRole('checkbox', { name: /Readiness/ })).toBeTruthy();
   fireEvent.click(screen.getByRole('checkbox', { name: /Regional chart/ }));
   fireEvent.click(screen.getByRole('button', { name: /Publish Selected/ }));
+  await screen.findByRole('dialog', { name: 'Publish to dashboard' });
+  expect(api.post).not.toHaveBeenCalled();
+  await screen.findByRole('option', { name: 'My Files / Reports' });
+  fireEvent.change(screen.getByLabelText('Folder'), { target: { value: folder.id } });
+  fireEvent.change(screen.getByLabelText('Dashboard'), { target: { value: target.id } });
+  await screen.findByRole('option', { name: 'Overview' });
+  fireEvent.click(screen.getByRole('button', { name: 'Publish selected (1)' }));
   await waitFor(() => expect(published).toHaveBeenCalledWith(['Regional chart']));
-  expect(api.post).toHaveBeenCalledWith('/dashboard/publish-recommended', expect.objectContaining({
-    items: [expect.objectContaining({ id: 'Regional chart', kind: 'bar' })],
-  }), { headers: { 'X-Dataset-Id': 'sales', 'X-Dataset-Version': '3', 'X-Semantic-Revision': '2' } });
+  expect(api.post).toHaveBeenCalledWith('/content/files/' + target.id + '/publish', expect.objectContaining({
+    duplicates: 'skip', revision: 4, page_id: target.pages[0].id,
+    sources: [{ id: 'Regional chart', revision: 1, dataset_id: 'sales', version: 3, semantic_revision: 2 }],
+  }));
 });
-it('keeps failed widgets available for retry', async () => {
+it('keeps failed destination publications available for retry', async () => {
+  setupDestination();
   vi.mocked(api.post).mockRejectedValue(new Error('Publish failed'));
   const published = vi.fn();
   render(<GeneratedWidgetSections widgets={[draft('Revenue KPI', 'kpi')]} onPublished={published} />);
   fireEvent.click(screen.getByRole('checkbox'));
   fireEvent.click(screen.getByRole('button', { name: /Publish Selected/ }));
-  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Publish failed');
+  await screen.findByRole('option', { name: 'My Files / Reports' });
+  fireEvent.change(screen.getByLabelText('Folder'), { target: { value: folder.id } });
+  fireEvent.change(screen.getByLabelText('Dashboard'), { target: { value: target.id } });
+  await screen.findByRole('option', { name: 'Overview' });
+  fireEvent.click(screen.getByRole('button', { name: 'Publish selected (1)' }));
+  expect(await screen.findByText(/Publish failed/)).toBeTruthy();
   expect(published).not.toHaveBeenCalled();
-  expect(screen.getByRole('checkbox')).toHaveProperty('checked', true);
+  expect(screen.getByRole('button', { name: 'Retry failed destinations' })).toBeTruthy();
 });
 it('places Widgets immediately before Data Explorer in the sidebar', () => {
   const navigate = vi.fn();

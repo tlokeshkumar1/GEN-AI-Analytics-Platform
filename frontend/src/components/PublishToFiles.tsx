@@ -1,3 +1,4 @@
+import { FolderDestination } from './FolderDestination';
 import { useEffect, useState } from 'react';
 import api from '../services/api';
 import type { AnalyticsDefinition } from '../services/semanticService';
@@ -13,11 +14,34 @@ import {
   useFiles,
 } from './ContentFiles';
 
-function publishable(item: AnalyticsDefinition) {
+export function publishable(item: AnalyticsDefinition) {
   return (
     item.status === 'approved' &&
     Boolean(item.reviewer && item.reviewer !== 'system' && item.dataset_id && item.version)
   );
+}
+
+// Legacy recommendation surfaces resolve stored revisions instead of publishing raw plans.
+export function usePublicationDestination(navigate: (path: string) => void = () => {}, onPublished?: (ids: string[]) => void) {
+  const [objects, setObjects] = useState<AnalyticsDefinition[]>();
+  const [destinationError, setDestinationError] = useState('');
+  async function choose(items: AnalyticsDefinition[]) {
+    setDestinationError('');
+    setObjects(items);
+  }
+  async function chooseStored(ids: string[], datasetId?: string) {
+    setDestinationError('');
+    try {
+      const available = (await getRecommendations(true, datasetId)).filter(i => ids.includes(i.id));
+      if (available.length !== ids.length) throw new Error('Save and review the selected definitions in Widgets before publishing.');
+      setObjects(available);
+    } catch (err) { setDestinationError(fileError(err)); }
+  }
+  const destinationDialog = <>
+    {destinationError && <p role="alert">{destinationError}</p>}
+    {objects && <PublishToFiles items={objects} close={() => setObjects(undefined)} navigate={navigate} onPublished={onPublished} />}
+  </>;
+  return { choose, chooseStored, destinationDialog };
 }
 
 export function ApprovedPublicationAction({
@@ -61,7 +85,9 @@ export function PublishToFiles({
   items,
   close,
   navigate,
+  onPublished,
 }: {
+  onPublished?: (ids: string[]) => void;
   items: AnalyticsDefinition[];
   close: () => void;
   navigate: (p: string) => void;
@@ -107,6 +133,7 @@ export function PublishToFiles({
   }, [id, retry]);
   async function publish() {
     if (!targets.length || busy) return;
+    if (chosen.some(i => !publishable(items[i]))) { setError('Approve the selected definitions in Widgets before publishing.'); return; }
     setBusy(true);
     setError('');
     try {
@@ -125,6 +152,7 @@ export function PublishToFiles({
             duplicates,
           });
           setOutcomes((v) => ({ ...v, [t.id]: { count: data.placements_written } }));
+          onPublished?.(chosen.map(i => items[i].id));
         } catch (err) {
           setOutcomes((v) => ({ ...v, [t.id]: { error: fileError(err) } }));
         }
@@ -170,36 +198,21 @@ export function PublishToFiles({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <label>
-          Destination
-          <select
-            className={control + ' w-full'}
-            value={id}
-            onChange={(e) => setId(e.target.value)}
-          >
-            <option value="">Choose dashboard</option>
-            {files
-              .filter(
-                (f) =>
-                  f.kind === 'dashboard' &&
-                  f.permission !== 'view' &&
-                  (f.id === id || filePath(files, f).toLowerCase().includes(search.toLowerCase())),
-              )
-              .map((f) => (
-                <option value={f.id} key={f.id}>
-                  {filePath(files, f)}
-                </option>
-              ))}
-          </select>
-        </label>
-        <div className="flex gap-2">
-          <button className={control} onClick={() => setForm('folder')}>
-            Create folder
-          </button>
-          <button className={control} onClick={() => setForm('dashboard')}>
-            Create dashboard
-          </button>
+        <FolderDestination files={files} folder={parent || ''} onChange={value => { setParent(value); setId(''); }} />
+        <div className="flex items-end gap-2">
+          <label className="grid flex-1">Dashboard
+            <select className={control} value={id} onChange={e => setId(e.target.value)}>
+              <option value="">Choose dashboard</option>
+              {files.filter(f => f.kind === 'dashboard' && f.permission !== 'view' &&
+                (f.parent_id === parent || (f.permission === 'edit' && !parent)) &&
+                filePath(files, f).toLowerCase().includes(search.toLowerCase())).map(f =>
+                <option value={f.id} key={f.id}>{filePath(files, f)}</option>)}
+            </select>
+          </label>
+          <button className={control} disabled={!parent} onClick={() => setForm('dashboard')}>+ New Dashboard</button>
         </div>
+        {!files.some(f => f.kind === 'dashboard' && f.parent_id === parent && f.permission !== 'view') &&
+          <p>No dashboards in this folder. Create a dashboard to continue.</p>}
         {doc && (
           <label>
             Page{' '}
@@ -300,12 +313,14 @@ export function PublishToFiles({
       )}
       {form && (
         <FileForm
+          key={`${form}:${parent}`}
+          embedded
           kind={form}
           parent={parent}
           files={files}
           close={() => setForm(undefined)}
           saved={(f) => {
-            if (f.kind === 'dashboard') setId(f.id);
+            if (f.kind === 'dashboard') { setParent(f.parent_id); setId(f.id); }
             else setParent(f.id);
             setForm(f.kind === 'folder' ? 'dashboard' : undefined);
           }}

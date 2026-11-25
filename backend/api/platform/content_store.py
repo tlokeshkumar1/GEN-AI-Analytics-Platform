@@ -30,8 +30,15 @@ def personal_store():
             for b in services
             if b.get("name") == service_name
         ]
+        if not matches:
+            raise HTTPException(
+                503,
+                f"My Files HANA service '{service_name}' is not bound to the API. "
+                "Provision the private content schema and bind the service as described "
+                "in docs/features/CONTENT_WORKSPACE_MIGRATION.md.",
+            )
         if len(matches) != 1:
-            raise ValueError
+            raise HTTPException(503, "My Files HANA service binding is ambiguous.")
         credentials = matches[0]["credentials"]
         user, password, schema = (
             credentials[key] for key in ("user", "password", "schema")
@@ -48,7 +55,9 @@ def personal_store():
             raise ValueError
     except (KeyError, ValueError, AttributeError, TypeError):
         raise HTTPException(
-            503, "Configure the private My Files HANA Cloud service binding."
+            503,
+            "Invalid private My Files HANA Cloud binding. Verify user, password, "
+            "schema and host; the user and schema must differ from the SQL-console account.",
         ) from None
     verify_sql_console_isolation(schema)
     return PersonalStore(

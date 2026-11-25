@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from api.models.content import (
     Bookmark,
     CreateFile,
+    DashboardSave,
     Edit,
     FilterEdit,
     Grant,
@@ -28,6 +29,11 @@ router = APIRouter(
     tags=["Personal content"],
     dependencies=[Depends(private_response)],
 )
+
+
+@router.post("/dashboards/save")
+def save_dashboard(body: DashboardSave):
+    return content_dashboard.save_dashboard(body)
 
 
 @router.get("/preferences")

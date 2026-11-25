@@ -1,5 +1,5 @@
+import { usePublicationDestination } from './PublishToFiles';
 import React, { useState } from 'react';
-import api from '../services/api';
 
 export interface PreprocessingAudit {
   rows_before?: number;
@@ -29,6 +29,7 @@ interface RecommendationModalProps {
   audit?: PreprocessingAudit;
   recommendations: RecommendedChartItem[];
   onNavigateToDashboard: () => void;
+  onNavigate?: (path: string) => void;
 }
 
 export const RecommendationModal: React.FC<RecommendationModalProps> = ({
@@ -39,8 +40,9 @@ export const RecommendationModal: React.FC<RecommendationModalProps> = ({
   audit,
   recommendations,
   onNavigateToDashboard,
+  onNavigate,
 }) => {
-  if (!isOpen) return null;
+  const { chooseStored, destinationDialog } = usePublicationDestination(onNavigate);
 
   // Track selection state by item id
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>(() => {
@@ -76,6 +78,8 @@ export const RecommendationModal: React.FC<RecommendationModalProps> = ({
 
   const selectedCount = Object.values(selectedIds).filter(Boolean).length;
 
+  if (!isOpen) return null;
+
   const handlePublish = async () => {
     const approvedItems = recommendations.filter(r => selectedIds[r.id]);
     if (approvedItems.length === 0) {
@@ -83,19 +87,7 @@ export const RecommendationModal: React.FC<RecommendationModalProps> = ({
       return;
     }
 
-    setIsPublishing(true);
-    setPublishError(null);
-    try {
-      await api.post('/dashboard/publish-recommended', {
-        title: `${domain.charAt(0).toUpperCase() + domain.slice(1)} Analytics Dashboard`,
-        items: approvedItems,
-      });
-      onClose();
-      onNavigateToDashboard();
-    } catch (err: any) {
-      setPublishError(err?.response?.data?.detail || err?.message || 'Failed to publish to dashboard');
-      setIsPublishing(false);
-    }
+    await chooseStored(approvedItems.map(i => i.id));
   };
 
   // Helper for kind badge styling in Astryx
@@ -119,6 +111,7 @@ export const RecommendationModal: React.FC<RecommendationModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 overflow-y-auto animate-fade-in">
+      {destinationDialog}
       <div className="bg-[var(--color-background-surface)] rounded-[var(--radius-container)] shadow-[var(--shadow-xl)] border border-[var(--color-border)] w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] bg-[var(--color-background-surface)]">

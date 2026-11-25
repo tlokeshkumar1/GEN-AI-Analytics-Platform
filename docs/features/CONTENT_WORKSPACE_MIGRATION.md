@@ -5,6 +5,22 @@ The My Files API persists all personal content in a private schema on the existi
 1. In an authorized test environment, provision a private HANA schema and a distinct runtime principal. Grant the private principal the required SELECT, INSERT, UPDATE and DELETE privileges on its document table. Keep the platform's SQL-console account and its inherited roles outside this schema.
 2. With the migration principal, select the private schema, verify CURRENT_SCHEMA, and apply `backend/db/migrations/004_private_content_workspace.sql`. The migration creates the document table only when absent. Verify the four column definitions and composite primary key when the table already exists. The application never issues production DDL.
 3. Bind a Cloud Foundry user-provided service named `analytics-content-hana` to the API module. Its credentials contain `user`, `password` and `schema`. An optional `host` must equal the existing HANA Cloud host. The content pool uses the existing HANA host and port and verifies the TLS certificate. Override the binding name with `CONTENT_HANA_SERVICE_NAME` if needed. Use a private MTA extension or approved binding procedure to retain it across restages. Store credentials in the binding.
+
+   The sidebar's missing-binding 503 occurs before any database connection: the API cannot find this named service in `VCAP_SERVICES`. The platform HDI binding alone does not satisfy it. The local `mta.yaml` is git-ignored; add the following to your protected deployment descriptor or extension (matching the existing API module name) so the binding survives redeployment:
+
+   ```yaml
+   modules:
+     - name: gen-ai-analytics-platform-api
+       requires:
+         - name: analytics-content-hana
+   resources:
+     - name: analytics-content-hana
+       type: org.cloudfoundry.existing-service
+       parameters:
+         service-name: analytics-content-hana
+   ```
+
+   Provision the service and apply the private-table migration before deploying this descriptor. This reference does not create credentials or grant the platform SQL console access. Missing, ambiguous and invalid bindings remain visible errors; the application does not fall back to mock or local persistence.
 4. Keep platform metadata and durable dataset objects configured for HANA. Set optional `CONTENT_FILE_LIMIT` and `CONTENT_MAX_DEPTH` to positive integers if the default limits require adjustment. After authorized restaging, verify API and App Router access with two distinct users.
 5. Run `python scripts/preview_content_workspace.py` only against the authorized test bindings. This read-only preflight checks private table shape, console isolation and the count of legacy dashboard documents. It prints the number of planned personal-file creations and ownership transfers, both zero for this release.
 

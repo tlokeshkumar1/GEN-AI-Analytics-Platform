@@ -1,3 +1,4 @@
+import { usePublicationDestination } from './PublishToFiles';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
@@ -86,6 +87,7 @@ interface AIAgentIngestionStepperProps {
   onSelectActivity?: (id: string) => void;
   onClose: () => void;
   onNavigateToDashboard: () => void;
+  onNavigate?: (path: string) => void;
   onNavigateToBuildKpi?: () => void;
 }
 
@@ -104,6 +106,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   onSelectActivity,
   onClose,
   onNavigateToDashboard,
+  onNavigate,
   onNavigateToBuildKpi,
 }) => {
   const [selectedChartIds, setSelectedChartIds] = useState<Record<string, boolean>>({});
@@ -191,6 +194,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
     setPublishError(null);
   }, [result, partialResult]);
 
+  const { chooseStored, destinationDialog } = usePublicationDestination(onNavigate);
   if (!isOpen) return null;
 
   const getStageStatus = (stageNum: number): IngestionStageStatus => {
@@ -282,39 +286,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
       return;
     }
 
-    setIsPublishing(true);
-    setPublishError(null);
-    try {
-      const headers: Record<string, string> = {};
-      if (result.dataset?.id) {
-        const version = result.version || result.dataset.currentVersion || 1;
-        selectContext({
-          datasetId: result.dataset.id,
-          version,
-          semanticRevision: 1,
-        });
-        headers['X-Dataset-Id'] = result.dataset.id;
-        headers['X-Dataset-Version'] = String(version);
-        headers['X-Semantic-Revision'] = '1';
-      }
-      await api.post(
-        '/dashboard/publish-recommended',
-        {
-          title: `${(result.domain || 'Enterprise').toUpperCase()} Analytics Dashboard`,
-          items: approvedItems,
-        },
-        { headers }
-      );
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('dataset-context-changed'));
-        window.dispatchEvent(new CustomEvent('dashboard_updated'));
-      }
-      onClose();
-      onNavigateToDashboard();
-    } catch (err: any) {
-      setPublishError(err?.response?.data?.detail || err?.message || 'Failed to publish to dashboard');
-      setIsPublishing(false);
-    }
+    await chooseStored(approvedItems.map(i => i.id), result.dataset?.id);
   };
 
   const handleGoToBuildKpi = () => {
@@ -795,6 +767,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-3 sm:p-6 overflow-y-auto animate-fade-in">
+      {destinationDialog}
       {/* High-End Professional Enterprise Card Modal */}
       <div className="bg-white border border-slate-200/90 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900">
 

@@ -188,16 +188,11 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
     fireEvent.click(screen.getByRole('checkbox', { name: /for publishing/ }));
     fireEvent.click(publishBtn);
 
-    await waitFor(() => {
-      expect(screen.getByText(/Selected widgets published alongside existing dashboard widgets/i)).toBeTruthy();
-
-    });
-
+    expect(await screen.findByRole('dialog', { name: 'Publish to dashboard' })).toBeTruthy();
+    expect(vi.mocked(api.post).mock.calls.some(([url]) => url === '/dashboard/publish-recommended')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
     const execution = vi.mocked(api.post).mock.calls.find(([url]) => url === '/insights/execute');
     expect(execution?.[1]).toMatchObject({ chart_type: chartKind });
-    const publication = vi.mocked(api.post).mock.calls.find(([url]) => url === '/dashboard/publish-recommended');
-    expect(publication?.[1]).toMatchObject({ items: [expect.objectContaining({ kind: chartKind })] });
-    expect(vi.mocked(api.post).mock.calls.some(([url]) => url === '/insights/definitions')).toBe(false);
 
     // 10. Switch Active Dataset Source: verify user stays in "Select Drag and Drop" tab
     const datasetSelect = screen.getByRole('combobox', { name: /Active Dataset Source/i });

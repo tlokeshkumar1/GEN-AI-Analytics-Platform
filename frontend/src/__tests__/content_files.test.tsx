@@ -1,36 +1,53 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContentFiles } from '../components/ContentFiles';
+import { Sidebar } from '../components/Sidebar';
 import api from '../services/api';
+import { SaveDashboardDialog } from '../components/SaveDashboard';
+import { PersonalDashboard } from '../screens/PersonalDashboard';
+import { ExecutiveDashboard, invalidateDashboardCache } from '../screens/ExecutiveDashboard';
 import { PublishToFiles } from '../components/PublishToFiles';
 
 vi.mock('../services/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn() },
   getApiErrorMessage: () => 'Storage unavailable',
 }));
+const folder = { id: 'f'.repeat(32), kind: 'folder', name: 'Reports', parent_id: null, permission: 'owner', revision: 1, description: '', deleted: false };
 const dashboard = {
   id: 'a'.repeat(32),
   kind: 'dashboard',
   name: 'Operations',
-  parent_id: null,
+  parent_id: folder.id,
   revision: 1,
   permission: 'owner',
   description: '',
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  invalidateDashboardCache();
   vi.mocked(api.get).mockImplementation(async (url) => ({
     data: url.includes('/preferences') ? { folded: [], revision: 0 } : [],
   }));
 });
 afterEach(cleanup);
 describe('My Files', () => {
+  it('uses the same section styling and expansion behavior as the other sidebar groups', async () => {
+    render(<Sidebar activePath="" isOpen isCollapsed={false} onNavigate={vi.fn()} onClose={vi.fn()} user={{ email: 'alice', role: 'Admin' }} />);
+    const mine = screen.getByRole('button', { name: 'My Files' });
+    expect(mine.className).toBe(screen.getByRole('button', { name: 'AI Dashboards' }).className);
+    expect(mine.className).toBe(screen.getByRole('button', { name: 'Administration' }).className);
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    vi.mocked(api.put).mockResolvedValue({ data: { folded: ['root'], revision: 1 } });
+    fireEvent.click(mine);
+    await waitFor(() => expect(mine.getAttribute('aria-expanded')).toBe('false'));
+    expect(screen.queryByText('+ Add Files')).toBeNull();
+  });
   it('publishes a reviewed reference into a specific page and opens the saved dashboard', async () => {
     const pageId = 'b'.repeat(32);
     vi.mocked(api.get).mockImplementation(async (url) => ({
       data:
         url === '/content/tree'
-          ? [dashboard]
+          ? [folder, dashboard]
           : { ...dashboard, pages: [{ id: pageId, name: 'Overview', widgets: [] }] },
     }));
     vi.mocked(api.post).mockResolvedValueOnce({ data: { placements_written: 1 } });
@@ -51,8 +68,9 @@ describe('My Files', () => {
       dependencies: [],
     };
     render(<PublishToFiles items={[item]} close={vi.fn()} navigate={navigate} />);
-    await screen.findByRole('option', { name: 'My Files / Operations' });
-    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: dashboard.id } });
+    await screen.findByRole('option', { name: 'My Files / Reports' });
+    fireEvent.change(screen.getByLabelText('Folder'), { target: { value: folder.id } });
+    fireEvent.change(screen.getByLabelText('Dashboard'), { target: { value: dashboard.id } });
     await screen.findByRole('option', { name: 'Overview' });
     fireEvent.click(screen.getByText('Publish selected (1)'));
     fireEvent.click(await screen.findByText('Open dashboard'));
@@ -65,27 +83,97 @@ describe('My Files', () => {
       sources: [{ id: 'units', revision: 2, semantic_revision: 1, dataset_id: 'ops', version: 3 }],
     });
   });
-  it('creates a root dashboard only after the backend confirms', async () => {
+  it('starts with Add Files and creates a folder before a named dashboard', async () => {
     const navigate = vi.fn();
     render(<ContentFiles userKey="alice" active="" navigate={navigate} />);
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    for (const name of ['Create dashboard', 'Shared with me', 'Favourites', 'Recently viewed', 'Archive', 'Recycle bin']) {
+      expect(screen.queryByRole('button', { name })).toBeNull();
+    }
     fireEvent.click(screen.getByText('+ Add Files'));
-    fireEvent.click(screen.getByText('Create dashboard'));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Operations' } });
+    expect(screen.getByRole('dialog', { name: 'Create folder' })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reports' } });
     vi.mocked(api.post).mockRejectedValueOnce(new Error());
     fireEvent.click(screen.getByText('Save'));
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(navigate).not.toHaveBeenCalled();
+    vi.mocked(api.get).mockImplementation(async url => ({ data: url.includes('preferences') ? { folded: [], revision: 0 } : [folder] }));
+    vi.mocked(api.post).mockResolvedValueOnce({ data: folder });
+    vi.mocked(api.put).mockResolvedValue({ data: { folded: [], revision: 1 } });
+    fireEvent.click(screen.getByText('Save'));
+    await screen.findByRole('dialog', { name: 'Create dashboard' });
+    expect(screen.getByLabelText('Name')).toHaveProperty('value', '');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Operations' } });
     vi.mocked(api.post).mockResolvedValueOnce({ data: dashboard });
-    vi.mocked(api.put).mockResolvedValueOnce({ data: { folded: [], revision: 1 } });
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('dashboards/' + dashboard.id));
-    expect(api.post).toHaveBeenCalledWith('/content/files', {
-      kind: 'dashboard',
-      name: 'Operations',
-      description: '',
-      parent_id: null,
+    expect(api.post).toHaveBeenLastCalledWith('/content/files', {
+      kind: 'dashboard', name: 'Operations', description: '', parent_id: folder.id,
     });
+  });
+  it('offers inline destination creation and blocks publication without confirmation', async () => {
+    render(<PublishToFiles items={[]} close={vi.fn()} navigate={vi.fn()} />);
+    expect(await screen.findByText('No folders exist. Create a folder to continue.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '+ New Dashboard' })).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('button', { name: '+ New Folder' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reports' } });
+    vi.mocked(api.get).mockResolvedValue({ data: [folder] });
+    vi.mocked(api.post).mockResolvedValueOnce({ data: folder });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '+ New Dashboard' })).toHaveProperty('disabled', false));
+    fireEvent.click(screen.getByRole('button', { name: '+ New Dashboard' }));
+    expect(screen.getByLabelText('Destination folder')).toHaveProperty('value', folder.id);
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+  it('saves an unnamed dashboard with a folder and name through the content repository', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [folder] });
+    vi.mocked(api.post).mockResolvedValue({ data: dashboard });
+    const saved = vi.fn();
+    render(<SaveDashboardDialog close={vi.fn()} saved={saved} />);
+    await screen.findByRole('option', { name: 'My Files / Reports' });
+    fireEvent.change(screen.getByLabelText('Folder'), { target: { value: folder.id } });
+    fireEvent.change(screen.getByLabelText('Dashboard name'), { target: { value: 'Operations' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }));
+    await waitFor(() => expect(saved).toHaveBeenCalledWith(dashboard));
+    expect(api.post).toHaveBeenCalledWith('/content/dashboards/save', { name: 'Operations', parent_id: folder.id, sources: [] });
+  });
+  it('asks for a name on first Save and updates the same destination on the next Save', async () => {
+    vi.mocked(api.get).mockImplementation(async url => ({ data: url === '/content/tree' ? [folder] :
+      url.startsWith('/dashboard?') ? { title: 'Dashboard', widgets: [], status: 'draft' } : [] }));
+    vi.mocked(api.post).mockResolvedValue({ data: dashboard });
+    const navigate = vi.fn();
+    render(<ExecutiveDashboard onNavigate={navigate} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', false));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('dialog', { name: 'Save dashboard' })).toBeTruthy();
+    expect(api.post).not.toHaveBeenCalled();
+    await screen.findByRole('option', { name: 'My Files / Reports' });
+    fireEvent.change(screen.getByLabelText('Folder'), { target: { value: folder.id } });
+    fireEvent.change(screen.getByLabelText('Dashboard name'), { target: { value: 'Operations' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('dashboards/' + dashboard.id));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.post).toHaveBeenLastCalledWith('/content/dashboards/save', {
+      dashboard_id: dashboard.id, revision: dashboard.revision, sources: [],
+    }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+  it('saves a named dashboard in place and exposes Save As in its contextual menu', async () => {
+    const doc = { ...dashboard, pages: [{ id: 'b'.repeat(32), name: 'Overview', widgets: [] }] };
+    vi.mocked(api.get).mockImplementation(async url => ({ data: url === '/content/tree' ? [folder, dashboard] : doc }));
+    vi.mocked(api.post).mockResolvedValue({ data: { ...doc, revision: 2 } });
+    render(<PersonalDashboard id={dashboard.id} navigate={vi.fn()} />);
+    await screen.findByRole('heading', { name: 'Operations' });
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.indexOf(screen.getByText('Save'))).toBe(buttons.indexOf(screen.getByText('Configure KPIs')) + 1);
+    expect(buttons.indexOf(screen.getByText('Refresh'))).toBe(buttons.indexOf(screen.getByText('Save')) + 1);
+    fireEvent.click(screen.getByText('Save'));
+    await screen.findByText('Dashboard saved.');
+    expect(api.post).toHaveBeenCalledWith('/content/dashboards/save', { dashboard_id: dashboard.id, revision: 1 });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Dashboard actions' }));
+    fireEvent.click(screen.getByText('Save As'));
+    expect(await screen.findByRole('dialog', { name: 'Save dashboard as' })).toBeTruthy();
   });
   it('saves expansion through the preferences API', async () => {
     vi.mocked(api.put).mockResolvedValueOnce({ data: { revision: 1, folded: ['root'] } });

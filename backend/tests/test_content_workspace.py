@@ -124,6 +124,102 @@ class FilesTests(TestCase):
                 client.get("/api/content/preferences").json()["folded"], ["root"]
             )
 
+    def test_save_requires_destination_and_reuses_saved_id(self):
+        from api.models.content import DashboardSave
+        from api.platform.content_dashboard import save_dashboard
+
+        folder = self.owner.create("folder", "Reports")
+        with patch("api.platform.content.personal_store", return_value=self.store):
+            with self.assertRaises(HTTPException):
+                save_dashboard(DashboardSave(name="Unnamed"))
+            doc = save_dashboard(
+                DashboardSave(name="Operations", parent_id=folder["id"])
+            )
+            updated = save_dashboard(
+                DashboardSave(dashboard_id=doc["id"], revision=doc["revision"])
+            )
+            self.assertEqual(updated["id"], doc["id"])
+            self.assertEqual(updated["parent_id"], folder["id"])
+            self.assertEqual(updated["name"], "Operations")
+            self.assertEqual(updated["revision"], doc["revision"] + 1)
+            with self.assertRaises(HTTPException) as err:
+                save_dashboard(
+                    DashboardSave(dashboard_id=doc["id"], revision=doc["revision"])
+                )
+            self.assertEqual(err.exception.status_code, 409)
+
+    def test_save_rolls_back_creation_for_unapproved_source(self):
+        from api.models.content import DashboardSave
+        from api.platform.content_dashboard import save_dashboard
+
+        folder = self.owner.create("folder", "Reports")
+        before = deepcopy(self.store.rows)
+        with (
+            patch("api.platform.content.personal_store", return_value=self.store),
+            patch(
+                "api.platform.content_dashboard.calculate",
+                side_effect=HTTPException(409, "Review first"),
+            ),
+        ):
+            with self.assertRaises(HTTPException):
+                save_dashboard(
+                    DashboardSave(
+                        name="Report",
+                        parent_id=folder["id"],
+                        sources=[
+                            {
+                                "id": "revenue",
+                                "revision": 1,
+                                "dataset_id": "ops",
+                                "version": 1,
+                                "semantic_revision": 1,
+                            }
+                        ],
+                    )
+                )
+        self.assertEqual(self.store.rows, before)
+
+    def test_save_preserves_layout_and_enforces_shared_permissions(self):
+        from api.models.content import DashboardSave
+        from api.platform.content_dashboard import save_dashboard
+
+        doc = self.owner.create("dashboard", "Report")
+        source = dict(
+            id="revenue", revision=1, dataset_id="ops", version=1, semantic_revision=1
+        )
+        widget = dict(
+            id=uuid4().hex,
+            source=source,
+            digest="digest",
+            width=3,
+            title="Custom title",
+        )
+        doc["pages"][0]["widgets"] = [widget]
+        doc = self.owner.save(doc, doc["revision"], "layout")
+        with (
+            patch("api.platform.content.personal_store", return_value=self.store),
+            patch(
+                "api.platform.content_dashboard.calculate",
+                return_value={"digest": "digest"},
+            ),
+        ):
+            saved = save_dashboard(
+                DashboardSave(
+                    dashboard_id=doc["id"], revision=doc["revision"], sources=[source]
+                )
+            )
+            self.assertEqual(saved["pages"], doc["pages"])
+            member = self.login("bob")
+            member.register()
+            self.owner.share(doc["id"], "bob", "view", saved["revision"])
+            with self.assertRaises(HTTPException) as err:
+                save_dashboard(
+                    DashboardSave(
+                        dashboard_id=doc["id"], revision=saved["revision"] + 1
+                    )
+                )
+            self.assertEqual(err.exception.status_code, 403)
+
     def test_missing_binding_fails_without_opening_any_database(self):
         from api.platform.content_store import personal_store
 
@@ -136,7 +232,48 @@ class FilesTests(TestCase):
             with self.assertRaises(HTTPException) as err:
                 personal_store()
             self.assertEqual(err.exception.status_code, 503)
+            self.assertIn("not bound to the API", err.exception.detail)
             connect.assert_not_called()
+
+    def test_private_binding_uses_separate_credentials_and_verifies_isolation(self):
+        import json
+        from api.platform.content_store import personal_store
+
+        personal_store.cache_clear()
+        self.addCleanup(personal_store.cache_clear)
+        binding = {
+            "user-provided": [
+                {
+                    "name": "analytics-content-hana",
+                    "credentials": {
+                        "user": "CONTENT_RUNTIME",
+                        "password": "test-only",
+                        "schema": "PRIVATE_CONTENT",
+                        "host": "hana.example",
+                    },
+                }
+            ]
+        }
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "VCAP_SERVICES": json.dumps(binding),
+                    "CONTENT_HANA_SERVICE_NAME": "analytics-content-hana",
+                },
+            ),
+            patch("api.platform.content_store.settings") as settings,
+            patch("api.platform.content_store.HANAConnectionManager") as pool,
+            patch("api.platform.content_store.verify_sql_console_isolation") as verify,
+        ):
+            settings.HANA_ADDRESS = "hana.example"
+            settings.HANA_USER = "CONSOLE"
+            settings.HANA_SCHEMA = "PLATFORM"
+            self.assertEqual(personal_store().backend, "hana")
+            verify.assert_called_once_with("PRIVATE_CONTENT")
+            pool.assert_called_once_with(
+                user="CONTENT_RUNTIME", password="test-only", schema="PRIVATE_CONTENT"
+            )
 
     def test_console_access_blocks_private_store(self):
         from api.platform.content_store import verify_sql_console_isolation

@@ -1,3 +1,4 @@
+import { SaveDashboardDialog } from '../components/SaveDashboard';
 import { useEffect, useRef, useState } from 'react';
 import api from '../services/api';
 import type { AnalyticsDefinition, ExecutionResult } from '../services/semanticService';
@@ -27,6 +28,9 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
   const [results, setResults] = useState<Record<string, Value>>({});
   const [error, setError] = useState('');
   const [seq, setSeq] = useState(0);
+  const [saveAs, setSaveAs] = useState(false);
+  const [actions, setActions] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
   const [edit, setEdit] = useState(false);
   const [filterId, setFilterId] = useState('');
   const dragged = useRef<string | undefined>(undefined);
@@ -133,24 +137,31 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
             Full screen
           </button>
         )}
+        {doc && doc.permission !== 'view' && <>
+          <button className={control} onClick={() => navigate('widgets')}>Configure KPIs</button>
+          <button className={control} disabled={busy} onClick={async () => {
+            setBusy(true); setError('');
+            try {
+              const { data } = await api.post('/content/dashboards/save', { dashboard_id: doc.id, revision: doc.revision });
+              setDoc({ ...data, permission: doc.permission }); contentChanged(); setSaveMessage('Dashboard saved.');
+            } catch (err) { setError(fileError(err)); } finally { setBusy(false); }
+          }}>Save</button>
+        </>}
         <button className={control} onClick={() => setSeq((s) => s + 1)}>
           Refresh
         </button>
-        {doc && doc.permission !== 'view' && (
-          <button className={control} aria-pressed={edit} onClick={() => setEdit(!edit)}>
-            {edit ? 'Finish editing' : 'Edit layout'}
-          </button>
-        )}
-        {doc?.permission === 'owner' && (
-          <>
-            <button className={control} onClick={() => setPanel('access')}>
-              Share
-            </button>
-            <button className={control} onClick={() => setPanel('history')}>
-              History
-            </button>
-          </>
-        )}
+        {doc && doc.permission !== 'view' && <div className="relative">
+          <button className={control} aria-label="Dashboard actions" aria-expanded={actions} onClick={() => setActions(!actions)}><span aria-hidden className="material-symbols-outlined text-[17px]">more_horiz</span></button>
+          {actions && <div className="absolute right-0 z-10 grid gap-1 p-2 bg-[var(--color-background-surface)] border rounded shadow">
+            <button className={control} aria-pressed={edit} onClick={() => { setEdit(!edit); setActions(false); }}>{edit ? 'Finish editing' : 'Edit layout'}</button>
+            {doc.permission === 'owner' && <>
+              <button className={control} onClick={() => { setSaveAs(true); setActions(false); }}>Save As</button>
+              <button className={control} onClick={() => { setPanel('access'); setActions(false); }}>Share</button>
+              <button className={control} onClick={() => { setPanel('history'); setActions(false); }}>History</button>
+            </>}
+          </div>}
+        </div>}
+        {saveAs && doc && <SaveDashboardDialog source={doc} close={() => setSaveAs(false)} saved={copy => { setSaveAs(false); navigate('dashboards/' + copy.id); }} />}
         {doc && panel && (
           <DashboardAccess
             doc={doc}
@@ -159,6 +170,7 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
           />
         )}
       </div>
+      {saveMessage && <p role="status">{saveMessage}</p>}
       {error && <p role="alert">{error}</p>}
       {!doc && !error && <p role="status">Loading dashboard…</p>}
       {doc && (

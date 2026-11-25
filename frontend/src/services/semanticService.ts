@@ -86,7 +86,14 @@ export const proposeRecommendations = async (fast = false) => {
   return (await api.post<{ items: AnalyticsDefinition[] }>(url)).data.items;
 };
 
-export const saveDefinition = async (item: AnalyticsDefinition) => (await api.post<AnalyticsDefinition>('/insights/definitions', item)).data;
+export const saveDefinition = async (item: AnalyticsDefinition) => {
+  const { dataset_id, version, dataset_name, source_file, table_name, ...definition } = item;
+  const headers: Record<string, string> = {};
+  if (dataset_id) headers['X-Dataset-Id'] = dataset_id;
+  if (version) headers['X-Dataset-Version'] = String(version);
+  if (item.semantic_revision) headers['X-Semantic-Revision'] = String(item.semantic_revision);
+  return (await api.post<AnalyticsDefinition>('/insights/definitions', definition, { headers })).data;
+};
 
 export const reviewDefinition = async (item: AnalyticsDefinition, decision: 'approved' | 'rejected') => {
   const headers: Record<string, string> = {};

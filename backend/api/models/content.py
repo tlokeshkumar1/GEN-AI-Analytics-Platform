@@ -60,6 +60,14 @@ class Publication(Revision):
     sources: list[Source] = Field(min_length=1, max_length=30)
 
 
+class DashboardSave(Contract):
+    dashboard_id: ResourceId | None = None
+    revision: int = Field(0, ge=0)
+    name: Name | None = None
+    parent_id: ResourceId | None = None
+    sources: list[Source] = Field(default_factory=list, max_length=100)
+
+
 class PageEdit(Revision):
     action: Literal["add", "rename", "duplicate", "remove", "up", "down"]
     page_id: ResourceId | None = None

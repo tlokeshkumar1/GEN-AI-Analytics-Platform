@@ -1,3 +1,4 @@
+import { usePublicationDestination } from '../PublishToFiles';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { DatasetItem } from '../../types/dataset';
 import {
@@ -8,9 +9,7 @@ import {
   executePlan,
 } from '../../services/semanticService';
 import { AnalyticsWidget } from '../AnalyticsWidget';
-import { invalidateDashboardCache } from '../../screens/ExecutiveDashboard';
 import { getApiErrorMessage } from '../../services/api';
-import api from '../../services/api';
 
 export interface ChartTypeOption {
   id: string;
@@ -332,42 +331,10 @@ export function DragDropDashboardBuilder({
     }
   };
 
-  // Step 5: Publish the Widget (Appends to existing published widgets)
+  const { chooseStored, destinationDialog } = usePublicationDestination();
   const handlePublishWidget = async () => {
     if (!createdWidget) return;
-    setIsPublishing(true);
-    setError('');
-    setMessage('');
-
-    try {
-      // Publish the reviewed preview through the validated append endpoint.
-      await api.post('/dashboard/publish-recommended', {
-        title: 'Executive Analytics Dashboard',
-        items: [{
-          id: createdWidget.id,
-          title: createdWidget.title,
-          kind: createdWidget.kind,
-          query_plan: {
-            metric: createdWidget.metric,
-            aggregation: createdWidget.aggregation,
-            dimension: createdWidget.dimension,
-            chart_type: createdWidget.kind,
-            left_dataset_id: createdWidget.datasetId,
-          },
-        }],
-      }, { headers: { 'X-Dataset-Id': createdWidget.datasetId } });
-
-      invalidateDashboardCache();
-      window.dispatchEvent(new Event('dashboard_updated'));
-      onSavedDefinition?.();
-
-      setCreatedWidget(prev => (prev ? { ...prev, isPublished: true } : null));
-      setMessage(`Successfully published "${createdWidget.title}" to the Executive Dashboard! Existing dashboard widgets were preserved.`);
-    } catch (err) {
-      setError(getApiErrorMessage(err, `Failed to publish widget "${createdWidget.title}".`));
-    } finally {
-      setIsPublishing(false);
-    }
+    await chooseStored([createdWidget.id], createdWidget.datasetId);
   };
 
   const handleResetWorkflow = () => {
@@ -381,6 +348,7 @@ export function DragDropDashboardBuilder({
 
   return (
     <div className="space-y-4">
+      {destinationDialog}
       {/* Top Header & Notifications */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-[var(--radius-container)] bg-[var(--color-surface)] border border-[var(--color-border)] shadow-[var(--shadow-2xs)]">
         <div className="flex items-center gap-3">
@@ -392,7 +360,7 @@ export function DragDropDashboardBuilder({
               Select Drag and Drop Dashboard Builder
             </h2>
             <p className="text-[11px] text-[var(--color-text-muted)]">
-              Guided 3-step creation: pick chart type, drop 2 data fields, and publish to Executive Dashboard
+              Guided 3-step creation: pick chart type, drop 2 data fields, and publish to a saved dashboard
             </p>
           </div>
         </div>
@@ -529,7 +497,7 @@ export function DragDropDashboardBuilder({
                 </h3>
                 <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
                   {createdWidget
-                    ? 'Review generated preview and publish to Executive Dashboard'
+                    ? 'Review generated preview and publish to a saved dashboard'
                     : selectedChartType
                     ? 'Step 2: Place the 2 required data fields to configure widget'
                     : 'Select or drag a chart type or KPI from the left library'}
@@ -914,8 +882,8 @@ export function DragDropDashboardBuilder({
                       </div>
                       <p className="text-[10px] text-[var(--color-text-muted)]">
                         {createdWidget.isPublished
-                          ? 'This widget is active on the Executive Dashboard alongside all previously published widgets.'
-                          : 'Publishing appends this new widget to the Executive Dashboard without replacing existing widgets.'}
+                          ? 'This widget is active on the selected dashboard alongside all previously published widgets.'
+                          : 'Publishing appends this new widget to the selected dashboard without replacing existing widgets.'}
                       </p>
                     </div>
 
@@ -938,8 +906,8 @@ export function DragDropDashboardBuilder({
                         {isPublishing
                           ? 'Publishing…'
                           : createdWidget.isPublished
-                          ? 'Published to Executive Dashboard'
-                          : 'Publish to Executive Dashboard'}
+                          ? 'Published to a saved dashboard'
+                          : 'Publish to a saved dashboard'}
                       </span>
                     </button>
                   </div>

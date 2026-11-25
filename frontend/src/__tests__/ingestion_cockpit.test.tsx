@@ -72,7 +72,8 @@ describe('AIAgentIngestionStepper sequential stages & first-upload publish', () 
     expect(screen.getAllByText('Queued')).toHaveLength(2);
   });
 
-  it('auto-selects active dataset version on first upload and passes dataset headers when publishing', async () => {
+  it('selects the uploaded dataset and requires a destination before publishing', async () => {
+    vi.mocked(api.get).mockImplementation(async url => ({ data: url.includes('/recommendations') ? [{ id: 'rec_1', title: 'Total Open Issues', kind: 'kpi', revision: 1, semantic_revision: 1, dataset_id: 'ds-first-upload', version: 1, status: 'approved', reviewer: 'alice' }] : [] }));
     vi.mocked(api.post).mockResolvedValue({ data: { status: 'success' } });
     const onClose = vi.fn();
     const onNavigateToDashboard = vi.fn();
@@ -122,24 +123,10 @@ describe('AIAgentIngestionStepper sequential stages & first-upload publish', () 
     expect(screen.getByRole('button', { name: /Build Your KPI/i })).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: /Publish on Dashboard \(1\)/i }));
 
-    await waitFor(() => {
-      expect(api.post).toHaveBeenCalledWith(
-        '/dashboard/publish-recommended',
-        expect.objectContaining({
-          title: 'ENTERPRISE Analytics Dashboard',
-          items: [expect.objectContaining({ id: 'rec_1' })],
-        }),
-        {
-          headers: {
-            'X-Dataset-Id': 'ds-first-upload',
-            'X-Dataset-Version': '1',
-            'X-Semantic-Revision': '1',
-          },
-        }
-      );
-      expect(onClose).toHaveBeenCalled();
-      expect(onNavigateToDashboard).toHaveBeenCalled();
-    });
+    expect(await screen.findByRole('dialog', { name: 'Publish to dashboard' })).toBeTruthy();
+    expect(api.post).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onNavigateToDashboard).not.toHaveBeenCalled();
   });
 
   it('streams sequential SSE stage events and returns final UploadResponse', async () => {

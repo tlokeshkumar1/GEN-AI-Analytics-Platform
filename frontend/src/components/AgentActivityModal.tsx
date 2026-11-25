@@ -3,11 +3,13 @@ import { agentActivityStore, AgentActivityRecord } from '../services/agentActivi
 import { AIAgentIngestionStepper } from './AIAgentIngestionStepper';
 
 interface AgentActivityModalProps {
+  onNavigate?: (path: string) => void;
   onNavigateToDashboard?: () => void;
   onNavigateToBuildKpi?: () => void;
 }
 
 export const AgentActivityModal: React.FC<AgentActivityModalProps> = ({
+  onNavigate,
   onNavigateToDashboard,
   onNavigateToBuildKpi,
 }) => {
@@ -72,6 +74,7 @@ export const AgentActivityModal: React.FC<AgentActivityModalProps> = ({
 
   return (
     <AIAgentIngestionStepper
+      onNavigate={onNavigate ? path => { agentActivityStore.closeModal(); onNavigate(path); } : undefined}
       isOpen={isOpen}
       isProcessing={currentActivity.isProcessing}
       filename={currentActivity.filename}

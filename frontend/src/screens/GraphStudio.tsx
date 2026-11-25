@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { ApprovedPublicationAction } from '../components/PublishToFiles';
+import { ApprovedPublicationAction, usePublicationDestination } from '../components/PublishToFiles';
 import api, { getApiErrorMessage } from '../services/api';
 import { selectedContext, ensureDefaultContext, selectContext } from '../services/executionContext';
 import { hasAdminRole } from '../services/authService';
@@ -846,24 +846,10 @@ export function GraphStudio({
     }
   };
 
+  const { choose, destinationDialog } = usePublicationDestination(onNavigate);
   const handlePublishDashboard = async () => {
-    if (!canPublish) {
-      setError('Permission denied: Only Admin or Admin+User accounts can publish widgets to the Executive Dashboard.');
-      return;
-    }
-    if (!selected.length) return;
-    await run(async () => {
-      const selectedWidgets = items.filter(i => selected.includes(`${i.id}:${i.revision}`));
-      await api.post('/insights/dashboard', {
-        title: 'Executive Analytics Dashboard',
-        items: selectedWidgets.map(i => ({ id: i.id, revision: i.revision })),
-      });
-      invalidateDashboardCache();
-      window.dispatchEvent(new Event('dashboard_updated'));
-      setPublishedKeys(prev => Array.from(new Set([...prev, ...selected])));
-      setPublishedSuccess(true);
-      setMessage(`Successfully published ${selectedWidgets.length} widget(s) to the Executive Dashboard!`);
-    }, 'publish');
+    if (!canPublish) { setError('Permission denied: Administrator access is required.'); return; }
+    if (selected.length) await choose(items.filter(i => selected.includes(`${i.id}:${i.revision}`)));
   };
 
   return (
@@ -925,6 +911,7 @@ export function GraphStudio({
       </div>
 
       {/* Global Alerts */}
+      {destinationDialog}
       <ApprovedPublicationAction items={items} navigate={onNavigate}/>
       {error && (
         <div role="alert" className="p-4 bg-[var(--color-danger-subtle)] border border-[var(--color-danger-border)] text-[var(--color-danger)] rounded-[var(--radius-container)] flex items-start gap-3 shadow-[var(--shadow-2xs)]">
@@ -1928,7 +1915,7 @@ export function GraphStudio({
       )}
 
       </div>
-      {(!widgetsOnly || generatedWidgets.length > 0) && <GeneratedWidgetSections key={widgetsOnly ? 'library' : `${activeMode}:${selectedDatasetId}`} widgets={generatedWidgets.filter(widget =>
+      {(!widgetsOnly || generatedWidgets.length > 0) && <GeneratedWidgetSections navigate={onNavigate} key={widgetsOnly ? 'library' : `${activeMode}:${selectedDatasetId}`} widgets={generatedWidgets.filter(widget =>
         widgetsOnly || (widget.source === activeMode && (!selectedDatasetId || selectedDatasetId === 'all' || widget.definition.dataset_id === selectedDatasetId))
       )} onPublished={ids => {
         setGeneratedWidgets(prev => {
@@ -2033,7 +2020,7 @@ export function GraphStudio({
                   <p className="text-xs text-slate-500 mt-0.5">
                     {canPublish
                       ? 'Review and approve definitions. Cards with "Live on Dashboard" are currently active on the Executive Dashboard.'
-                      : 'Review definitions and preview charts. Widget publishing to Executive Dashboard is restricted to Admin or Admin+User.'}
+                      : 'Review definitions and preview charts. Widget publishing to a saved dashboard is restricted to Admin or Admin+User.'}
                   </p>
                 </div>
 
@@ -2428,7 +2415,7 @@ export function GraphStudio({
                             </button>
                           ) : (
                             <div
-                              title="Only Admin or Admin+User accounts have permission to publish widgets to the Executive Dashboard."
+                              title="Only Admin or Admin+User accounts have permission to publish widgets to a saved dashboard."
                               className="px-2.5 py-1.5 rounded-[var(--radius-element)] text-xs font-medium text-[var(--color-text-muted)] bg-[var(--color-surface-active)] border border-[var(--color-border)] flex items-center gap-1.5 shrink-0 select-none cursor-not-allowed"
                             >
                               <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">lock</span>
@@ -2459,7 +2446,7 @@ export function GraphStudio({
                     <div className="text-xs text-[var(--color-text-secondary)]">
                       {selected.length === 0
                         ? 'Click "Include on Dashboard" on any approved KPI card above.'
-                        : 'Click button to deploy selected widgets live to the Executive Dashboard.'}
+                        : 'Click button to deploy selected widgets live to a saved dashboard.'}
                     </div>
                   </div>
                 </div>
@@ -2494,7 +2481,7 @@ export function GraphStudio({
                   <div>
                     <div className="text-xs font-semibold text-[var(--color-text-primary)]">Publishing Restricted to Administrators</div>
                     <div className="text-[11px] text-[var(--color-text-secondary)]">
-                      Only <strong>Admin</strong> or <strong>Admin+User</strong> accounts have permission to publish widgets to the Executive Dashboard.
+                      Only <strong>Admin</strong> or <strong>Admin+User</strong> accounts have permission to publish widgets to a saved dashboard.
                     </div>
                   </div>
                 </div>

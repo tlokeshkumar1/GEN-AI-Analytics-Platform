@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { SidebarSection, sidebarItem } from './SidebarNavigation';
 import { ContentFiles } from './ContentFiles';
 import { hasAdminRole, getRoleLabel } from '../services/authService';
 
@@ -256,14 +257,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
 
     // Expanded mode
-    let activeClasses =
-      'bg-[var(--color-primary-soft)] text-black font-semibold border border-[var(--color-primary-muted)] shadow-[var(--shadow-2xs)]';
     let badgeClasses = 'bg-[var(--color-background-subtle)] text-black';
-
-    if (isActive && isAiItem) {
-      activeClasses =
-        'bg-[var(--color-ai-soft)] text-black font-semibold border border-[var(--color-ai-muted)] shadow-[var(--shadow-2xs)]';
-    }
 
     if (item.badge === 'Live') {
       badgeClasses =
@@ -284,11 +278,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onNavigate(item.id);
           onClose();
         }}
-        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-[var(--radius-element)] transition-all duration-[var(--transition-fast)] text-left cursor-pointer text-xs relative group focus-visible:ring-2 focus-visible:ring-black outline-none ${
-          isActive
-            ? activeClasses
-            : 'text-black hover:bg-[var(--color-background-subtle)] border border-transparent font-medium'
-        }`}
+        className={isActive && isAiItem ? sidebarItem(true).replace('bg-[var(--color-primary-soft)]', 'bg-[var(--color-ai-soft)]').replace('border-[var(--color-primary-muted)]', 'border-[var(--color-ai-muted)]') : sidebarItem(isActive)}
       >
         {/* Active Left Accent Pill Indicator */}
         {isActive && (
@@ -402,45 +392,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             ) : (
               // Expanded mode: collapsible accordion
-              <div className="flex flex-col">
-                <button
-                  type="button"
-                  onClick={() => setDashboardsOpen(prev => !prev)}
-                  className={`w-full flex items-center justify-between px-2 py-1.5 rounded-[var(--radius-element)] transition-all duration-[var(--transition-fast)] text-left cursor-pointer select-none group text-xs ${
-                    isDashboardActive
-                      ? 'bg-[var(--color-background-subtle)] text-black font-semibold'
-                      : 'text-black hover:bg-[var(--color-background-subtle)] font-medium'
-                  }`}
-                  aria-expanded={dashboardsOpen}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span className="material-symbols-outlined text-[17px] text-black shrink-0">
-                      dashboard_customize
-                    </span>
-                    <span className="truncate tracking-tight text-black font-semibold">AI Dashboards</span>
-                    {isDashboardActive && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-primary)] shrink-0" />
-                    )}
-                  </div>
-                  <span
-                    className={`material-symbols-outlined text-[16px] text-black transition-transform duration-150 shrink-0 ${
-                      dashboardsOpen ? 'rotate-180' : ''
-                    }`}
-                  >
-                    keyboard_arrow_down
-                  </span>
-                </button>
-
-                {dashboardsOpen && (
-                  <div className="pl-2 ml-3.5 border-l border-[var(--color-border)] flex flex-col gap-0.5 my-1">
-                    {DASHBOARD_ITEMS.map(item => renderNavItem(item))}
-                  </div>
-                )}
-              </div>
+              <SidebarSection label="AI Dashboards" icon="dashboard_customize" active={isDashboardActive}
+                open={dashboardsOpen} toggle={() => setDashboardsOpen(prev => !prev)}>
+                {DASHBOARD_ITEMS.map(item => renderNavItem(item))}
+              </SidebarSection>
             )}
 
             {effectiveCollapsed ? renderNavItem({id:'my-files',label:'My Files',badge:null,icon:'folder'}) :
-              <ContentFiles key={user?.email} userKey={user?.email || ''} navigate={onNavigate} active={activePath}/>}
+              <ContentFiles key={user?.email} userKey={user?.email || ''} navigate={(path) => { onNavigate(path); onClose(); }} active={activePath}/>}
             {/* 2) Administration Section (Admin / Admin+User only) */}
             {isAdmin && (
               <>
@@ -449,41 +408,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {ADMIN_ITEMS.map(item => renderNavItem(item, 'Administration'))}
                   </div>
                 ) : (
-                  <div className="flex flex-col mt-1">
-                    <button
-                      type="button"
-                      onClick={() => setAdminOpen(prev => !prev)}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-[var(--radius-element)] transition-all duration-[var(--transition-fast)] text-left cursor-pointer select-none group text-xs ${
-                        isAdminActive
-                          ? 'bg-[var(--color-background-subtle)] text-black font-semibold'
-                          : 'text-black hover:bg-[var(--color-background-subtle)] font-medium'
-                      }`}
-                      aria-expanded={adminOpen}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span className="material-symbols-outlined text-[17px] text-black shrink-0">
-                          admin_panel_settings
-                        </span>
-                        <span className="truncate tracking-tight text-black font-semibold">Administration</span>
-                        {isAdminActive && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-indigo)] shrink-0" />
-                        )}
-                      </div>
-                      <span
-                        className={`material-symbols-outlined text-[16px] text-black transition-transform duration-150 shrink-0 ${
-                          adminOpen ? 'rotate-180' : ''
-                        }`}
-                      >
-                        keyboard_arrow_down
-                      </span>
-                    </button>
-
-                    {adminOpen && (
-                      <div className="pl-2 ml-3.5 border-l border-[var(--color-border)] flex flex-col gap-0.5 my-1">
-                        {ADMIN_ITEMS.map(item => renderNavItem(item))}
-                      </div>
-                    )}
-                  </div>
+                  <SidebarSection label="Administration" icon="admin_panel_settings" active={isAdminActive}
+                    open={adminOpen} toggle={() => setAdminOpen(prev => !prev)}>
+                    {ADMIN_ITEMS.map(item => renderNavItem(item))}
+                  </SidebarSection>
                 )}
               </>
             )}

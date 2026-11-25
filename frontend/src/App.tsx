@@ -599,6 +599,7 @@ export default function App() {
 
       {/* Global Autonomous 3-Agent Activity Cockpit */}
       <AgentActivityModal
+        onNavigate={handleNavigate}
         onNavigateToDashboard={() => handleNavigate('executive-dashboard')}
         onNavigateToBuildKpi={() => handleNavigate('build-your-kpi-graph-studio')}
       />

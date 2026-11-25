@@ -13,6 +13,39 @@ from api.platform.content import ContentWorkspace, file_name, new_id
 from api.platform.content_publication import calculate
 
 
+def save_dashboard(body):
+    """Checkpoint a saved layout or append approved sources to a named destination."""
+    workspace = ContentWorkspace()
+    with workspace.store.transaction():
+        if body.dashboard_id:
+            workspace = workspace.resolve(body.dashboard_id, write=True)
+            doc = workspace.get(body.dashboard_id)
+            if doc["kind"] != "dashboard":
+                raise HTTPException(422, "Select a dashboard.")
+            if doc["revision"] != body.revision:
+                raise HTTPException(409, "Dashboard changed. Reload before saving.")
+        else:
+            if not body.name or not body.parent_id or body.revision:
+                raise HTTPException(422, "Choose a folder and enter a dashboard name.")
+            doc = workspace.create("dashboard", body.name, parent_id=body.parent_id)
+        refs = [source.model_dump() for source in body.sources]
+        if len({tuple(sorted(ref.items())) for ref in refs}) != len(refs):
+            raise HTTPException(422, "Select each definition once.")
+        for ref in refs:
+            digest = calculate(workspace, ref, publishing=True)["digest"]
+            # Saving never replaces the user's existing placements or layout.
+            if any(w["source"] == ref for p in doc["pages"] for w in p["widgets"]):
+                continue
+            if sum(len(p["widgets"]) for p in doc["pages"]) >= 100:
+                raise HTTPException(409, "Dashboard placement limit reached.")
+            doc["pages"][0]["widgets"].append(
+                dict(id=new_id(), source=ref, digest=digest, width=1, title="")
+            )
+        if refs:
+            doc["publication_status"] = "published"
+        return public_document(workspace.save(doc, doc["revision"], "save"))
+
+
 def public_document(doc):
     """Filter values are returned only with an authorized source execution."""
     doc.pop("filter_groups", None)
