@@ -117,6 +117,9 @@ export const deleteDefinitions = async (items: DashboardPublicationItem[]) =>
 export interface DashboardPublicationItem {
   id: string;
   revision: number;
+  dataset_id?: string;
+  version?: number;
+  semantic_revision?: number;
 }
 
 export interface DashboardPublicationResponse {

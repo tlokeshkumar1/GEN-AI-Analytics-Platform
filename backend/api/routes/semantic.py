@@ -97,7 +97,15 @@ def get_dashboard_publication(all: bool = False):
             ns = semantic_registry.namespace(entry, cur_v, f"dashboard:{s_rev}")
             pub = semantic_registry.store.get(ns, "published")
             if pub and "items" in pub.get("value", {}):
-                all_published_items.extend(pub["value"]["items"])
+                all_published_items.extend(
+                    {
+                        **reference,
+                        "dataset_id": entry["id"],
+                        "version": cur_v,
+                        "semantic_revision": s_rev,
+                    }
+                    for reference in pub["value"]["items"]
+                )
         return {
             "title": "Executive Analytics Dashboard",
             "items": all_published_items,

@@ -11,6 +11,9 @@ import {
   fileError,
   FileForm,
   filePath,
+  fileInput,
+  fileLabel,
+  filePrimaryButton,
   useFiles,
 } from './ContentFiles';
 
@@ -175,33 +178,36 @@ export function PublishToFiles({
         if (!busy) close();
       }}
     >
-      <fieldset disabled={busy || submitted} className="grid gap-3">
-        <fieldset className="max-h-40 overflow-auto">
-          <legend>Approved objects</legend>
+      <fieldset disabled={busy || submitted} className="grid min-w-0 gap-4">
+        <fieldset className="min-w-0 rounded-lg border border-[var(--color-border)] p-3">
+          <legend className="px-1 text-sm font-semibold">Selected widgets ({chosen.length})</legend>
+          <div className="max-h-44 space-y-2 overflow-y-auto">
           {items.map((item, i) => (
-            <label className="block text-sm" key={i}>
+            <label className="flex min-w-0 items-start gap-2 rounded-md p-1.5 text-sm hover:bg-[var(--color-background-subtle)]" key={i}>
               <input
                 type="checkbox"
+                className="mt-1 shrink-0 accent-[var(--color-primary)]"
                 checked={chosen.includes(i)}
                 onChange={() =>
                   setChosen(chosen.includes(i) ? chosen.filter((n) => n !== i) : [...chosen, i])
                 }
-              />{' '}
-              {item.title} · {item.kind} · {item.dataset_name} v{item.version}
+              />
+              <span className="min-w-0 break-words"><span className="block font-medium">{item.title}</span><span className="block break-all text-xs text-[var(--color-text-muted)]">{item.kind} · {item.dataset_name || item.dataset_id} v{item.version}</span></span>
             </label>
           ))}
+          </div>
         </fieldset>
         <input
-          className={control}
+          className={fileInput}
           aria-label="Search destinations"
           placeholder="Search destinations"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
         <FolderDestination files={files} folder={parent || ''} onChange={value => { setParent(value); setId(''); }} />
-        <div className="flex items-end gap-2">
-          <label className="grid flex-1">Dashboard
-            <select className={control} value={id} onChange={e => setId(e.target.value)}>
+        <div className="flex min-w-0 flex-wrap items-end gap-2">
+          <label className={`${fileLabel} min-w-0 flex-1`}>Dashboard
+            <select className={fileInput} value={id} onChange={e => setId(e.target.value)}>
               <option value="">Choose dashboard</option>
               {files.filter(f => f.kind === 'dashboard' && f.permission !== 'view' &&
                 (f.parent_id === parent || (f.permission === 'edit' && !parent)) &&
@@ -267,7 +273,7 @@ export function PublishToFiles({
           </select>
         </label>
         <button
-          className={control}
+          className={filePrimaryButton}
           disabled={!chosen.length || !targets.length || (!!id && !current)}
           onClick={publish}
         >

@@ -386,6 +386,7 @@ def get_dashboard(refresh: bool = False):
                 )
                 defn = item.model_dump(mode="json")
                 defn["dataset_id"] = ds_id
+                defn["version"] = ds_sel.context.version
                 defn["dataset_name"] = ds_name
                 return {"definition": defn, "result": res.to_dict()}
             except Exception as exc:
@@ -462,6 +463,7 @@ def get_dashboard(refresh: bool = False):
                     "explanation": r["explanation"],
                     "status": "approved",
                     "dataset_id": context.dataset_id,
+                    "version": context.version,
                     "dataset_name": ds_name,
                 }
                 return {"definition": definition, "result": res.to_dict()}

@@ -220,69 +220,27 @@ class FilesTests(TestCase):
                 )
             self.assertEqual(err.exception.status_code, 403)
 
-    def test_missing_binding_fails_without_opening_any_database(self):
+    def test_personal_store_uses_the_application_hana_pool_without_extra_binding(self):
         from api.platform.content_store import personal_store
 
         personal_store.cache_clear()
         self.addCleanup(personal_store.cache_clear)
         with (
             patch.dict("os.environ", {"VCAP_SERVICES": "{}"}),
-            patch("api.platform.content_store.db_manager.get_connection") as connect,
+            patch("api.platform.content_store.db_manager") as pool,
         ):
-            with self.assertRaises(HTTPException) as err:
-                personal_store()
-            self.assertEqual(err.exception.status_code, 503)
-            self.assertIn("not bound to the API", err.exception.detail)
-            connect.assert_not_called()
+            store = personal_store()
+            self.assertEqual(store.backend, "hana")
+            self.assertIs(store.connection_pool(), pool)
+            pool.get_connection.assert_not_called()
 
-    def test_private_binding_uses_separate_credentials_and_verifies_isolation(self):
-        import json
+    def test_personal_store_keeps_hana_when_metadata_default_is_sqlite(self):
         from api.platform.content_store import personal_store
 
         personal_store.cache_clear()
         self.addCleanup(personal_store.cache_clear)
-        binding = {
-            "user-provided": [
-                {
-                    "name": "analytics-content-hana",
-                    "credentials": {
-                        "user": "CONTENT_RUNTIME",
-                        "password": "test-only",
-                        "schema": "PRIVATE_CONTENT",
-                        "host": "hana.example",
-                    },
-                }
-            ]
-        }
-        with (
-            patch.dict(
-                "os.environ",
-                {
-                    "VCAP_SERVICES": json.dumps(binding),
-                    "CONTENT_HANA_SERVICE_NAME": "analytics-content-hana",
-                },
-            ),
-            patch("api.platform.content_store.settings") as settings,
-            patch("api.platform.content_store.HANAConnectionManager") as pool,
-            patch("api.platform.content_store.verify_sql_console_isolation") as verify,
-        ):
-            settings.HANA_ADDRESS = "hana.example"
-            settings.HANA_USER = "CONSOLE"
-            settings.HANA_SCHEMA = "PLATFORM"
+        with patch.dict("os.environ", {"PLATFORM_METADATA_BACKEND": "sqlite"}):
             self.assertEqual(personal_store().backend, "hana")
-            verify.assert_called_once_with("PRIVATE_CONTENT")
-            pool.assert_called_once_with(
-                user="CONTENT_RUNTIME", password="test-only", schema="PRIVATE_CONTENT"
-            )
-
-    def test_console_access_blocks_private_store(self):
-        from api.platform.content_store import verify_sql_console_isolation
-
-        with patch("api.platform.content_store.db_manager") as pool:
-            with self.assertRaises(HTTPException) as err:
-                verify_sql_console_isolation("Private")
-            self.assertEqual(err.exception.status_code, 503)
-            pool.return_connection.assert_called_once()
 
     def test_hana_transaction_rolls_back_and_restores_pool_state(self):
         from api.platform.content_store import PersonalStore
@@ -454,6 +412,25 @@ class FilesTests(TestCase):
                 with self.assertRaises(HTTPException):
                     publish(self.owner, doc["id"], Publication(**args, sources=refs))
                 self.assertEqual(self.owner.get(doc["id"])["revision"], 1)
+            published_ns = semantic_registry.namespace(entry, 1, "dashboard:1")
+            self.store.put(
+                published_ns, "published", {"items": [{"id": "count", "revision": 2}]}
+            )
+            with self.assertRaises(HTTPException):
+                calculate(self.owner, refs[-1], publishing=True)
+            self.store.put(
+                published_ns,
+                "published",
+                {"items": [{"id": "count", "revision": 1}]},
+                1,
+            )
+            self.assertEqual(
+                calculate(self.owner, refs[-1], publishing=True)["result"]["summary"][
+                    "value"
+                ],
+                47,
+            )
+            self.store.delete(published_ns, "published")
             self.store.put(
                 ns, "count:1", item, self.store.get(ns, "count:1")["revision"]
             )

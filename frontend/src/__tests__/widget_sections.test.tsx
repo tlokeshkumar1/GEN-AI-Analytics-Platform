@@ -86,6 +86,48 @@ function setupStudio() {
     url.includes('/recommendations') ? [item] : url.includes('/insights/dashboard') ? { items: [] } : [] }));
   vi.mocked(api.post).mockImplementation(async (url, body) => ({ data: url === '/insights/execute' ? draft('x', 'kpi').result : body || {} }));
 }
+it.each(['existing', 'new'])('publishes only four explicitly selected widgets to a %s dashboard when fifteen are already live', async destination => {
+  const live = Array.from({ length: 15 }, (_, index) => draft(`Live ${index}`, 'kpi').definition);
+  const additions = Array.from({ length: 4 }, (_, index) => ({
+    ...draft('shared-widget-id', 'kpi', `source-${index}`).definition,
+    title: `New widget ${index}`, version: index + 2,
+  }));
+  let created = destination === 'existing';
+  vi.mocked(api.get).mockImplementation(async (url: string) => ({ data:
+    url === '/datasets' ? [{ id: 'projects', name: 'Projects', currentVersion: 3, isActive: true, columns: [] }] :
+    url.includes('semantics') ? [{ revision: 2, status: 'approved', fields: [], relationships: [], derived_metrics: [] }] :
+    url.includes('/recommendations') ? [...live, ...additions] :
+    url.includes('/insights/dashboard') ? { items: live.map(({ id, revision }) => ({ id, revision })) } :
+    url === '/content/tree' ? (created ? [folder, target] : [folder]) :
+    url.includes('/content/files/') ? target : [] }));
+  vi.mocked(api.post).mockImplementation(async url => {
+    if (url === '/content/files') { created = true; return { data: target }; }
+    return { data: { placements_written: 4 } };
+  });
+  render(<GraphStudio widgetsOnly onNavigate={vi.fn()} />);
+  await screen.findByRole('heading', { name: 'New widget 3' });
+  expect(screen.getByRole('button', { name: /Publish to Dashboard/ })).toHaveProperty('disabled', true);
+  expect(screen.getByText('15 on Dashboard')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Not on Dashboard (4)' }));
+  additions.forEach(item => fireEvent.click(screen.getByRole('checkbox', { name: `Select ${item.title}` })));
+  expect(screen.getByText('4 widgets selected to publish')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /Publish 4 Widgets/ }));
+  const dialog = await screen.findByRole('dialog', { name: 'Publish to dashboard' });
+  expect(within(dialog).getAllByRole('checkbox')).toHaveLength(4);
+  expect(within(dialog).queryByText('Live 0')).toBeNull();
+  await screen.findByRole('option', { name: 'My Files / Reports' });
+  fireEvent.change(screen.getByLabelText('Folder'), { target: { value: folder.id } });
+  if (destination === 'new') {
+    fireEvent.click(screen.getByRole('button', { name: '+ New Dashboard' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New report' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create dashboard' }));
+  } else fireEvent.change(screen.getByLabelText('Dashboard'), { target: { value: target.id } });
+  await screen.findByRole('option', { name: 'Overview' });
+  fireEvent.click(screen.getByRole('button', { name: 'Publish selected (4)' }));
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/content/files/' + target.id + '/publish', expect.objectContaining({
+    sources: additions.map(({ id, revision, dataset_id, version, semantic_revision }) => ({ id, revision, dataset_id, version, semantic_revision })),
+  })));
+});
 it('shows saved widget cards in the Widgets library with creation inputs hidden', async () => {
   setupStudio();
   render(<GraphStudio widgetsOnly onNavigate={vi.fn()} />);

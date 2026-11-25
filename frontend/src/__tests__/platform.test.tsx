@@ -93,7 +93,7 @@ describe('Platform correctness and navigation', () => {
     expect(await screen.findByText('Monthly Net Revenue')).toBeTruthy();
     expect(screen.getByText('Include on Dashboard')).toBeTruthy();
     expect(screen.queryByText('Publishing (Admin Only)')).toBeNull();
-    expect(screen.getByText('No widgets selected for Executive Dashboard')).toBeTruthy();
+    expect(screen.getByText('No widgets selected for publishing')).toBeTruthy();
   });
 
   it('renders scatter chart without error even when only one numeric measure is present', () => {

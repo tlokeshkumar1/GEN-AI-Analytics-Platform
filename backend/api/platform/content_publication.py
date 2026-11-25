@@ -60,10 +60,22 @@ def calculate(workspace, ref, publishing=False, expected_digest=None, filters=()
     if not row:
         raise HTTPException(404, "Definition unavailable.")
     item = AnalyticsItem.model_validate(row["value"])
+    reviewed = bool(item.reviewer) and item.reviewer != "system"
+    if item.reviewer == "system":
+        # The Executive Dashboard publishes engine-validated recommendations.
+        # Only those exact published revisions may be reused in My Files.
+        publication = source_store.get(
+            semantic_registry.namespace(entry, version, f"dashboard:{revision}"),
+            "published",
+        )
+        reviewed = bool(publication) and any(
+            published.get("id") == item.id
+            and published.get("revision") == item.revision
+            for published in publication["value"].get("items", [])
+        )
     if (
         item.status != "approved"
-        or not item.reviewer
-        or item.reviewer == "system"
+        or not reviewed
         or item.semantic_revision != revision
         or item.id != ref["id"]
         or item.revision != ref["revision"]

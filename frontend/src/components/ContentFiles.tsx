@@ -1,4 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Archive, Copy, FolderPlus, LayoutDashboard, LoaderCircle, MoreHorizontal, Pencil, RotateCcw, Search, Star, Trash2, X } from 'lucide-react';
+import { FileActionsMenu, fileMenuItem } from './FileActionsMenu';
 import { SidebarSection, sidebarChildren, sidebarItem } from './SidebarNavigation';
 import api, { getApiErrorMessage } from '../services/api';
 
@@ -29,6 +31,10 @@ export const fileError = (err: unknown) =>
   getApiErrorMessage(err, 'Could not complete this file operation.');
 export const control =
   'rounded border border-[var(--color-border)] bg-[var(--color-background-surface)] px-2 py-1 text-sm';
+export const fileInput = 'w-full min-w-0 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-background-surface)] px-3 py-2.5 text-sm text-[var(--color-text-primary)] outline-none transition focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary-muted)] disabled:opacity-60';
+export const fileLabel = 'grid gap-1.5 text-sm font-medium text-[var(--color-text-secondary)]';
+export const filePrimaryButton = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[var(--color-primary)] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--color-primary-hover)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-50';
+export const fileSecondaryButton = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-background-surface)] px-3 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-background-subtle)] disabled:cursor-not-allowed disabled:opacity-50';
 export function filePath(files: FileEntry[], file: FileEntry): string {
   const parent = files.find((f) => f.id === file.parent_id);
   return (parent ? filePath(files, parent) : 'My Files') + ' / ' + file.name;
@@ -74,10 +80,12 @@ export function FileDialog({
   title,
   children,
   close,
+  busy = false,
 }: {
   title: string;
   children: React.ReactNode;
   close: () => void;
+  busy?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -90,12 +98,13 @@ export function FileDialog({
       ref={ref}
       onCancel={(event) => { event.preventDefault(); close(); }}
       aria-label={title}
-      className="m-auto w-[min(92vw,32rem)] rounded-xl p-6 shadow-xl backdrop:bg-black/40"
+      aria-busy={busy}
+      className="m-auto max-h-[85vh] w-[min(92vw,32rem)] overflow-y-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-background-surface)] p-6 text-sm text-[var(--color-text-primary)] shadow-2xl backdrop:bg-black/40 backdrop:backdrop-blur-sm"
     >
-      <header className="flex items-center justify-between mb-4">
-        <h2 className="font-semibold">{title}</h2>
-        <button aria-label="Close dialog" onClick={close}>
-          ✕
+      <header className="mb-5 flex items-center justify-between gap-4">
+        <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+        <button type="button" aria-label="Close dialog" disabled={busy} onClick={close} className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-background-subtle)] disabled:opacity-40">
+          <X aria-hidden="true" size={18} />
         </button>
       </header>
       {children}
@@ -127,7 +136,7 @@ export function FileForm({
   const [error, setError] = useState('');
   const body = (
       <form
-        className="grid gap-3"
+        className="grid gap-4" aria-busy={busy}
         onSubmit={async (e) => {
           e.preventDefault();
           if (busy) return;
@@ -151,30 +160,33 @@ export function FileForm({
           }
         }}
       >
-        <label className="grid">
-          Name
+        <label className={fileLabel}>
+          {embedded && kind === 'folder' ? 'Folder name' : 'Name'}
           <input
             autoFocus
+            disabled={busy}
             required
             maxLength={120}
-            className={control}
+            className={fileInput}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
         </label>
-        <label className="grid">
+        <label className={fileLabel}>
           Description
           <textarea
+            disabled={busy}
             maxLength={2000}
-            className={control}
+            className={fileInput}
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
           />
         </label>
-        <label className="grid">
+        <label className={fileLabel}>
           Destination folder
           <select
-            className={control}
+            disabled={busy}
+            className={fileInput}
             value={destination}
             onChange={(e) => setDestination(e.target.value)}
           >
@@ -189,24 +201,27 @@ export function FileForm({
           </select>
         </label>
         {kind === 'folder' && !item && !embedded && (
-          <label className="grid">
+          <label className={fileLabel}>
             First dashboard name (optional)
             <input
-              className={control}
+              className={fileInput}
               maxLength={120}
               value={first}
               onChange={(e) => setFirst(e.target.value)}
             />
           </label>
         )}
-        {error && <p role="alert">{error}</p>}
-        <button disabled={busy || !name.trim() || (kind === 'dashboard' && !item && !destination)} className={control}>
-          {busy ? 'Saving…' : 'Save'}
-        </button>
-        {embedded && <button type="button" className={control} onClick={close}>Cancel creation</button>}
+        {error && <p role="alert" className="rounded-lg bg-[var(--color-error-soft)] px-3 py-2 text-sm text-[var(--color-error)]">{error}</p>}
+        <div className="flex items-center justify-end gap-2">
+          {embedded && <button type="button" disabled={busy} className={fileSecondaryButton} onClick={close}>Cancel creation</button>}
+          <button type="submit" disabled={busy || !name.trim() || (kind === 'dashboard' && !item && !destination)} className={filePrimaryButton}>
+            {busy && <LoaderCircle aria-hidden="true" size={16} className="shrink-0 animate-spin motion-reduce:animate-none" />}
+            <span role={busy ? 'status' : undefined}>{busy ? 'Saving…' : embedded ? `Create ${kind}` : 'Save'}</span>
+          </button>
+        </div>
       </form>
   );
-  return embedded ? body : <FileDialog title={`${item ? 'Edit' : 'Create'} ${kind}`} close={close}>{body}</FileDialog>;
+  return embedded ? body : <FileDialog title={`${item ? 'Edit' : 'Create'} ${kind}`} busy={busy} close={() => { if (!busy) close(); }}>{body}</FileDialog>;
 }
 export function ContentFiles({
   navigate,
@@ -221,14 +236,15 @@ export function ContentFiles({
   const bin = view === 'Recycle bin';
   const archive = view === 'Archive';
   const flat = view !== 'My Files';
-  const { files: activeFiles, error: activeError, loading } = useFiles();
-  const { files: archivedFiles, error: archiveError } = useFiles(false, true);
-  const { files: deletedFiles, error: binError } = useFiles(true);
+  const { files: activeFiles, loading } = useFiles();
+  const { files: archivedFiles } = useFiles(false, true);
+  const { files: deletedFiles } = useFiles(true);
   const files = bin ? deletedFiles : archive ? archivedFiles : activeFiles;
-  const error = activeError || archiveError || binError;
   const isActive = active === 'my-files' || active.startsWith('dashboards/');
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState('');
+  const closeMenu = useCallback(() => setMenu(''), []);
+  const menuAnchor = useRef<HTMLButtonElement | null>(null);
   const [message, setMessage] = useState('');
   const [form, setForm] = useState<{
     kind: FileEntry['kind'];
@@ -259,8 +275,8 @@ export function ContentFiles({
           revision.current = data.revision;
           setFolded(isActive ? data.folded.filter((id: string) => id !== 'root') : data.folded);
         }
-      } catch (err) {
-        if (!request.signal.aborted) setMessage(fileError(err));
+      } catch {
+        // Keep the default expansion when saved sidebar preferences are unavailable.
       }
     }
     void loadPreferences();
@@ -346,32 +362,44 @@ export function ContentFiles({
           </button>
           {
             <button
+              type="button"
               aria-label={'Actions for ' + f.name}
-              onClick={() => setMenu(menu === f.id ? '' : f.id)}
+              aria-haspopup="menu"
+              aria-expanded={menu === f.id}
+              aria-controls={menu === f.id ? 'file-actions-menu-' + f.id : undefined}
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md outline-none transition-colors hover:bg-[var(--color-background-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${menu === f.id ? 'bg-[var(--color-primary-soft)] text-[var(--color-primary)]' : 'text-[var(--color-text-muted)]'}`}
+              onClick={event => {
+                menuAnchor.current = event.currentTarget;
+                setMenu(menu === f.id ? '' : f.id);
+              }}
             >
-              <span aria-hidden className="material-symbols-outlined text-[17px]">more_horiz</span>
+              <MoreHorizontal aria-hidden="true" size={18} />
             </button>
           }
         </div>
-        {menu === f.id && (
-          <div className="grid text-left border-l pl-2">
+        {menu === f.id && menuAnchor.current && (
+          <FileActionsMenu anchor={menuAnchor.current} label={f.name} close={closeMenu}>
             {!bin && !archive && (
-              <button onClick={() => changeFlag(f, 'favourite')}>
+              <button type="button" role="menuitem" className={fileMenuItem} onClick={() => changeFlag(f, 'favourite')}>
+                <Star aria-hidden="true" size={16} />
                 {f.favourite ? 'Remove favourite' : 'Add to favourites'}
               </button>
             )}
             {!bin && f.permission === 'owner' && (
-              <button onClick={() => changeFlag(f, 'archived')}>
+              <button type="button" role="menuitem" className={fileMenuItem} onClick={() => changeFlag(f, 'archived')}>
+                <Archive aria-hidden="true" size={16} />
                 {archive ? 'Unarchive' : 'Archive'}
               </button>
             )}
             {!bin && !archive && f.permission === 'owner' && (
               <>
-                <button onClick={() => setForm({ kind: f.kind, parent: f.parent_id, item: f })}>
+                <button type="button" role="menuitem" className={fileMenuItem} onClick={() => setForm({ kind: f.kind, parent: f.parent_id, item: f })}>
+                  <Pencil aria-hidden="true" size={16} />
                   Rename, move or edit
                 </button>
                 {f.kind === 'dashboard' && (
                   <button
+                    type="button" role="menuitem" className={fileMenuItem}
                     onClick={async () => {
                       const name = window.prompt(
                         'Name for duplicate dashboard',
@@ -393,21 +421,26 @@ export function ContentFiles({
                       }
                     }}
                   >
-                    Duplicate dashboard
+                    <Copy aria-hidden="true" size={16} />Duplicate dashboard
                   </button>
                 )}
                 {f.kind === 'folder' &&
                   (['folder', 'dashboard'] as const).map((kind) => (
-                    <button key={kind} onClick={() => setForm({ kind, parent: f.id })}>
+                    <button type="button" role="menuitem" className={fileMenuItem} key={kind} onClick={() => setForm({ kind, parent: f.id })}>
+                      {kind === 'folder' ? <FolderPlus aria-hidden="true" size={16} /> : <LayoutDashboard aria-hidden="true" size={16} />}
                       Create {kind}
                     </button>
                   ))}
               </>
             )}
             {f.permission === 'owner' && !archive && (
-              <button onClick={() => void trash(f)}>{bin ? 'Restore' : 'Delete'}</button>
+              <div className="mt-1 border-t border-[var(--color-border)] pt-1">
+                <button type="button" role="menuitem" className={`${fileMenuItem} ${!bin ? 'text-[var(--color-error)] hover:bg-[var(--color-error-soft)] focus:bg-[var(--color-error-soft)] focus:text-[var(--color-error)]' : ''}`} onClick={() => void trash(f)}>
+                  {bin ? <RotateCcw aria-hidden="true" size={16} /> : <Trash2 aria-hidden="true" size={16} />}{bin ? 'Restore' : 'Delete'}
+                </button>
+              </div>
             )}
-          </div>
+          </FileActionsMenu>
         )}
         {!query && !flat && f.kind === 'folder' && !folded.includes(f.id) && (
           <ul className={sidebarChildren}>{files.filter((c) => c.parent_id === f.id).map(row)}</ul>
@@ -419,9 +452,6 @@ export function ContentFiles({
     <section aria-label="Personal files" className="text-xs py-1">
       <SidebarSection label="My Files" icon="folder" active={isActive}
         open={!folded.includes('root')} toggle={() => toggle('root')}>
-          <button className={sidebarItem()} onClick={() => {
-            setView('My Files'); setForm({ kind: 'folder', parent: null });
-          }}><span className="flex items-center gap-2.5"><span aria-hidden className="material-symbols-outlined text-[17px]">add</span><span>+ Add Files</span></span></button>
           {[
             ...(activeFiles.some(f => f.permission && f.permission !== 'owner') ? ['Shared with me'] : []),
             ...(activeFiles.some(f => f.favourite) ? ['Favourites'] : []),
@@ -437,18 +467,22 @@ export function ContentFiles({
             </button>
           )}
           {!!files.length && (
-            <input
-              aria-label="Search files"
-              placeholder="Search files"
-              className="w-full my-1 border-b p-1"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+            <div className="relative mx-1 my-2 flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-background-subtle)] text-[var(--color-text-muted)] transition focus-within:border-[var(--color-primary)] focus-within:bg-[var(--color-background-surface)] focus-within:ring-2 focus-within:ring-[var(--color-primary-muted)]">
+              <Search aria-hidden="true" size={14} className="pointer-events-none absolute left-2.5" />
+              <input
+                type="search"
+                aria-label="Search files"
+                placeholder="Search files"
+                className="min-w-0 w-full appearance-none rounded-lg bg-transparent py-2 pl-8 pr-3 text-xs text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-placeholder)]"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
           )}
           {loading && <p role="status">Loading files…</p>}
-          {(error || message) && (
+          {message && (
             <div role="alert">
-              {error || message}{' '}
+              {message}{' '}
               <button
                 onClick={() => {
                   setMessage('');
@@ -482,6 +516,9 @@ export function ContentFiles({
               )
               .map(row)}
           </ul>
+          <button className={sidebarItem()} onClick={() => {
+            setView('My Files'); setForm({ kind: 'folder', parent: null });
+          }}><span className="flex items-center gap-2.5"><span aria-hidden className="material-symbols-outlined text-[17px]">add</span><span>Add Files</span></span></button>
       </SidebarSection>
       {form && (
         <FileForm

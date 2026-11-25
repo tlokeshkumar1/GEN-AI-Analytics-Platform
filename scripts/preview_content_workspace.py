@@ -13,8 +13,8 @@ def main():
     legacy = metadata_store()
     if legacy.backend != "hana":
         raise SystemExit("A HANA Cloud platform binding is required.")
-    private = personal_store()
-    with private.transaction() as cursor:
+    content = personal_store()
+    with content.transaction() as cursor:
         cursor.execute(
             "SELECT TOP 0 NAMESPACE, DOCUMENT_ID, REVISION, PAYLOAD FROM PLATFORM_DOCUMENTS"
         )
@@ -30,7 +30,8 @@ def main():
                 "legacy_dashboard_documents": legacy_count,
                 "personal_files_to_create": 0,
                 "ownership_assignments": 0,
-                "private_table_readable": True,
+                "content_table_readable": True,
+                "uses_application_pool": content.connection_pool() is legacy.connection_pool(),
             },
             indent=2,
         )

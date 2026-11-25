@@ -1,30 +1,23 @@
-# HANA Cloud migration and Cloud Foundry operation
+# My Files in the application HANA schema
 
-The My Files API persists all personal content in a private schema on the existing SAP HANA Cloud instance. It requires the private schema because the platform includes an authenticated administrative SQL browser. The existing dataset and definition repositories remain in their current application schema.
+My Files uses the same configured HANA connection pool and schema as application metadata. A separate content service or HDI container is not required. `personal_store()` always selects the HANA backend, with the existing `HANA_*` settings or application HDI binding.
 
-1. In an authorized test environment, provision a private HANA schema and a distinct runtime principal. Grant the private principal the required SELECT, INSERT, UPDATE and DELETE privileges on its document table. Keep the platform's SQL-console account and its inherited roles outside this schema.
-2. With the migration principal, select the private schema, verify CURRENT_SCHEMA, and apply `backend/db/migrations/004_private_content_workspace.sql`. The migration creates the document table only when absent. Verify the four column definitions and composite primary key when the table already exists. The application never issues production DDL.
-3. Bind a Cloud Foundry user-provided service named `analytics-content-hana` to the API module. Its credentials contain `user`, `password` and `schema`. An optional `host` must equal the existing HANA Cloud host. The content pool uses the existing HANA host and port and verifies the TLS certificate. Override the binding name with `CONTENT_HANA_SERVICE_NAME` if needed. Use a private MTA extension or approved binding procedure to retain it across restages. Store credentials in the binding.
+## Storage
 
-   The sidebar's missing-binding 503 occurs before any database connection: the API cannot find this named service in `VCAP_SERVICES`. The platform HDI binding alone does not satisfy it. The local `mta.yaml` is git-ignored; add the following to your protected deployment descriptor or extension (matching the existing API module name) so the binding survives redeployment:
+All content operations address `PLATFORM_DOCUMENTS`. In the current installation this is a synonym for `PLATFORM_METADATA` in the configured application schema. Existing dataset and definition documents remain in that table. Personal files, preferences, grants and history use their existing `files-v1:` and `files-users:` namespaces. Application ownership and sharing checks remain enabled.
 
-   ```yaml
-   modules:
-     - name: gen-ai-analytics-platform-api
-       requires:
-         - name: analytics-content-hana
-   resources:
-     - name: analytics-content-hana
-       type: org.cloudfoundry.existing-service
-       parameters:
-         service-name: analytics-content-hana
-   ```
+The application SQL browser can access these records through its existing database account. This shared-schema arrangement was explicitly requested; it does not provide database isolation from SQL-browser administrators.
 
-   Provision the service and apply the private-table migration before deploying this descriptor. This reference does not create credentials or grant the platform SQL console access. Missing, ambiguous and invalid bindings remain visible errors; the application does not fall back to mock or local persistence.
-4. Keep platform metadata and durable dataset objects configured for HANA. Set optional `CONTENT_FILE_LIMIT` and `CONTENT_MAX_DEPTH` to positive integers if the default limits require adjustment. After authorized restaging, verify API and App Router access with two distinct users.
-5. Run `python scripts/preview_content_workspace.py` only against the authorized test bindings. This read-only preflight checks private table shape, console isolation and the count of legacy dashboard documents. It prints the number of planned personal-file creations and ownership transfers, both zero for this release.
+For a new installation, deploy the existing application database artifacts or apply the appropriate application metadata migration. The API does not create or alter tables at startup. Do not replace an existing `PLATFORM_DOCUMENTS` synonym with another table.
 
-The existing Executive Dashboard, its approvals and links retain their current ownership and visibility. No legacy data is copied into personal files. Users can explicitly publish approved definitions into their own dashboards. Running the migration again does not create another dashboard, sample folder or migration user.
+## Consolidation completed on 25 November 2026
 
-Rollback consists of restoring the prior application build. Retain the private schema and binding for recovery until an approved retention procedure applies. Rehearse rollback and pooled transaction behavior in a test schema first. Source changes, offline tests and the migration script do not by themselves provision a cloud schema. GitHub Actions remains CI-only.
+The one document in the temporary `analytics-content-hana` container was copied to the application schema with its namespace, document ID, revision and payload preserved. The copy was read back and compared before deleting the separate service. A local backup is retained under the git-ignored `backend/preprocessing/output/content-schema-migration-backup-*.json` path.
 
+The separate content binding and deployment requirement were removed. Local source now uses the application pool; applying this source change to a deployed API requires its normal deployment. Existing dataset and dashboard ownership was not reassigned.
+
+## Verification
+
+Run `python scripts/preview_content_workspace.py` with the backend environment for a read-only document-store preflight. The consolidation also verified insert, read, update and delete through `personal_store()` against live HANA, rolling back the verification transaction. No probe records were retained.
+
+After refreshing the local frontend, create a folder and save a dashboard through My Files. In the SQL browser, inspect `PLATFORM_METADATA` for the saved document namespaces. Saving layouts does not duplicate the source datasets.

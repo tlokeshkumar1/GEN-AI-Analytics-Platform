@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { ApprovedPublicationAction, usePublicationDestination } from '../components/PublishToFiles';
+import { usePublicationDestination } from '../components/PublishToFiles';
 import api, { getApiErrorMessage } from '../services/api';
 import { selectedContext, ensureDefaultContext, selectContext } from '../services/executionContext';
 import { hasAdminRole } from '../services/authService';
@@ -95,13 +95,14 @@ const GENAI_10_STEPS = [
 
 type CreationMode = 'visual' | 'prompt' | 'data_options';
 
+const definitionKey = (item: AnalyticsDefinition) => JSON.stringify([item.dataset_id, item.version, item.semantic_revision, item.id, item.revision]);
+
 interface CachedStudioState {
   datasets: DatasetItem[];
   model: SemanticModel | null;
   items: AnalyticsDefinition[];
   selectedDatasetId: string;
   publishedKeys: string[];
-  selectedKeys: string[];
 }
 
 let cachedStudioState: CachedStudioState | null = null;
@@ -245,11 +246,10 @@ export function GraphStudio({
   const [aggregation, setAggregation] = useState('COUNT');
   const [dimension, setDimension] = useState('');
   const [kind, setKind] = useState('kpi');
-  const [selected, setSelected] = useState<string[]>(cachedStudioState?.selectedKeys ?? []);
+  const [selected, setSelected] = useState<string[]>([]);
   const [publishedKeys, setPublishedKeys] = useState<string[]>(cachedStudioState?.publishedKeys ?? []);
   const [filterDashboard, setFilterDashboard] = useState<'all' | 'published' | 'not_published'>('all');
   const [fileScopeFilter, setFileScopeFilter] = useState<string>('all');
-  const [deleteSelected, setDeleteSelected] = useState<string[]>([]);
   const [deletingItems, setDeletingItems] = useState<Record<string, boolean>>({});
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [edit, setEdit] = useState<AnalyticsDefinition | null>(null);
@@ -453,9 +453,14 @@ export function GraphStudio({
         getDashboardPublication(true).catch(() => ({ title: '', items: [], status: 'unpublished' })),
       ]);
     const itemsList = Array.isArray(pubRes) ? pubRes : ((pubRes as any)?.items || []);
-    const pubKeys = itemsList.map((p: any) => `${p.id}:${p.revision}`);
+    const pubKeys = recommendations.filter(item => itemsList.some((reference: any) =>
+      reference.id === item.id && reference.revision === item.revision &&
+      (!reference.dataset_id || reference.dataset_id === item.dataset_id) &&
+      (!reference.version || reference.version === item.version) &&
+      (!reference.semantic_revision || reference.semantic_revision === item.semantic_revision)
+    )).map(definitionKey);
     setPublishedKeys(pubKeys);
-    setSelected(pubKeys);
+    setSelected(previous => previous.filter(key => recommendations.some(item => definitionKey(item) === key)));
     setItems(recommendations);
     cachedStudioState = {
       datasets: allDatasets,
@@ -463,7 +468,6 @@ export function GraphStudio({
       items: recommendations,
       selectedDatasetId: resolvedId,
       publishedKeys: pubKeys,
-      selectedKeys: pubKeys,
     };
   };
 
@@ -497,7 +501,7 @@ export function GraphStudio({
   }, []);
 
   const togglePreview = async (item: AnalyticsDefinition) => {
-    const key = `${item.id}:${item.revision}`;
+    const key = definitionKey(item);
     if (previews[key]) {
       setPreviews(previous => {
         const next = { ...previous };
@@ -526,7 +530,7 @@ export function GraphStudio({
   };
 
   const handleReviewItem = async (item: AnalyticsDefinition, decision: 'approved' | 'rejected') => {
-    const key = `${item.id}:${item.revision}`;
+    const key = definitionKey(item);
     if (reviewingItems[key]) return;
     setReviewingItems(previous => ({ ...previous, [key]: decision }));
     setError('');
@@ -565,10 +569,9 @@ export function GraphStudio({
 
   const removeDeletedKeys = (keysToRemove: string[]) => {
     const keySet = new Set(keysToRemove);
-    setItems(prev => prev.filter(i => !keySet.has(`${i.id}:${i.revision}`)));
+    setItems(prev => prev.filter(i => !keySet.has(definitionKey(i))));
     setSelected(prev => prev.filter(k => !keySet.has(k)));
     setPublishedKeys(prev => prev.filter(k => !keySet.has(k)));
-    setDeleteSelected(prev => prev.filter(k => !keySet.has(k)));
     setPreviews(prev => {
       const next = { ...prev };
       keysToRemove.forEach(k => delete next[k]);
@@ -579,7 +582,7 @@ export function GraphStudio({
   };
 
   const handleDeleteItem = async (item: AnalyticsDefinition) => {
-    const key = `${item.id}:${item.revision}`;
+    const key = definitionKey(item);
     if (deletingItems[key]) return;
     setDeletingItems(prev => ({ ...prev, [key]: true }));
     setError('');
@@ -602,7 +605,7 @@ export function GraphStudio({
   const handleBulkDelete = async (keysToDelete: string[]) => {
     if (!keysToDelete.length) return;
     const targets = items
-      .filter(i => keysToDelete.includes(`${i.id}:${i.revision}`))
+      .filter(i => keysToDelete.includes(definitionKey(i)))
       .map(i => ({ id: i.id, revision: i.revision }));
     if (!targets.length) return;
     await run(async () => {
@@ -846,10 +849,10 @@ export function GraphStudio({
     }
   };
 
-  const { choose, destinationDialog } = usePublicationDestination(onNavigate);
+  const { choose, destinationDialog } = usePublicationDestination(onNavigate, () => { setSelected([]); setMessage('Selected widgets published to My Files.'); });
   const handlePublishDashboard = async () => {
     if (!canPublish) { setError('Permission denied: Administrator access is required.'); return; }
-    if (selected.length) await choose(items.filter(i => selected.includes(`${i.id}:${i.revision}`)));
+    if (selected.length) await choose(items.filter(i => selected.includes(definitionKey(i))));
   };
 
   return (
@@ -912,7 +915,7 @@ export function GraphStudio({
 
       {/* Global Alerts */}
       {destinationDialog}
-      <ApprovedPublicationAction items={items} navigate={onNavigate}/>
+      <button type="button" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs font-medium text-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-50" disabled={busy || !selected.length} onClick={() => void handlePublishDashboard()}>Publish selection to My Files ({selected.length})</button>
       {error && (
         <div role="alert" className="p-4 bg-[var(--color-danger-subtle)] border border-[var(--color-danger-border)] text-[var(--color-danger)] rounded-[var(--radius-container)] flex items-start gap-3 shadow-[var(--shadow-2xs)]">
           <span className="material-symbols-outlined text-[var(--color-danger)] text-xl mt-0.5">error</span>
@@ -1948,17 +1951,17 @@ export function GraphStudio({
           return itemDsId === fileScopeFilter;
         });
 
-        const publishedCount = inScopeItems.filter(i => publishedKeys.includes(`${i.id}:${i.revision}`)).length;
-        const notPublishedCount = inScopeItems.filter(i => !publishedKeys.includes(`${i.id}:${i.revision}`)).length;
+        const publishedCount = inScopeItems.filter(i => publishedKeys.includes(definitionKey(i))).length;
+        const notPublishedCount = inScopeItems.filter(i => !publishedKeys.includes(definitionKey(i))).length;
         const approvedCount = inScopeItems.filter(i => i.status === 'approved').length;
         const displayedItems = inScopeItems.filter(item => {
-          const key = `${item.id}:${item.revision}`;
+          const key = definitionKey(item);
           if (filterDashboard === 'published') return publishedKeys.includes(key);
           if (filterDashboard === 'not_published') return !publishedKeys.includes(key);
           return true;
         });
-        const displayedKeys = displayedItems.map(i => `${i.id}:${i.revision}`);
-        const selectedInView = displayedKeys.filter(k => deleteSelected.includes(k));
+        const displayedKeys = displayedItems.map(i => definitionKey(i));
+        const selectedInView = displayedKeys.filter(k => selected.includes(k));
         const allDisplayedSelected = displayedKeys.length > 0 && selectedInView.length === displayedKeys.length;
 
         return (
@@ -2081,9 +2084,9 @@ export function GraphStudio({
                           setConfirmBulkDelete(false);
                           if (allDisplayedSelected) {
                             const viewSet = new Set(displayedKeys);
-                            setDeleteSelected(prev => prev.filter(k => !viewSet.has(k)));
+                            setSelected(prev => prev.filter(k => !viewSet.has(k)));
                           } else {
-                            setDeleteSelected(prev => Array.from(new Set([...prev, ...displayedKeys])));
+                            setSelected(prev => Array.from(new Set([...prev, ...displayedKeys])));
                           }
                         }}
                         className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${allDisplayedSelected
@@ -2173,10 +2176,9 @@ export function GraphStudio({
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-start">
                 {displayedItems.map(item => {
-                  const key = `${item.id}:${item.revision}`;
+                  const key = definitionKey(item);
                   const isPublished = publishedKeys.includes(key);
                   const isSelected = selected.includes(key);
-                  const isDeleteSelected = deleteSelected.includes(key);
                   const isCardDeleting = Boolean(deletingItems[key]);
                   const isPreviewOpen = Boolean(previews[key]);
                   const isPreviewLoading = Boolean(loadingPreviews[key]);
@@ -2186,13 +2188,11 @@ export function GraphStudio({
                   return (
                     <article
                       key={key}
-                      className={`bg-[var(--color-surface)] border rounded-[var(--radius-container)] p-3.5 shadow-[var(--shadow-2xs)] transition-all flex flex-col justify-between h-full space-y-2.5 relative overflow-hidden ${isDeleteSelected
-                          ? 'border-[var(--color-danger-border)] ring-2 ring-[var(--color-danger)]/15 bg-[var(--color-danger-subtle)]/30'
+                      className={`bg-[var(--color-surface)] border rounded-[var(--radius-container)] p-3.5 shadow-[var(--shadow-2xs)] transition-all flex flex-col justify-between h-full space-y-2.5 relative overflow-hidden ${isSelected
+                          ? 'border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/15 bg-[var(--color-primary-soft)]/30'
                           : isPublished
                             ? 'border-[var(--color-border)] ring-1 ring-[var(--color-border-strong)]'
-                            : isSelected
-                              ? 'border-[var(--color-success-border)] ring-2 ring-[var(--color-success)]/15'
-                              : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:shadow-[var(--shadow-xs)]'
+                            : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:shadow-[var(--shadow-xs)]'
                         }`}
                     >
                       {/* Header with Title, Kind Badge, Dashboard Status, and Review Status */}
@@ -2202,17 +2202,17 @@ export function GraphStudio({
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <input
                                 type="checkbox"
-                                checked={isDeleteSelected}
+                                checked={isSelected}
                                 disabled={busy || isCardDeleting}
-                                aria-label={`Select ${item.title} for deletion`}
-                                title="Select for bulk delete"
+                                aria-label={`Select ${item.title}`}
+                                title="Select widget for publishing or bulk actions"
                                 onChange={() => {
                                   setConfirmBulkDelete(false);
-                                  setDeleteSelected(prev =>
+                                  setSelected(prev =>
                                     prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
                                   );
                                 }}
-                                className="w-3.5 h-3.5 rounded-[var(--radius-inner)] border-[var(--color-border)] text-[var(--color-danger)] focus:ring-[var(--color-danger)] cursor-pointer shrink-0"
+                                className="w-3.5 h-3.5 rounded-[var(--radius-inner)] border-[var(--color-border)] text-[var(--color-primary)] focus:ring-[var(--color-primary)] cursor-pointer shrink-0"
                               />
                               <h3 className="font-semibold text-xs sm:text-sm text-[var(--color-text-primary)] leading-snug truncate" title={item.title}>
                                 {item.title}
@@ -2411,7 +2411,7 @@ export function GraphStudio({
                               <span className="material-symbols-outlined text-[16px]">
                                 {isSelected ? 'check_box' : 'add_box'}
                               </span>
-                              <span>{isSelected ? 'Included on Dashboard' : 'Include on Dashboard'}</span>
+                              <span>{isSelected ? 'Selected to publish' : 'Include on Dashboard'}</span>
                             </button>
                           ) : (
                             <div
@@ -2440,13 +2440,13 @@ export function GraphStudio({
                   <div>
                     <div className="text-sm font-semibold text-[var(--color-text-primary)]">
                       {selected.length === 0
-                        ? 'No widgets selected for Executive Dashboard'
-                        : `${selected.length} widget${selected.length > 1 ? 's' : ''} ready to publish (${publishedKeys.length} live on dashboard)`}
+                        ? 'No widgets selected for publishing'
+                        : `${selected.length} widget${selected.length > 1 ? 's' : ''} selected to publish`}
                     </div>
                     <div className="text-xs text-[var(--color-text-secondary)]">
                       {selected.length === 0
-                        ? 'Click "Include on Dashboard" on any approved KPI card above.'
-                        : 'Click button to deploy selected widgets live to a saved dashboard.'}
+                        ? 'Select the widgets you want to publish using their checkboxes.'
+                        : 'Publish only these selected widgets to an existing or new dashboard.'}
                     </div>
                   </div>
                 </div>

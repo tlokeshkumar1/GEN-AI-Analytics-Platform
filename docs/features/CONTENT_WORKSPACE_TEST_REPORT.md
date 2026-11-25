@@ -16,3 +16,7 @@ The new backend tests exercise private namespaces, folder hierarchy, revision co
 An existing Graph Studio test assumed US number grouping. Its expectation now follows the same browser locale as the preview. The multi-dataset test verifies that a source-scoped filter matches zero records on one widget while the other retains its exact total.
 
 Live HANA migration, concurrent multi-instance writes, Cloud Foundry sign-in and browser refresh, full browser automation and remote GitHub Actions remain unverified. The migration guide describes the private schema, read-only preflight and required binding. The feature checkpoint lists unfinished requirements.
+
+## Shared-schema follow-up ? 25 November 2026
+
+My Files now uses the application HANA pool. The 13 focused content workspace tests passed, including application-pool selection and the existing ownership/sharing behavior. One live document was migrated and compared before deleting the temporary content service. Live HANA insert/read/update/delete checks passed in a rolled-back transaction. The previous private-schema deployment guidance is superseded by `CONTENT_WORKSPACE_MIGRATION.md`. Browser save verification remains a user check.
