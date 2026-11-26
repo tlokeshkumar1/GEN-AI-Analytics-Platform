@@ -1,10 +1,11 @@
 import { SaveDashboardDialog } from '../components/SaveDashboard';
 import { useEffect, useRef, useState } from 'react';
 import api from '../services/api';
-import type { AnalyticsDefinition, ExecutionResult } from '../services/semanticService';
+import { refreshPersonalDashboard, type DashboardValue as Value } from '../services/personalDashboardService';
 import { AnalyticsWidget } from '../components/AnalyticsWidget';
+import { PersonalDashboardSkeleton } from '../components/dashboard/PersonalDashboardSkeleton';
 import { DashboardAccess } from '../components/DashboardAccess';
-import { PlacementFilters, type ScopedFilters } from '../components/PlacementFilters';
+import { PlacementFilters } from '../components/PlacementFilters';
 import {
   control,
   contentChanged,
@@ -14,18 +15,13 @@ import {
   useFiles,
 } from '../components/ContentFiles';
 
-type Value =
-  | {
-      definition: AnalyticsDefinition;
-      result: ExecutionResult;
-      filters: ScopedFilters;
-      filter_fields: string[];
-    }
-  | { error: string };
 export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: string) => void }) {
   const [doc, setDoc] = useState<Dashboard>();
   const [pageId, setPageId] = useState('');
   const [results, setResults] = useState<Record<string, Value>>({});
+  const [loadingDocument, setLoadingDocument] = useState(true);
+  const [loadingResults, setLoadingResults] = useState(false);
+  const loading = loadingDocument || loadingResults;
   const [error, setError] = useState('');
   const [seq, setSeq] = useState(0);
   const [saveAs, setSaveAs] = useState(false);
@@ -35,9 +31,19 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
   const [filterId, setFilterId] = useState('');
   const dragged = useRef<string | undefined>(undefined);
   const surface = useRef<HTMLElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const syncFullscreen = () => setIsFullscreen(document.fullscreenElement === surface.current);
+    syncFullscreen();
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    return () => document.removeEventListener('fullscreenchange', syncFullscreen);
+  }, []);
   const [busy, setBusy] = useState(false);
   const [panel, setPanel] = useState<'access' | 'history'>();
   const { files } = useFiles();
+  const preserveResults = useRef(false);
+  const executionSignature = useRef('');
+  const forceRefresh = useRef(false);
   useEffect(() => {
     const abort = new AbortController();
     api.post('/content/files/' + id + '/opened', null, { signal: abort.signal }).catch((err) => {
@@ -46,49 +52,66 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
     return () => abort.abort();
   }, [id]);
   useEffect(() => {
-    const reload = () => setSeq((n) => n + 1);
+    const reload = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      preserveResults.current = detail?.dashboardId === id && detail?.layoutOnly === true;
+      setSeq((n) => n + 1);
+    };
     window.addEventListener('content-files-changed', reload);
     return () => window.removeEventListener('content-files-changed', reload);
-  }, []);
+  }, [id]);
   useEffect(() => {
     const abort = new AbortController();
     setError('');
-    setDoc(undefined);
-    setResults({});
+    setLoadingDocument(true);
+    if (!preserveResults.current) setResults({});
     api
       .get<Dashboard>('/content/files/' + id, { signal: abort.signal })
       .then(({ data }) => {
         if (abort.signal.aborted) return;
         if (data.kind !== 'dashboard') throw new Error('Select a dashboard.');
-        setDoc(data);
+        setDoc({ ...data });
+        const selectedPage = data.pages.find((p) => p.id === pageId) || data.pages[0];
+        setLoadingResults(Boolean(selectedPage?.widgets.length));
         setPageId((p) => (data.pages.some((v) => v.id === p) ? p : data.pages[0].id));
       })
       .catch((err) => {
         if (!abort.signal.aborted) setError(fileError(err));
+      })
+      .finally(() => {
+        if (!abort.signal.aborted) setLoadingDocument(false);
       });
     return () => abort.abort();
   }, [id, seq]);
   const page = doc?.pages.find((p) => p.id === pageId);
   useEffect(() => {
     const abort = new AbortController();
+    const signature = JSON.stringify([id, page?.id, page?.widgets.map(w => [w.id, w.source]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
+    if (preserveResults.current && signature === executionSignature.current) {
+      preserveResults.current = false;
+      setLoadingResults(false);
+      return () => abort.abort();
+    }
+    preserveResults.current = false;
+    executionSignature.current = '';
     setResults({});
-    if (page?.widgets.length)
-      api
-        .post('/content/files/' + id + '/refresh', null, {
-          params: { page_id: page.id },
-          signal: abort.signal,
-        })
-        .then(({ data }) => {
-          if (abort.signal.aborted) return;
-          if (data.revision !== doc?.revision) {
-            setError('Dashboard changed. Refresh to view the latest layout.');
-            return;
-          }
-          setResults(data.widgets);
+    setLoadingResults(Boolean(page?.widgets.length));
+    if (page?.widgets.length && doc) {
+      const force = forceRefresh.current;
+      forceRefresh.current = false;
+      refreshPersonalDashboard(id, page.id, doc.revision, abort.signal, (key, value) => {
+        if (!abort.signal.aborted) setResults(previous => ({ ...previous, [key]: value }));
+      }, force)
+        .then(() => {
+          if (!abort.signal.aborted) executionSignature.current = signature;
         })
         .catch((err) => {
           if (!abort.signal.aborted) setError(fileError(err));
+        })
+        .finally(() => {
+          if (!abort.signal.aborted) setLoadingResults(false);
         });
+    }
     return () => abort.abort();
   }, [id, page, doc]);
   async function change(path: string, body: Record<string, unknown>, method: 'post' | 'patch') {
@@ -97,7 +120,7 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
     setError('');
     try {
       await api[method]('/content/files/' + id + path, { ...body, revision: doc.revision });
-      contentChanged();
+      contentChanged({ dashboardId: id, layoutOnly: true });
     } catch (err) {
       setError(fileError(err));
     } finally {
@@ -119,14 +142,18 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
   return (
     <section
       ref={surface}
-      className="p-5 space-y-4 bg-[var(--color-background-body)] overflow-y-auto"
+      className="executive-dashboard personal-dashboard space-y-3.5 w-full max-w-[1560px] mx-auto pt-1 pb-16 bg-[var(--color-background-body)]"
     >
       <div className="text-xs text-slate-500">{doc ? filePath(files, doc) : 'My Files'}</div>
-      <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-2xl font-semibold mr-auto">{doc?.name || 'Dashboard'}</h1>
-        {document.fullscreenEnabled && (
+      <div className="flex flex-wrap items-center gap-2 py-2 px-1 border-b border-[var(--color-border)]">
+        <div className="w-8 h-8 rounded-[var(--radius-element)] bg-[var(--color-surface-active)] border border-[var(--color-border)] flex items-center justify-center shrink-0">
+          <span aria-hidden className="material-symbols-outlined text-[18px]">dashboard</span>
+        </div>
+        <h1 className="text-base font-semibold tracking-tight mr-auto">{doc?.name || 'Dashboard'}</h1>
+        {(document.fullscreenEnabled || isFullscreen) && (
           <button
             className={control}
+            aria-pressed={isFullscreen}
             onClick={() => {
               const task = document.fullscreenElement
                 ? document.exitFullscreen()
@@ -134,7 +161,7 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
               task?.catch((err) => setError(fileError(err)));
             }}
           >
-            Full screen
+            {isFullscreen ? 'Exit full screen' : 'Full screen'}
           </button>
         )}
         {doc && doc.permission !== 'view' && <>
@@ -142,13 +169,19 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
           <button className={control} disabled={busy} onClick={async () => {
             setBusy(true); setError('');
             try {
-              const { data } = await api.post('/content/dashboards/save', { dashboard_id: doc.id, revision: doc.revision });
-              setDoc({ ...data, permission: doc.permission }); contentChanged(); setSaveMessage('Dashboard saved.');
+              await api.post('/content/dashboards/save', { dashboard_id: doc.id, revision: doc.revision });
+              contentChanged({ dashboardId: id, layoutOnly: true }); setSaveMessage('Dashboard saved.');
             } catch (err) { setError(fileError(err)); } finally { setBusy(false); }
           }}>Save</button>
         </>}
-        <button className={control} onClick={() => setSeq((s) => s + 1)}>
-          Refresh
+        <button className={`${control} inline-flex items-center gap-1.5 disabled:opacity-50`} disabled={loading} onClick={() => {
+          setLoadingDocument(true);
+          forceRefresh.current = true;
+          preserveResults.current = false;
+          setSeq((s) => s + 1);
+        }}>
+          <span aria-hidden className={`material-symbols-outlined text-[17px] ${loading ? 'motion-safe:animate-spin' : ''}`}>refresh</span>
+          {loading ? 'Refreshing…' : 'Refresh'}
         </button>
         {doc && doc.permission !== 'view' && <div className="relative">
           <button className={control} aria-label="Dashboard actions" aria-expanded={actions} onClick={() => setActions(!actions)}><span aria-hidden className="material-symbols-outlined text-[17px]">more_horiz</span></button>
@@ -172,10 +205,10 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
       </div>
       {saveMessage && <p role="status">{saveMessage}</p>}
       {error && <p role="alert">{error}</p>}
-      {!doc && !error && <p role="status">Loading dashboard…</p>}
+      {loading && !doc && !error && <PersonalDashboardSkeleton />}
       {doc && (
         <>
-          <p>{doc.description}</p>
+          {doc.description && <p className="text-xs text-[var(--color-text-secondary)]">{doc.description}</p>}
           <div className="flex gap-2 flex-wrap">
             {doc.pages.map((p) => (
               <button
@@ -183,8 +216,10 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
                 aria-pressed={pageId === p.id}
                 key={p.id}
                 onClick={() => {
+                  if (pageId === p.id) return;
                   setPageId(p.id);
                   setResults({});
+                  setLoadingResults(Boolean(p.widgets.length));
                 }}
               >
                 {p.name}
@@ -200,7 +235,8 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
               ))}
             </fieldset>
           )}
-          {!page?.widgets.length && (
+          {loading && !Object.keys(results).length && !error && <PersonalDashboardSkeleton />}
+          {!loading && !page?.widgets.length && (
             <div className="p-8 rounded-lg border text-center">
               <h2 className="font-semibold">Your page is ready for widgets</h2>
               <p className="my-2">Choose an approved KPI or chart and publish it to this page.</p>
@@ -209,9 +245,21 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
               </button>
             </div>
           )}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {page?.widgets.map((w) => {
+          {(!loading || Object.keys(results).length > 0) && (['kpi', 'chart'] as const).map((group) => {
+            const placements = page?.widgets.filter((w) => {
               const value = results[w.id];
+              if (!value) return false;
+              const isKpi = value && 'definition' in value && value.definition.kind === 'kpi';
+              return group === 'kpi' ? isKpi : !isKpi;
+            }) || [];
+            if (!placements.length) return null;
+            return (
+          <div key={group} role="group" aria-label={group === 'kpi' ? 'Dashboard KPIs' : 'Dashboard charts'} className={group === 'kpi'
+            ? 'grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2.5'
+            : 'grid grid-cols-1 lg:grid-cols-2 gap-3.5'}>
+            {placements.map((w) => {
+              const value = results[w.id];
+              const definition = value && 'definition' in value ? value.definition : undefined;
               const mutate = (action: string, opts = {}) =>
                 change('/widgets/' + w.id, { action, ...opts }, 'patch');
               return (
@@ -238,18 +286,31 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
                       );
                     dragged.current = undefined;
                   }}
-                  className={
-                    'border rounded-lg p-4 min-w-0 ' +
-                    ['', 'lg:col-span-1', 'lg:col-span-2', 'lg:col-span-3'][w.width]
-                  }
+                  title={`Version ${w.source.version} · Semantic revision ${w.source.semantic_revision}`}
+                  className={'group/card relative min-w-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)] shadow-[var(--shadow-2xs)] hover:border-[var(--color-border-strong)] transition-all ' +
+                    (group === 'kpi'
+                      ? 'p-3 flex flex-col justify-between'
+                      : 'p-3.5 space-y-2.5 hover:shadow-[var(--shadow-xs)]') +
+                    (group === 'kpi'
+                      ? ['', '', ' sm:col-span-2', ' sm:col-span-3'][w.width] || ''
+                      : w.width > 1 ? ' lg:col-span-2' : '')}
                 >
-                  <h2 className="font-semibold">
+                  <div className={group === 'kpi' ? 'mb-2' : 'flex flex-wrap items-center gap-2 pb-2 border-b border-[var(--color-border)]'}>
+                  <h2 className={group === 'kpi'
+                    ? 'text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] break-words leading-snug'
+                    : 'text-xs sm:text-sm font-semibold text-[var(--color-text-primary)] break-words leading-snug'}>
                     {w.title ||
                       (value && 'definition' in value ? value.definition.title : 'Widget')}
                   </h2>
-                  <small>
-                    Version {w.source.version} · Semantic revision {w.source.semantic_revision}
-                  </small>
+                  {group === 'chart' && definition && <>
+                    <span className="text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-surface-active)] text-[var(--color-text-secondary)] border border-[var(--color-border)] shrink-0">
+                      {definition.kind.replace(/_/g, ' ')}
+                    </span>
+                    {definition.dataset_name && <span title={definition.dataset_name} className="text-[10px] font-medium px-2 py-0.5 rounded-[var(--radius-inner)] bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)] border border-[var(--color-border)] truncate max-w-[220px]">
+                      {definition.dataset_name}
+                    </span>}
+                  </>}
+                  </div>
                   {value ? (
                     'error' in value ? (
                       <p role="alert">{value.error}</p>
@@ -257,6 +318,7 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
                       <AnalyticsWidget
                         definition={value.definition}
                         result={value.result}
+                        showTable={value.definition.kind === 'table'}
                         isDashboard
                       />
                     )
@@ -313,6 +375,18 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
               );
             })}
           </div>
+            );
+          })}
+          {loadingResults && Object.keys(results).length > 0 && !error && (
+            <div role="status" aria-label="Loading remaining widgets" className="space-y-3.5">
+              <span className="sr-only">Loading remaining widgets…</span>
+              <div aria-hidden="true" className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 motion-safe:animate-pulse">
+                {Array.from({ length: Math.min(4, (page?.widgets.length || 0) - Object.keys(results).length) }, (_, index) => (
+                  <div key={index} className="h-72 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-container)]" />
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </section>

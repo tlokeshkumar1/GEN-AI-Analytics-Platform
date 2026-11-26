@@ -3,6 +3,7 @@
 import csv
 import hashlib
 import io
+import logging
 import os
 import time
 import threading
@@ -12,6 +13,8 @@ from fastapi import HTTPException
 from api.models.execution_context import current_identity, current_selection
 from api.platform.semantic import now
 from api.platform.store import metadata_store
+
+logger = logging.getLogger(__name__)
 
 
 class JobService:
@@ -246,8 +249,15 @@ class JobService:
             ai_token = current_ai_settings.set(job.get("ai_settings") or ai_settings())
             stopped = threading.Event()
             heartbeat = None
+            started = time.monotonic()
+            activity = {"stage": "starting", "batches_read": None}
+            logger.info(
+                "Job claimed | job=%s | kind=%s | attempt=%s | workspace=%s | active=1",
+                key, job["kind"], job["attempts"] + 1, workspace,
+            )
             try:
                 if state == "cancelled":
+                    logger.info("Job cancelled before execution | job=%s", key)
                     return key
 
                 def progress(stage, **values):
@@ -262,6 +272,14 @@ class JobService:
                             {"worker": worker, "until": time.time() + 180},
                             latest["revision"],
                         )
+                        batches = values.get("batches_read", activity["batches_read"])
+                        if stage != activity["stage"] or batches != activity["batches_read"] or stage == "starting":
+                            logger.info(
+                                "Job progress | job=%s | kind=%s | stage=%s | elapsed=%.1fs%s",
+                                key, job["kind"], stage, time.monotonic() - started,
+                                f" | batches_read={batches}" if batches is not None else "",
+                            )
+                        activity.update(stage=stage, batches_read=batches)
 
                 def renew_lease():
                     while not stopped.wait(30):
@@ -277,13 +295,19 @@ class JobService:
                                     {"worker": worker, "until": time.time() + 180},
                                     latest["revision"],
                                 )
+                                logger.info(
+                                    "Job still running | job=%s | kind=%s | stage=%s | elapsed=%.1fs | active=1",
+                                    key, job["kind"], activity["stage"], time.monotonic() - started,
+                                )
                         except HTTPException:
+                            logger.warning("Job lease renewal stopped | job=%s; lease lost or cancellation requested", key)
                             return
 
                 heartbeat = threading.Thread(target=renew_lease, daemon=True)
                 heartbeat.start()
                 progress("starting")
                 if job["kind"] == "index":
+                    progress("indexing")
                     payload = job["payload"]
                     entry = self.datasets._entry(
                         self.datasets._catalog(), payload["dataset_id"]
@@ -322,6 +346,10 @@ class JobService:
                     result=output,
                     error=None,
                 )
+                logger.info(
+                    "Job succeeded | job=%s | kind=%s | elapsed=%.1fs | active=0",
+                    key, job["kind"], time.monotonic() - started,
+                )
             except Exception as exc:
                 row = self.store.get(namespace, key)
                 cancelled = row["value"]["state"] == "cancel_requested"
@@ -337,6 +365,12 @@ class JobService:
                     state="cancelled" if cancelled else "failed",
                     error=safe_error,
                     stage="cancelled" if cancelled else "failed",
+                )
+                logger.log(
+                    logging.INFO if cancelled else logging.ERROR,
+                    "Job %s | job=%s | kind=%s | stage=%s | elapsed=%.1fs | error=%s | active=0",
+                    "cancelled" if cancelled else "failed", key, job["kind"],
+                    activity["stage"], time.monotonic() - started, safe_error,
                 )
             finally:
                 stopped.set()
@@ -515,8 +549,10 @@ class JobService:
                     binding.get("duplicate_policy", "keep"),
                     binding.get("deletion_field"),
                 )
+            progress("enriching_dataset")
             self._enrich_synced_dataset(receipt, binding)
         # Checkpoints move only after the dataset receipt was committed. Retrying reuses that receipt.
+        progress("saving_checkpoint")
         latest = self.store.get(namespace, payload["binding_id"])
         self.store.put(
             namespace,

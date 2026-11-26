@@ -1,5 +1,9 @@
 """Dashboard revision, layout and page operations."""
 
+import contextvars
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from fastapi import HTTPException
 from api.models.content import (
     FilterEdit,
@@ -10,7 +14,12 @@ from api.models.content import (
     Revision,
 )
 from api.platform.content import ContentWorkspace, file_name, new_id
-from api.platform.content_publication import calculate
+from api.platform.content_publication import CalculationBatch, calculate
+from api.utils.logger import get_logger
+
+logger = get_logger(__name__)
+# One bounded pool per API process, shared across dashboard requests.
+_widget_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="my-files-widget")
 
 
 def save_dashboard(body):
@@ -96,24 +105,63 @@ def duplicate(resource_id: ResourceId, body: NewFile):
         return workspace.save(doc, doc["revision"], "duplicate")
 
 
-def refresh(resource_id: ResourceId, page_id: ResourceId):
+def prepare_refresh(resource_id: ResourceId, page_id: ResourceId):
     workspace = ContentWorkspace().resolve(resource_id)
     doc = workspace.get(resource_id)
     page = next((p for p in doc.get("pages", []) if p["id"] == page_id), None)
     if page is None:
         raise HTTPException(404, "Page unavailable.")
-    results = {}
-    for widget in page["widgets"]:
+    return workspace, doc, page
+
+
+def refresh_events(workspace, doc, page, force=False):
+    batch = CalculationBatch()
+    started = time.monotonic()
+
+    def execute(widget):
+        widget_started = time.monotonic()
         try:
-            results[widget["id"]] = calculate(
+            value = calculate(
                 workspace,
                 widget["source"],
                 expected_digest=widget["digest"],
                 filters=effective_filters(doc, page, widget),
+                batch=batch,
+                cache_results=True,
+                force=force,
             )
-            results[widget["id"]]["filters"] = scoped_filters(doc, page, widget)
+            value["filters"] = scoped_filters(doc, page, widget)
         except HTTPException as exc:
-            results[widget["id"]] = {"error": exc.detail}
+            value = {"error": exc.detail}
+        except Exception:
+            logger.exception("Dashboard widget execution failed | widget=%s", widget["id"])
+            value = {"error": "Widget execution failed. Refresh to retry."}
+        logger.info("Dashboard widget ready | widget=%s | elapsed=%.3fs", widget["id"], time.monotonic() - widget_started)
+        return {"type": "widget", "id": widget["id"], "value": value, "revision": doc["revision"]}
+
+    yield {"type": "start", "revision": doc["revision"], "total": len(page["widgets"])}
+    futures = []
+    try:
+        for widget in page["widgets"]:
+            futures.append(_widget_pool.submit(contextvars.copy_context().run, execute, widget))
+        for future in as_completed(futures):
+            yield future.result()
+        logger.info(
+            "Dashboard refresh complete | dashboard=%s | widgets=%s | cache_hits=%s | elapsed=%.3fs",
+            doc["id"], len(futures), batch.cache_hits, time.monotonic() - started,
+        )
+        yield {"type": "complete", "revision": doc["revision"]}
+    finally:
+        for future in futures:
+            future.cancel()
+
+
+def refresh(resource_id: ResourceId, page_id: ResourceId, force=False):
+    workspace, doc, page = prepare_refresh(resource_id, page_id)
+    results = {}
+    for event in refresh_events(workspace, doc, page, force):
+        if event["type"] == "widget":
+            results[event["id"]] = event["value"]
     return {"revision": doc["revision"], "widgets": results}
 
 

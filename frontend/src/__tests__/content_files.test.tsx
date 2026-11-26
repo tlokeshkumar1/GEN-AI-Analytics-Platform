@@ -120,9 +120,12 @@ describe('My Files', () => {
     const navigate = vi.fn();
     render(<ContentFiles userKey="alice" active="" navigate={navigate} />);
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
-    for (const name of ['Create dashboard', 'Shared with me', 'Favourites', 'Recently viewed', 'Archive', 'Recycle bin']) {
+    for (const name of ['Create dashboard', 'Shared with me', 'Favourites', 'Recently viewed']) {
       expect(screen.queryByRole('button', { name })).toBeNull();
     }
+    // Archive/trash remain reachable without eagerly fetching their contents.
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Recycle bin' })).toBeTruthy();
     fireEvent.click(screen.getByText('Add Files'));
     expect(screen.getByRole('dialog', { name: 'Create folder' })).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reports' } });

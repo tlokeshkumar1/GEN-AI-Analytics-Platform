@@ -3,6 +3,7 @@ import { Archive, Copy, FolderPlus, LayoutDashboard, LoaderCircle, MoreHorizonta
 import { FileActionsMenu, fileMenuItem } from './FileActionsMenu';
 import { SidebarSection, sidebarChildren, sidebarItem } from './SidebarNavigation';
 import api, { getApiErrorMessage } from '../services/api';
+import { useFileTree } from '../services/fileTreeCache';
 
 export interface FileEntry {
   favourite?: boolean;
@@ -26,7 +27,7 @@ export interface Dashboard extends FileEntry {
   grants?: Record<string, string>;
   pages: { id: string; name: string; widgets: Placement[] }[];
 }
-export const contentChanged = () => window.dispatchEvent(new Event('content-files-changed'));
+export const contentChanged = (detail?: { dashboardId: string; layoutOnly: boolean }) => window.dispatchEvent(new CustomEvent('content-files-changed', { detail }));
 export const fileError = (err: unknown) =>
   getApiErrorMessage(err, 'Could not complete this file operation.');
 export const control =
@@ -39,43 +40,7 @@ export function filePath(files: FileEntry[], file: FileEntry): string {
   const parent = files.find((f) => f.id === file.parent_id);
   return (parent ? filePath(files, parent) : 'My Files') + ' / ' + file.name;
 }
-export function useFiles(deleted = false, archived = false) {
-  const [files, setFiles] = useState<FileEntry[]>([]);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let controller: AbortController;
-    const load = async () => {
-      controller?.abort();
-      const request = new AbortController();
-      controller = request;
-      setLoading(true);
-      setError('');
-      try {
-        const res = await api.get<FileEntry[]>('/content/tree', {
-          params: { deleted, archived },
-          signal: request.signal,
-        });
-        if (!Array.isArray(res.data)) throw new Error('The file tree response is invalid.');
-        if (!request.signal.aborted) setFiles(res.data);
-      } catch (err) {
-        if (!request.signal.aborted) {
-          setError(fileError(err));
-          setFiles([]);
-        }
-      } finally {
-        if (!request.signal.aborted) setLoading(false);
-      }
-    };
-    void load();
-    window.addEventListener('content-files-changed', load);
-    return () => {
-      controller.abort();
-      window.removeEventListener('content-files-changed', load);
-    };
-  }, [deleted, archived]);
-  return { files, loading, error };
-}
+export const useFiles = useFileTree;
 export function FileDialog({
   title,
   children,
@@ -236,10 +201,11 @@ export function ContentFiles({
   const bin = view === 'Recycle bin';
   const archive = view === 'Archive';
   const flat = view !== 'My Files';
-  const { files: activeFiles, loading } = useFiles();
-  const { files: archivedFiles } = useFiles(false, true);
-  const { files: deletedFiles } = useFiles(true);
-  const files = bin ? deletedFiles : archive ? archivedFiles : activeFiles;
+  const activeTree = useFiles();
+  const archiveTree = useFiles(false, true, archive);
+  const deletedTree = useFiles(true, false, bin);
+  const activeFiles = activeTree.files;
+  const { files, loading } = bin ? deletedTree : archive ? archiveTree : activeTree;
   const isActive = active === 'my-files' || active.startsWith('dashboards/');
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState('');
@@ -264,6 +230,10 @@ export function ContentFiles({
   }, [active, activeFiles]);
   const revision = useRef(0);
   const saving = useRef(false);
+  const pendingFold = useRef<string[] | undefined>(undefined);
+  const foldedRef = useRef(folded);
+  foldedRef.current = folded;
+  const preferencesReady = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     const request = new AbortController();
     async function loadPreferences() {
@@ -273,40 +243,50 @@ export function ContentFiles({
           throw new Error('The folder preferences response is invalid.');
         if (!request.signal.aborted) {
           revision.current = data.revision;
-          setFolded(isActive ? data.folded.filter((id: string) => id !== 'root') : data.folded);
+          if (!saving.current) setFolded(isActive ? data.folded.filter((id: string) => id !== 'root') : data.folded);
         }
       } catch {
         // Keep the default expansion when saved sidebar preferences are unavailable.
       }
     }
-    void loadPreferences();
+    preferencesReady.current = loadPreferences();
     return () => request.abort();
   }, [userKey]);
   async function fold(next: string[]) {
+    foldedRef.current = next;
+    setFolded(next);
+    pendingFold.current = next;
     if (saving.current) return;
     saving.current = true;
     try {
-      const { data } = await api.put('/content/preferences', {
-        folded: next,
-        revision: revision.current,
-      });
-      setFolded(data.folded);
-      revision.current = data.revision;
+      await preferencesReady.current;
+      while (pendingFold.current) {
+        const target = pendingFold.current;
+        pendingFold.current = undefined;
+        const { data } = await api.put('/content/preferences', {
+          folded: target,
+          revision: revision.current,
+        });
+        revision.current = data.revision;
+      }
     } catch (err) {
       setMessage(fileError(err));
       try {
         const { data } = await api.get('/content/preferences');
         revision.current = data.revision;
-        setFolded(data.folded);
+        // Keep the user's immediate selection even if saving failed.
       } catch {
-        /* Keep the last confirmed selection. */
+        /* Keep the user's immediate selection. */
       }
     } finally {
       saving.current = false;
+      const pending = pendingFold.current;
+      if (pending) void fold(pending);
     }
   }
   function toggle(id: string) {
-    fold(folded.includes(id) ? folded.filter((k) => k !== id) : [...folded, id]);
+    const current = foldedRef.current;
+    void fold(current.includes(id) ? current.filter((k) => k !== id) : [...current, id]);
   }
   async function trash(f: FileEntry) {
     if (!bin && !window.confirm('Move ' + f.name + ' and its contents to the recycle bin?')) return;
@@ -456,8 +436,8 @@ export function ContentFiles({
             ...(activeFiles.some(f => f.permission && f.permission !== 'owner') ? ['Shared with me'] : []),
             ...(activeFiles.some(f => f.favourite) ? ['Favourites'] : []),
             ...(activeFiles.some(f => f.last_opened) ? ['Recently viewed'] : []),
-            ...(archivedFiles.length ? ['Archive'] : []),
-            ...(deletedFiles.length ? ['Recycle bin'] : []),
+            'Archive',
+            'Recycle bin',
           ].map(v => <button key={v} className={sidebarItem(view === v)} onClick={() => {
             setView(v); setQuery(''); setMenu('');
           }}>{v}</button>)}

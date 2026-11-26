@@ -654,6 +654,20 @@
 }
 
 
+/* The fullscreen element owns scrolling instead of the page behind it. */
+.personal-dashboard:fullscreen {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;
+  padding-block: clamp(20px, 3vh, 36px) 64px;
+  padding-inline: max(clamp(16px, 3vw, 48px), calc((100% - 1560px) / 2));
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 /* Executive Dashboard text, including chart labels and tooltips. */
 .executive-dashboard,
 .executive-dashboard * {

@@ -1,4 +1,8 @@
+import json
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from api.models.content import (
     Bookmark,
     CreateFile,
@@ -18,6 +22,9 @@ from api.platform import content_dashboard
 
 from api.platform.content import ContentWorkspace
 from api.platform.content_publication import publish
+from api.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def private_response(response: Response):
@@ -57,9 +64,12 @@ def save_preferences(body: Preferences):
 
 @router.get("/tree")
 def tree(deleted: bool = False, archived: bool = False):
+    started = time.monotonic()
     workspace = ContentWorkspace()
     workspace.register()
-    return workspace.tree(deleted, archived)
+    result = workspace.tree(deleted, archived)
+    logger.info("File tree loaded | items=%s | deleted=%s | archived=%s | elapsed=%.3fs", len(result), deleted, archived, time.monotonic() - started)
+    return result
 
 
 @router.put("/files/{resource_id}/favourite")
@@ -161,8 +171,19 @@ def publish_widgets(resource_id: ResourceId, body: Publication):
 
 
 @router.post("/files/{resource_id}/refresh")
-def refresh(resource_id: ResourceId, page_id: ResourceId):
-    return content_dashboard.refresh(resource_id, page_id)
+def refresh(resource_id: ResourceId, page_id: ResourceId, stream: bool = False, force: bool = False):
+    if not stream:
+        return content_dashboard.refresh(resource_id, page_id, force)
+    # Resolve access before sending stream headers so authorization errors keep their HTTP status.
+    workspace, doc, page = content_dashboard.prepare_refresh(resource_id, page_id)
+
+    def events():
+        for event in content_dashboard.refresh_events(workspace, doc, page, force):
+            yield json.dumps(event, default=str) + "\n"
+
+    return StreamingResponse(events(), media_type="application/x-ndjson", headers={
+        "Cache-Control": "private, no-store", "X-Accel-Buffering": "no",
+    })
 
 
 @router.post("/files/{resource_id}/pages")

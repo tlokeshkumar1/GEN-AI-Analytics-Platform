@@ -3,6 +3,10 @@
 import hashlib
 import json
 import os
+import threading
+import time
+from collections import OrderedDict
+from copy import deepcopy
 
 from fastapi import HTTPException
 from api.models.execution_context import (
@@ -18,7 +22,65 @@ from api.services.analytics_engine import analytics_engine
 from api.services.dataset_service import dataset_service
 
 
-def calculate(workspace, ref, publishing=False, expected_digest=None, filters=()):
+class CalculationBatch:
+    """Request-local source preparation shared by concurrent widgets."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.values = {}
+        self.cache_hits = 0
+
+    def get(self, key, load):
+        with self.lock:
+            if key not in self.values:
+                self.values[key] = load()
+            return self.values[key]
+
+
+_result_lock = threading.Lock()
+_results = OrderedDict()
+_result_bytes = 0
+_RESULT_TTL = 120
+_RESULT_MAX_BYTES = 16 * 1024 * 1024
+
+
+def clear_calculation_cache():
+    global _result_bytes
+    with _result_lock:
+        _results.clear()
+        _result_bytes = 0
+
+
+def _cached_result(key):
+    with _result_lock:
+        entry = _results.get(key)
+        if entry and time.monotonic() - entry[0] < _RESULT_TTL:
+            _results.move_to_end(key)
+            return deepcopy(entry[1])
+    return None
+
+
+def _remember_result(key, value):
+    global _result_bytes
+    size = len(json.dumps(value, default=str).encode())
+    if size > _RESULT_MAX_BYTES:
+        return
+    with _result_lock:
+        previous = _results.pop(key, None)
+        if previous:
+            _result_bytes -= previous[2]
+        _results[key] = (time.monotonic(), deepcopy(value), size)
+        _result_bytes += size
+        while len(_results) > 128 or _result_bytes > _RESULT_MAX_BYTES:
+            _, removed = _results.popitem(last=False)
+            _result_bytes -= removed[2]
+
+
+def calculate(
+    workspace, ref, publishing=False, expected_digest=None, filters=(),
+    *, batch=None, cache_results=False, force=False,
+):
+    memo = batch.get if batch else lambda key, load: load()
     repository = dataset_service.repository
     if (
         repository is None
@@ -28,7 +90,11 @@ def calculate(workspace, ref, publishing=False, expected_digest=None, filters=()
         raise HTTPException(
             503, "My Files requires HANA-backed dataset manifests and snapshots."
         )
-    entry = dataset_service._entry(dataset_service._catalog(), ref["dataset_id"])
+    catalog = memo("catalog", dataset_service._catalog)
+    entry = memo(
+        ("entry", ref["dataset_id"]),
+        lambda: dataset_service._entry(catalog, ref["dataset_id"]),
+    )
     version = ref["version"]
     revision = ref["semantic_revision"]
     if os.getenv("VCAP_APPLICATION") and not entry.get("tenant_id"):
@@ -45,10 +111,14 @@ def calculate(workspace, ref, publishing=False, expected_digest=None, filters=()
         raise HTTPException(404, "Source unavailable.")
     ns = semantic_registry.namespace(entry, version)
     source_store = repository.store
-    model_row = source_store.get(ns, str(revision))
+    model_row = memo(
+        ("document", ns, str(revision)), lambda: source_store.get(ns, str(revision))
+    )
     if not model_row or model_row["value"]["status"] != "approved":
         raise HTTPException(409, "An approved pinned semantic model is required.")
-    model = SemanticModel.model_validate(model_row["value"])
+    model = memo(
+        ("model", ns, revision), lambda: SemanticModel.model_validate(model_row["value"])
+    )
     if (model.dataset_id, model.data_version, model.revision) != (
         entry["id"],
         version,
@@ -56,7 +126,10 @@ def calculate(workspace, ref, publishing=False, expected_digest=None, filters=()
     ):
         raise HTTPException(409, "Semantic source mismatch.")
     items_ns = semantic_registry.namespace(entry, version, f"analytics:{revision}")
-    row = source_store.get(items_ns, f"{ref['id']}:{ref['revision']}")
+    row = memo(
+        ("document", items_ns, ref["id"], ref["revision"]),
+        lambda: source_store.get(items_ns, f"{ref['id']}:{ref['revision']}"),
+    )
     if not row:
         raise HTTPException(404, "Definition unavailable.")
     item = AnalyticsItem.model_validate(row["value"])
@@ -64,9 +137,10 @@ def calculate(workspace, ref, publishing=False, expected_digest=None, filters=()
     if item.reviewer == "system":
         # The Executive Dashboard publishes engine-validated recommendations.
         # Only those exact published revisions may be reused in My Files.
-        publication = source_store.get(
-            semantic_registry.namespace(entry, version, f"dashboard:{revision}"),
-            "published",
+        publication_ns = semantic_registry.namespace(entry, version, f"dashboard:{revision}")
+        publication = memo(
+            ("document", publication_ns, "published"),
+            lambda: source_store.get(publication_ns, "published"),
         )
         reviewed = bool(publication) and any(
             published.get("id") == item.id
@@ -120,7 +194,19 @@ def calculate(workspace, ref, publishing=False, expected_digest=None, filters=()
         raise HTTPException(
             409, "This plan requires independently versioned join sources."
         )
-    snapshot = dataset_service._snapshot(entry, version)
+    # Authorization and pinned-definition validation always run before cache access.
+    cache_key = json.dumps([workspace.scope, ref, digest, filters], sort_keys=True, default=str)
+    if cache_results and not publishing and not force:
+        cached = _cached_result(cache_key)
+        if cached is not None:
+            if batch:
+                with batch.lock:
+                    batch.cache_hits += 1
+            return cached
+    snapshot = memo(
+        ("snapshot", entry["id"], version),
+        lambda: dataset_service._snapshot(entry, version),
+    )
     if snapshot.get("source_backend") == "hana" or "rows" not in snapshot:
         raise HTTPException(409, "This version requires a complete pinned snapshot.")
     context = ExecutionContext(
@@ -135,7 +221,10 @@ def calculate(workspace, ref, publishing=False, expected_digest=None, filters=()
         query["filters"] = [*query.get("filters", []), *filters]
         result = analytics_engine.execute(
             query,
-            dataframe=dataset_frame(entry, snapshot, version),
+            dataframe=memo(
+                ("frame", entry["id"], version),
+                lambda: dataset_frame(entry, snapshot, version),
+            ),
             semantic_model=model,
         )
     finally:
@@ -144,12 +233,15 @@ def calculate(workspace, ref, publishing=False, expected_digest=None, filters=()
         raise HTTPException(
             422, result.error or "The approved plan could not be executed."
         )
-    return {
+    output = {
         "definition": item.model_dump(mode="json"),
         "result": result.to_dict(),
         "digest": digest,
         "filter_fields": [field.name for field in model.fields],
     }
+    if cache_results and not publishing:
+        _remember_result(cache_key, output)
+    return output
 
 
 def publish(workspace, dashboard_id, request):
