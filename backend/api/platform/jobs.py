@@ -253,7 +253,10 @@ class JobService:
             activity = {"stage": "starting", "batches_read": None}
             logger.info(
                 "Job claimed | job=%s | kind=%s | attempt=%s | workspace=%s | active=1",
-                key, job["kind"], job["attempts"] + 1, workspace,
+                key,
+                job["kind"],
+                job["attempts"] + 1,
+                workspace,
             )
             try:
                 if state == "cancelled":
@@ -273,11 +276,20 @@ class JobService:
                             latest["revision"],
                         )
                         batches = values.get("batches_read", activity["batches_read"])
-                        if stage != activity["stage"] or batches != activity["batches_read"] or stage == "starting":
+                        if (
+                            stage != activity["stage"]
+                            or batches != activity["batches_read"]
+                            or stage == "starting"
+                        ):
                             logger.info(
                                 "Job progress | job=%s | kind=%s | stage=%s | elapsed=%.1fs%s",
-                                key, job["kind"], stage, time.monotonic() - started,
-                                f" | batches_read={batches}" if batches is not None else "",
+                                key,
+                                job["kind"],
+                                stage,
+                                time.monotonic() - started,
+                                f" | batches_read={batches}"
+                                if batches is not None
+                                else "",
                             )
                         activity.update(stage=stage, batches_read=batches)
 
@@ -297,10 +309,16 @@ class JobService:
                                 )
                                 logger.info(
                                     "Job still running | job=%s | kind=%s | stage=%s | elapsed=%.1fs | active=1",
-                                    key, job["kind"], activity["stage"], time.monotonic() - started,
+                                    key,
+                                    job["kind"],
+                                    activity["stage"],
+                                    time.monotonic() - started,
                                 )
                         except HTTPException:
-                            logger.warning("Job lease renewal stopped | job=%s; lease lost or cancellation requested", key)
+                            logger.warning(
+                                "Job lease renewal stopped | job=%s; lease lost or cancellation requested",
+                                key,
+                            )
                             return
 
                 heartbeat = threading.Thread(target=renew_lease, daemon=True)
@@ -348,7 +366,9 @@ class JobService:
                 )
                 logger.info(
                     "Job succeeded | job=%s | kind=%s | elapsed=%.1fs | active=0",
-                    key, job["kind"], time.monotonic() - started,
+                    key,
+                    job["kind"],
+                    time.monotonic() - started,
                 )
             except Exception as exc:
                 row = self.store.get(namespace, key)
@@ -369,8 +389,12 @@ class JobService:
                 logger.log(
                     logging.INFO if cancelled else logging.ERROR,
                     "Job %s | job=%s | kind=%s | stage=%s | elapsed=%.1fs | error=%s | active=0",
-                    "cancelled" if cancelled else "failed", key, job["kind"],
-                    activity["stage"], time.monotonic() - started, safe_error,
+                    "cancelled" if cancelled else "failed",
+                    key,
+                    job["kind"],
+                    activity["stage"],
+                    time.monotonic() - started,
+                    safe_error,
                 )
             finally:
                 stopped.set()

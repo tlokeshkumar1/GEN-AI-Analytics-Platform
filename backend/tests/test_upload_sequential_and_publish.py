@@ -41,13 +41,19 @@ class UploadSequentialAndPublishTests(unittest.TestCase):
         )
         self.addCleanup(self.dataset_svc.wait_for_idle)
         self.semantic_reg = SemanticRegistry(store)
-        offline = patch("api.platform.agent_chart_recommender.chart_recommender_agent._generate_llm_candidates", return_value=([], False))
+        offline = patch(
+            "api.platform.agent_chart_recommender.chart_recommender_agent._generate_llm_candidates",
+            return_value=([], False),
+        )
         offline.start()
         self.addCleanup(offline.stop)
         for target, value in (
             ("api.services.analytics_engine.analytics_engine._execute_on_hana", None),
             ("api.database.hana_table_service.hana_table_service.table_exists", False),
-            ("api.platform.datasets_metadata_repository.datasets_metadata_repo.delete_dataset", True),
+            (
+                "api.platform.datasets_metadata_repository.datasets_metadata_repo.delete_dataset",
+                True,
+            ),
             ("api.database.vector_client.vector_client.delete_dataset", True),
         ):
             offline = patch(target, return_value=value)

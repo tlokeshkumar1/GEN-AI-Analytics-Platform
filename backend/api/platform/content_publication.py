@@ -32,7 +32,9 @@ class CalculationBatch:
         self.definition_keys = {}
         for source in sources:
             key = (source["dataset_id"], source["version"], source["semantic_revision"])
-            self.definition_keys.setdefault(key, set()).add(f"{source['id']}:{source['revision']}")
+            self.definition_keys.setdefault(key, set()).add(
+                f"{source['id']}:{source['revision']}"
+            )
 
     def get(self, key, load):
         with self.lock:
@@ -59,10 +61,18 @@ def clear_calculation_cache():
 
 def snapshot_data_digest(snapshot):
     """Publication pins data and schema; vector indexing is independent."""
-    return hashlib.sha256(json.dumps(
-        [snapshot.get("columns"), snapshot.get("rows"), snapshot.get("source_backend")],
-        sort_keys=True, ensure_ascii=False, allow_nan=False,
-    ).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            [
+                snapshot.get("columns"),
+                snapshot.get("rows"),
+                snapshot.get("source_backend"),
+            ],
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
 
 
 def legacy_pin_matches(repository, model, item, expected, snapshot, digest, memo):
@@ -75,9 +85,17 @@ def legacy_pin_matches(repository, model, item, expected, snapshot, digest, memo
     # Only IDs are loaded. Fetch the one immutable manifest authenticated by
     # the original digest; never scan the contents of unrelated snapshots.
     keys = memo("artifact-keys", repository.objects.keys)
-    original = next((key for key in keys if hashlib.sha256(
-        json.dumps([model, item, key], sort_keys=True).encode()
-    ).hexdigest() == expected), None)
+    original = next(
+        (
+            key
+            for key in keys
+            if hashlib.sha256(
+                json.dumps([model, item, key], sort_keys=True).encode()
+            ).hexdigest()
+            == expected
+        ),
+        None,
+    )
     if original is None:
         return False
     try:
@@ -119,8 +137,15 @@ def _remember_result(key, value):
 
 
 def calculate(
-    workspace, ref, publishing=False, expected_digest=None, filters=(),
-    *, batch=None, cache_results=False, force=False,
+    workspace,
+    ref,
+    publishing=False,
+    expected_digest=None,
+    filters=(),
+    *,
+    batch=None,
+    cache_results=False,
+    force=False,
 ):
     memo = batch.get if batch else lambda key, load: load()
     repository = dataset_service.repository
@@ -159,7 +184,8 @@ def calculate(
     if not model_row or model_row["value"]["status"] != "approved":
         raise HTTPException(409, "An approved pinned semantic model is required.")
     model = memo(
-        ("model", ns, revision), lambda: SemanticModel.model_validate(model_row["value"])
+        ("model", ns, revision),
+        lambda: SemanticModel.model_validate(model_row["value"]),
     )
     if (model.dataset_id, model.data_version, model.revision) != (
         entry["id"],
@@ -168,10 +194,13 @@ def calculate(
     ):
         raise HTTPException(409, "Semantic source mismatch.")
     items_ns = semantic_registry.namespace(entry, version, f"analytics:{revision}")
-    requested = batch.definition_keys.get((entry["id"], version, revision)) if batch else None
+    requested = (
+        batch.definition_keys.get((entry["id"], version, revision)) if batch else None
+    )
     if requested:
         definitions = memo(
-            ("definitions", items_ns), lambda: source_store.get_many(items_ns, sorted(requested))
+            ("definitions", items_ns),
+            lambda: source_store.get_many(items_ns, sorted(requested)),
         )
         row = definitions.get(f"{ref['id']}:{ref['revision']}")
     else:
@@ -186,7 +215,9 @@ def calculate(
     if item.reviewer == "system":
         # The Executive Dashboard publishes engine-validated recommendations.
         # Only those exact published revisions may be reused in My Files.
-        publication_ns = semantic_registry.namespace(entry, version, f"dashboard:{revision}")
+        publication_ns = semantic_registry.namespace(
+            entry, version, f"dashboard:{revision}"
+        )
         publication = memo(
             ("document", publication_ns, "published"),
             lambda: source_store.get(publication_ns, "published"),
@@ -237,13 +268,33 @@ def calculate(
     )
     if snapshot.get("source_backend") == "hana" or "rows" not in snapshot:
         raise HTTPException(409, "This version requires a complete pinned snapshot.")
-    data_digest = memo(("data-digest", entry["id"], version), lambda: snapshot_data_digest(snapshot))
-    digest = "data-v2:" + hashlib.sha256(json.dumps(
-        [model_row["value"], row["value"], data_digest], sort_keys=True,
-    ).encode()).hexdigest()
+    data_digest = memo(
+        ("data-digest", entry["id"], version), lambda: snapshot_data_digest(snapshot)
+    )
+    digest = (
+        "data-v2:"
+        + hashlib.sha256(
+            json.dumps(
+                [model_row["value"], row["value"], data_digest],
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+    )
     valid_pin = expected_digest is None or expected_digest in (digest, legacy_digest)
-    if not valid_pin and len(expected_digest) == 64 and all(c in "0123456789abcdef" for c in expected_digest):
-        valid_pin = legacy_pin_matches(repository, model_row["value"], row["value"], expected_digest, snapshot, digest, memo)
+    if (
+        not valid_pin
+        and len(expected_digest) == 64
+        and all(c in "0123456789abcdef" for c in expected_digest)
+    ):
+        valid_pin = legacy_pin_matches(
+            repository,
+            model_row["value"],
+            row["value"],
+            expected_digest,
+            snapshot,
+            digest,
+            memo,
+        )
     if not valid_pin:
         raise HTTPException(
             409, "The pinned definition or snapshot changed. Review and republish."
@@ -257,7 +308,9 @@ def calculate(
             409, "This plan requires independently versioned join sources."
         )
     # Authorization and pinned-definition validation always run before cache access.
-    cache_key = json.dumps([workspace.scope, ref, digest, filters], sort_keys=True, default=str)
+    cache_key = json.dumps(
+        [workspace.scope, ref, digest, filters], sort_keys=True, default=str
+    )
     if cache_results and not publishing and not force:
         cached = _cached_result(cache_key)
         if cached is not None:

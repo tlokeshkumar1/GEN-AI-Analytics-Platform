@@ -13,7 +13,11 @@ class EmbeddingBatchError(EmbeddingProviderError):
     """Keep completed inputs available to the dataset's retry checkpoint."""
 
     def __init__(self, error, completed):
-        super().__init__(str(error), status_code=getattr(error, "status_code", None), request_id=getattr(error, "request_id", None))
+        super().__init__(
+            str(error),
+            status_code=getattr(error, "status_code", None),
+            request_id=getattr(error, "request_id", None),
+        )
         self.completed = completed
 
 
@@ -39,15 +43,24 @@ class EmbeddingService:
                 if error.status_code not in (413, 500, 502, 503, 504) or len(texts) < 2:
                     raise
                 middle = len(texts) // 2
-                logger.warning("Retrying failed batch of %s inputs as batches of %s and %s", len(texts), middle, len(texts) - middle)
+                logger.warning(
+                    "Retrying failed batch of %s inputs as batches of %s and %s",
+                    len(texts),
+                    middle,
+                    len(texts) - middle,
+                )
                 for part in (texts[:middle], texts[middle:]):
                     vectors = ai_core_service.generate_embeddings(part, max_retries=0)
                     if len(vectors) != len(part):
-                        raise EmbeddingProviderError("Embedding provider returned an incomplete batch")
+                        raise EmbeddingProviderError(
+                            "Embedding provider returned an incomplete batch"
+                        )
                     completed.update(zip(part, vectors))
                 return completed
             if len(vectors) != len(texts):
-                raise EmbeddingProviderError("Embedding provider returned an incomplete batch")
+                raise EmbeddingProviderError(
+                    "Embedding provider returned an incomplete batch"
+                )
             return dict(zip(texts, vectors))
         except Exception as error:
             raise EmbeddingBatchError(error, completed) from error
@@ -57,8 +70,14 @@ class EmbeddingService:
             return []
         batch_size = _setting("EMBEDDING_BATCH_SIZE", 32, 64)
         workers = _setting("EMBEDDING_MAX_WORKERS", 2, 4)
-        batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
-        logger.info("Generating embeddings | inputs=%s | batches=%s | batch_size=%s | concurrency=%s", len(texts), len(batches), batch_size, workers)
+        batches = [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
+        logger.info(
+            "Generating embeddings | inputs=%s | batches=%s | batch_size=%s | concurrency=%s",
+            len(texts),
+            len(batches),
+            batch_size,
+            workers,
+        )
         completed = {}
         failure = None
         position = 0
@@ -67,7 +86,9 @@ class EmbeddingService:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             pending = set()
             while position < min(workers, len(batches)):
-                pending.add(pool.submit(copy_context().run, self._batch, batches[position]))
+                pending.add(
+                    pool.submit(copy_context().run, self._batch, batches[position])
+                )
                 position += 1
             while pending:
                 done, pending = wait(pending, return_when=FIRST_COMPLETED)
@@ -78,10 +99,20 @@ class EmbeddingService:
                     except EmbeddingBatchError as error:
                         completed.update(error.completed)
                         failure = failure or error
-                    logger.info("Embedding progress | batches_finished=%s/%s | completed_inputs=%s/%s", finished, len(batches), len(completed), len(texts))
+                    logger.info(
+                        "Embedding progress | batches_finished=%s/%s | completed_inputs=%s/%s",
+                        finished,
+                        len(batches),
+                        len(completed),
+                        len(texts),
+                    )
                 if failure is None:
                     while position < len(batches) and len(pending) < workers:
-                        pending.add(pool.submit(copy_context().run, self._batch, batches[position]))
+                        pending.add(
+                            pool.submit(
+                                copy_context().run, self._batch, batches[position]
+                            )
+                        )
                         position += 1
         if failure:
             raise EmbeddingBatchError(failure, completed) from failure

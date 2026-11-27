@@ -228,49 +228,91 @@ class ApprovedAnalyticsWorkflow(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["widgets"][0]["result"]["summary"]["value"], 2)
 
-    def test_generated_definitions_can_be_saved_approved_or_rejected_then_published(self):
+    def test_generated_definitions_can_be_saved_approved_or_rejected_then_published(
+        self,
+    ):
         path, model, headers = self.prepare()
-        self.client.post(f"{path}/{model['revision']}/review", json={"decision": "approved"}).raise_for_status()
+        self.client.post(
+            f"{path}/{model['revision']}/review", json={"decision": "approved"}
+        ).raise_for_status()
         for decision in ("approved", "rejected"):
-            response = self.client.post("/api/insights/definitions", headers=headers, json={
-                "id": "generated-" + decision, "revision": 1, "title": "Generated Salary",
-                "kind": "kpi", "semantic_revision": model["revision"], "status": "proposed",
-                "query_plan": {"metric": "Salary", "aggregation": "SUM"},
-                "dependencies": ["Salary"], "explanation": "Generated preview",
-            })
+            response = self.client.post(
+                "/api/insights/definitions",
+                headers=headers,
+                json={
+                    "id": "generated-" + decision,
+                    "revision": 1,
+                    "title": "Generated Salary",
+                    "kind": "kpi",
+                    "semantic_revision": model["revision"],
+                    "status": "proposed",
+                    "query_plan": {"metric": "Salary", "aggregation": "SUM"},
+                    "dependencies": ["Salary"],
+                    "explanation": "Generated preview",
+                },
+            )
             self.assertEqual(response.status_code, 200, response.text)
             saved = response.json()
             self.assertEqual(saved["status"], "proposed")
             response = self.client.post(
                 f"/api/insights/definitions/{saved['id']}/{saved['revision']}/review",
-                headers=headers, json={"decision": decision},
+                headers=headers,
+                json={"decision": decision},
             )
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["status"], decision)
             self.assertEqual(response.json()["reviewer"], "owner")
-            response = self.client.post("/api/insights/dashboard", headers=headers, json={
-                "title": "Generated dashboard", "items": [{"id": saved["id"], "revision": saved["revision"]}],
-            })
-            self.assertEqual(response.status_code, 200 if decision == "approved" else 409, response.text)
+            response = self.client.post(
+                "/api/insights/dashboard",
+                headers=headers,
+                json={
+                    "title": "Generated dashboard",
+                    "items": [{"id": saved["id"], "revision": saved["revision"]}],
+                },
+            )
+            self.assertEqual(
+                response.status_code,
+                200 if decision == "approved" else 409,
+                response.text,
+            )
 
     def test_parallel_mixed_reviews_preserve_independent_decisions(self):
         from concurrent.futures import ThreadPoolExecutor
+
         path, model, headers = self.prepare()
-        self.client.post(f"{path}/{model['revision']}/review", json={"decision": "approved"}).raise_for_status()
+        self.client.post(
+            f"{path}/{model['revision']}/review", json={"decision": "approved"}
+        ).raise_for_status()
         saved = []
         for index in range(6):
-            response = self.client.post("/api/insights/definitions", headers=headers, json={
-                "id": f"parallel-{index}", "revision": 1, "title": f"Salary {index}", "kind": "kpi",
-                "semantic_revision": model["revision"], "status": "proposed",
-                "query_plan": {"metric": "Salary", "aggregation": "SUM"}, "dependencies": ["Salary"], "explanation": "Review test",
-            })
+            response = self.client.post(
+                "/api/insights/definitions",
+                headers=headers,
+                json={
+                    "id": f"parallel-{index}",
+                    "revision": 1,
+                    "title": f"Salary {index}",
+                    "kind": "kpi",
+                    "semantic_revision": model["revision"],
+                    "status": "proposed",
+                    "query_plan": {"metric": "Salary", "aggregation": "SUM"},
+                    "dependencies": ["Salary"],
+                    "explanation": "Review test",
+                },
+            )
             self.assertEqual(response.status_code, 200, response.text)
             saved.append(response.json())
+
         def review(pair):
             index, item = pair
             decision = "approved" if index % 2 == 0 else "rejected"
-            response = self.client.post(f"/api/insights/definitions/{item['id']}/{item['revision']}/review", headers=headers, json={"decision": decision})
+            response = self.client.post(
+                f"/api/insights/definitions/{item['id']}/{item['revision']}/review",
+                headers=headers,
+                json={"decision": decision},
+            )
             return decision, response
+
         with ThreadPoolExecutor(max_workers=4) as pool:
             outcomes = list(pool.map(review, enumerate(saved)))
         for decision, response in outcomes:

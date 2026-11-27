@@ -70,7 +70,13 @@ def tree(deleted: bool = False, archived: bool = False):
     with workspace.store.transaction():
         workspace.register()
         result = workspace.tree(deleted, archived)
-    logger.info("File tree loaded | items=%s | deleted=%s | archived=%s | elapsed=%.3fs", len(result), deleted, archived, time.monotonic() - started)
+    logger.info(
+        "File tree loaded | items=%s | deleted=%s | archived=%s | elapsed=%.3fs",
+        len(result),
+        deleted,
+        archived,
+        time.monotonic() - started,
+    )
     return result
 
 
@@ -173,7 +179,12 @@ def publish_widgets(resource_id: ResourceId, body: Publication):
 
 
 @router.post("/files/{resource_id}/refresh")
-def refresh(resource_id: ResourceId, page_id: ResourceId, stream: bool = False, force: bool = False):
+def refresh(
+    resource_id: ResourceId,
+    page_id: ResourceId,
+    stream: bool = False,
+    force: bool = False,
+):
     if not stream:
         return content_dashboard.refresh(resource_id, page_id, force)
     # Resolve access before sending stream headers so authorization errors keep their HTTP status.
@@ -183,9 +194,14 @@ def refresh(resource_id: ResourceId, page_id: ResourceId, stream: bool = False, 
         for event in content_dashboard.refresh_events(workspace, doc, page, force):
             yield json.dumps(event, default=str) + "\n"
 
-    return StreamingResponse(events(), media_type="application/x-ndjson", headers={
-        "Cache-Control": "private, no-store", "X-Accel-Buffering": "no",
-    })
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/files/{resource_id}/pages")

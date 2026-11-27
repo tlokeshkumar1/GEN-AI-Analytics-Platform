@@ -1,0 +1,232 @@
+_schema-version: "3.3"
+ID: gen-ai-analytics-platform
+version: 1.0.0
+
+parameters:
+  enable-parallel-deployments: true
+# The UI module builds once and is copied into the application router.
+# Supply private AI credentials to both API and worker through a private MTA extension.
+# Persistent data uses HANA; temporary chart/runtime files remain ephemeral.
+
+modules:
+  # --------------------- APPROUTER MODULE ---------------------
+  - name: gen-ai-analytics-platform-router
+    # ------------------------------------------------------------
+    type: approuter.nodejs
+    path: ./router
+    build-parameters:
+      builder: npm
+      ignore: [".DS_Store", "node_modules/", "manifest*.yml", "**/.env", "**/.env.*", "default-env.json", "**/default-env.json", "**/*.mtaext"]
+      requires:
+        - name: gen-ai-analytics-platform-ui
+          artifacts:
+            - "*"
+          target-path: resources/
+    parameters:
+      buildpack: nodejs_buildpack
+      app-name: gen-ai-analytics-platform-router-${space}
+      disk-quota: 512MB
+      memory: 256MB
+      keep-existing-routes: true
+    properties:
+      SESSION_TIMEOUT: 120
+    requires:
+      - name: gen-ai-analytics-platform-destination
+      - name: gen-ai-analytics-platform-api-props
+        group: destinations
+        properties:
+          name: backend-api
+          url: ~{srv-url}
+          forwardAuthToken: true
+          timeout: 300000
+      - name: gen-ai-analytics-platform-xsuaa
+    provides:
+      - name: gen-ai-analytics-platform-approuter
+        properties:
+          app-url: ${default-url}
+          application: ${app-name}
+          app-domain: ${default-domain}
+
+  # --------------------- SERVER MODULE (FASTAPI) ---------------
+  - name: gen-ai-analytics-platform-api
+    # ------------------------------------------------------------
+    type: python
+    path: ./backend
+    build-parameters:
+      ignore: [".DS_Store", "manifest*.yml", "node_modules/", "**/__pycache__/**", "**/venv/**", "**/.venv/**", "venv/", "api/venv/", "**/.env", "**/.env.*", "default-env.json", "db/", "tests/", "chart-worker/", "preprocessing/input/", "preprocessing/output/", "api/data/", "**/.token_usage.jsonl"]
+    parameters:
+      buildpack: python_buildpack
+      app-name: gen-ai-analytics-platform-api-${space}
+      memory: 1536MB
+      disk-quota: 2048MB
+      health-check-type: http
+      health-check-http-endpoint: /
+      timeout: 180
+    properties:
+      XSUAA_ADMIN_ROLE_COLLECTION: "GEN-AI Analytics Platform Administrator (${space})"
+      XSUAA_MEMBER_ROLE_COLLECTION: "GEN-AI Analytics Platform Member (${space})"
+      XSUAA_SERVICE_NAME: "${space}-gen-ai-analytics-platform-xsuaa"
+      APP_ENV: production
+      PLATFORM_METADATA_BACKEND: "hana"
+      PLATFORM_DATASET_BACKEND: "durable"
+      PLATFORM_OBJECT_BACKEND: "hana"
+      PLATFORM_WORKSPACE_ID: "default"
+      PLATFORM_AUTO_APPROVE_SEMANTICS: "true"
+      PLATFORM_CHAT_WORKSPACE_ACCESS: "true"
+      PYTHONUNBUFFERED: "1"
+      MPLBACKEND: "Agg"
+      NVIDIA_EMBEDDING_MODEL: "nvidia/nemotron-3.5-embed-1b"
+      NVIDIA_API_URL: "https://integrate.api.nvidia.com/v1/embeddings"
+      NVIDIA_LLM_MODEL: "nvidia/nemotron-3.5-bolt-e4b"
+      NVIDIA_LLM_URL: "https://integrate.api.nvidia.com/v1/chat/completions"
+    provides:
+      - name: gen-ai-analytics-platform-api-props
+        properties:
+          srv-url: ${default-url}
+    requires:
+      - name: gen-ai-analytics-platform-hdi-container
+      - name: analytics-content-hana
+      - name: gen-ai-analytics-platform-destination
+      - name: gen-ai-analytics-platform-xsuaa
+
+  - name: gen-ai-analytics-platform-worker
+    type: python
+    path: ./backend
+    build-parameters:
+      ignore: [".DS_Store", "manifest*.yml", "node_modules/", "**/__pycache__/**", "**/venv/**", "**/.venv/**", "venv/", "api/venv/", "**/.env", "**/.env.*", "default-env.json", "db/", "tests/", "chart-worker/", "preprocessing/input/", "preprocessing/output/", "api/data/", "**/.token_usage.jsonl"]
+    parameters:
+      buildpack: python_buildpack
+      app-name: gen-ai-analytics-platform-worker-${space}
+      command: python -m api.worker
+      no-route: true
+      health-check-type: process
+      memory: 1536MB
+      disk-quota: 2048MB
+    properties:
+      APP_ENV: production
+      PLATFORM_METADATA_BACKEND: hana
+      PLATFORM_DATASET_BACKEND: durable
+      PLATFORM_OBJECT_BACKEND: hana
+      PLATFORM_WORKSPACE_ID: "default"
+      PLATFORM_AUTO_APPROVE_SEMANTICS: "true"
+      PLATFORM_CHAT_WORKSPACE_ACCESS: "true"
+      PYTHONUNBUFFERED: "1"
+      MPLBACKEND: "Agg"
+      NVIDIA_EMBEDDING_MODEL: "nvidia/nemotron-3.5-embed-1b"
+      NVIDIA_API_URL: "https://integrate.api.nvidia.com/v1/embeddings"
+      NVIDIA_LLM_MODEL: "nvidia/nemotron-3.5-bolt-e4b"
+      NVIDIA_LLM_URL: "https://integrate.api.nvidia.com/v1/chat/completions"
+    requires:
+      - name: gen-ai-analytics-platform-hdi-container
+      - name: gen-ai-analytics-platform-xsuaa
+
+  # --------------------- UI MODULE (REACT + VITE) --------------
+  - name: gen-ai-analytics-platform-ui
+    # ------------------------------------------------------------
+    type: html5
+    path: ./frontend
+    build-parameters:
+      build-result: .mta-dist
+      builder: custom
+      ignore: [".DS_Store", "node_modules/", "manifest*.yml"]
+      commands:
+        - node ../scripts/build-frontend-mta.cjs
+      supported-platforms: []
+
+resources:
+  # Provision the isolated schema/table and UPS using the content migration guide.
+  # Keep credentials in the binding; never reuse the SQL-console principal.
+  - name: analytics-content-hana
+    type: org.cloudfoundry.existing-service
+    parameters:
+      service-name: analytics-content-hana
+
+  # ----------------- SAP AUTHORIZATION (XSUAA) -----------------
+  - name: gen-ai-analytics-platform-xsuaa
+    # ------------------------------------------------------------
+    type: org.cloudfoundry.managed-service
+    properties:
+      xsuaa-app: ${xsuaa-app}
+      XSAPPNAME: ${xsuaa-app}
+    parameters:
+      service: xsuaa
+      service-name: ${space}-gen-ai-analytics-platform-xsuaa
+      service-plan: application
+      path: ./xs-security.json
+      xsuaa-app: gen-ai-analytics-platform-${space}
+      config:
+        xsappname: ${xsuaa-app}
+        tenant-mode: dedicated
+        foreign-scope-references: ["xs_user.read", "xs_authorization.read"]
+        role-collections:
+          - name: "GEN-AI Analytics Platform Member (${space})"
+            description: "Member Access"
+            role-template-references:
+              - "$XSAPPNAME.Member"
+              - "$XSAPPNAME.Token_Exchange"
+          - name: "GEN-AI Analytics Platform Administrator (${space})"
+            description: "Administrator Access"
+            role-template-references:
+              - "$XSAPPNAME.Admin"
+              - "$XSAPPNAME.Token_Exchange"
+          - name: "GEN-AI Analytics Platform User Management (${space})"
+            description: Read-only directory permissions for platform administrators
+            role-template-references:
+              - "$XSAPPNAME.UserManagementReader"
+        scopes:
+          - name: uaa.user
+            description: UAA
+          - name: "$XSAPPNAME.Member"
+            description: Member
+          - name: "$XSAPPNAME.Admin"
+            description: Administrator
+        attributes: []
+        role-templates:
+          - name: Token_Exchange
+            description: UAA Token Exchange
+            scope-references: ["uaa.user"]
+          - name: Member
+            description: Member
+            scope-references: ["$XSAPPNAME.Member"]
+          - name: Admin
+            description: Administrator
+            scope-references: ["$XSAPPNAME.Admin"]
+          - name: UserManagementReader
+            description: Read project users and their role collections
+            scope-references: ["xs_user.read", "xs_authorization.read"]
+        oauth2-configuration:
+          token-validity: 900
+          refresh-token-validity: 43200
+          redirect-uris:
+            - https://*.us10.trial.applicationstudio.cloud.sap/login/callback
+            - https://*.applicationstudio.cloud.sap/login/callback
+            - https://*.hana.ondemand.com/login/callback
+            - http://localhost:5000/login/callback
+            - https://*.hana.ondemand.com/**
+            - https://*.applicationstudio.cloud.sap/**
+            - http*://*.cfapps.*.hana.ondemand.com/**
+            - http://*.localhost:5000/**
+          credential-types:
+            - binding-secret
+            - x509
+
+  # ----------------- DESTINATION SERVICE ----------------------
+  - name: gen-ai-analytics-platform-destination
+    # ------------------------------------------------------------
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service-plan: lite
+      service-name: ${space}-gen-ai-analytics-platform-destination
+      service: destination
+      config:
+        HTML5Runtime_enabled: true
+        version: 1.0.0
+
+  # ------------------ HDI CONTAINER ---------------------------
+  - name: gen-ai-analytics-platform-hdi-container
+    # ------------------------------------------------------------
+    type: com.sap.xs.hdi-container
+    parameters:
+      service-name: ${space}-gen-ai-analytics-platform-hdi-container
+    properties:
+      com-container-name: "${service-name}"

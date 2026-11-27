@@ -138,21 +138,38 @@ def refresh_events(workspace, doc, page, force=False):
         except HTTPException as exc:
             value = {"error": exc.detail}
         except Exception:
-            logger.exception("Dashboard widget execution failed | widget=%s", widget["id"])
+            logger.exception(
+                "Dashboard widget execution failed | widget=%s", widget["id"]
+            )
             value = {"error": "Widget execution failed. Refresh to retry."}
-        logger.info("Dashboard widget finished | widget=%s | status=%s | elapsed=%.3fs", widget["id"], "error" if "error" in value else "ready", time.monotonic() - widget_started)
-        return {"type": "widget", "id": widget["id"], "value": value, "revision": doc["revision"]}
+        logger.info(
+            "Dashboard widget finished | widget=%s | status=%s | elapsed=%.3fs",
+            widget["id"],
+            "error" if "error" in value else "ready",
+            time.monotonic() - widget_started,
+        )
+        return {
+            "type": "widget",
+            "id": widget["id"],
+            "value": value,
+            "revision": doc["revision"],
+        }
 
     yield {"type": "start", "revision": doc["revision"], "total": len(page["widgets"])}
     futures = []
     try:
         for widget in page["widgets"]:
-            futures.append(_widget_pool.submit(contextvars.copy_context().run, execute, widget))
+            futures.append(
+                _widget_pool.submit(contextvars.copy_context().run, execute, widget)
+            )
         for future in as_completed(futures):
             yield future.result()
         logger.info(
             "Dashboard refresh complete | dashboard=%s | widgets=%s | cache_hits=%s | elapsed=%.3fs",
-            doc["id"], len(futures), batch.cache_hits, time.monotonic() - started,
+            doc["id"],
+            len(futures),
+            batch.cache_hits,
+            time.monotonic() - started,
         )
         yield {"type": "complete", "revision": doc["revision"]}
     finally:

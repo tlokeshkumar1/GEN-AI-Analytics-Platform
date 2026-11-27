@@ -1,4 +1,4 @@
-name: Enterprise local verification
+name: Enterprise and SAP Cloud Foundry verification
 
 on:
   push:
@@ -17,13 +17,13 @@ concurrency:
 # These jobs never load repository .env files or use cloud credentials.
 # Real HANA/LLM/connector tests require a separate workflow_dispatch workflow,
 # isolated test schema, explicit secrets and a protected environment with reviewers.
-# No cloud verification is claimed by this workflow.
+# Cloud Foundry jobs validate packaging and simulated bindings, not a live deployment.
 jobs:
   backend:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -45,6 +45,67 @@ jobs:
           path: ci-results/
           if-no-files-found: error
 
+  sap-cf-backend:
+    name: SAP Cloud Foundry backend tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-ci.txt
+      - run: python -m pip install -r backend/requirements.txt -r backend/requirements-ci.txt
+      - name: Test CF service bindings, production authentication, and worker
+        run: python scripts/run_offline_tests.py --pattern 'test_cloud_foundry*.py' --report ci-results/sap-cf-backend.json
+      - name: Validate Cloud Foundry deployment contracts
+        run: python scripts/check_cloud_foundry.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sap-cf-backend-tests
+          path: ci-results/
+          if-no-files-found: error
+
+  sap-cf-frontend:
+    name: SAP Cloud Foundry frontend and MTA tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            router/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r backend/requirements-ci.txt
+      - name: Test SAP approuter routing and authentication contracts
+        run: |
+          npm ci --prefix router
+          node --test router/test/*.test.cjs
+      - name: Install SAP Cloud MTA Build Tool
+        run: npm install --global mbt@1.2.53
+      - name: Validate SAP MTA descriptor
+        run: mbt validate --strict=true
+      - name: Build deployable Cloud Foundry archive
+        run: mbt build -p cf --strict=true -t ci-results --mtar sap-cloud-foundry.mtar
+      - name: Verify packaged UI, API, worker, and credential exclusions
+        run: python scripts/check_cloud_foundry.py --archive ci-results/sap-cloud-foundry.mtar
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sap-cf-mta-package
+          path: ci-results/
+          if-no-files-found: error
+
   python-quality:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -62,7 +123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     defaults:

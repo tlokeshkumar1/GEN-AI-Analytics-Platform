@@ -6,8 +6,7 @@ from threading import Barrier, Event, Lock
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
-from fastapi import FastAPI, HTTPException
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 from api.models.execution_context import current_identity
 from api.platform.storage import DatasetRepository
@@ -24,10 +23,14 @@ class ConcurrentDataReadsTests(TestCase):
             "rows": {"columns": [{"name": "amount"}], "rows": [{"amount": 12}]},
             "vectors": {"embeddings": [[0.1, 0.2]], "embeddingStatus": "Ready"},
         }
-        objects.get.side_effect = get or (lambda key: json.dumps(payloads[key]).encode())
+        objects.get.side_effect = get or (
+            lambda key: json.dumps(payloads[key]).encode()
+        )
         return DatasetRepository(store=MagicMock(), objects=objects)
 
-    def test_twelve_simultaneous_reads_share_one_download_and_return_isolated_results(self):
+    def test_twelve_simultaneous_reads_share_one_download_and_return_isolated_results(
+        self,
+    ):
         repo = self.repository()
         start = Barrier(12)
 
@@ -38,10 +41,17 @@ class ConcurrentDataReadsTests(TestCase):
         with ThreadPoolExecutor(max_workers=12) as pool:
             results = list(pool.map(lambda _: read(), range(12)))
         self.assertEqual(repo.objects.get.call_count, 2)
-        self.assertEqual([call.args[0] for call in repo.objects.get.call_args_list], ["manifest", "rows"])
+        self.assertEqual(
+            [call.args[0] for call in repo.objects.get.call_args_list],
+            ["manifest", "rows"],
+        )
         results[0]["rows"][0]["amount"] = 99
-        self.assertTrue(all(result["rows"][0]["amount"] == 12 for result in results[1:]))
-        self.assertEqual(repo.snapshot("manifest", include_index=False)["rows"][0]["amount"], 12)
+        self.assertTrue(
+            all(result["rows"][0]["amount"] == 12 for result in results[1:])
+        )
+        self.assertEqual(
+            repo.snapshot("manifest", include_index=False)["rows"][0]["amount"], 12
+        )
 
     def test_slow_dataset_does_not_block_another_dataset(self):
         entered, release = Event(), Event()
@@ -51,7 +61,9 @@ class ConcurrentDataReadsTests(TestCase):
                 entered.set()
                 if not release.wait(timeout=5):
                     raise RuntimeError("Test timed out")
-            return json.dumps({"data": "rows", "index": "vectors"} if key != "rows" else {"rows": []}).encode()
+            return json.dumps(
+                {"data": "rows", "index": "vectors"} if key != "rows" else {"rows": []}
+            ).encode()
 
         repo = self.repository(get)
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -77,7 +89,9 @@ class ConcurrentDataReadsTests(TestCase):
             other.snapshot("manifest", include_index=False)
         self.assertFalse(other._snapshot_loads)
         other.objects.get.side_effect = get
-        self.assertEqual(other.snapshot("manifest", include_index=False)["rows"][0]["amount"], 12)
+        self.assertEqual(
+            other.snapshot("manifest", include_index=False)["rows"][0]["amount"], 12
+        )
 
     def test_snapshot_memory_budget_is_enforced(self):
         repo = self.repository()
@@ -89,9 +103,19 @@ class ConcurrentDataReadsTests(TestCase):
     def test_warm_cache_does_not_bypass_another_users_dataset_permissions(self):
         repo = self.repository()
         service = DatasetService(repository=repo)
-        entry = {"id": "private", "name": "Private", "workspaceId": "w", "ownerId": "alice", "readers": [],
-                 "writers": [], "currentVersion": 1, "versions": [{"version": 1, "snapshotKey": "manifest"}]}
-        with patch.object(service, "_catalog", return_value={"datasets": {"private": entry}}):
+        entry = {
+            "id": "private",
+            "name": "Private",
+            "workspaceId": "w",
+            "ownerId": "alice",
+            "readers": [],
+            "writers": [],
+            "currentVersion": 1,
+            "versions": [{"version": 1, "snapshotKey": "manifest"}],
+        }
+        with patch.object(
+            service, "_catalog", return_value={"datasets": {"private": entry}}
+        ):
             alice = current_identity.set({"workspace_id": "w", "user_id": "alice"})
             try:
                 source = service._entry(service._catalog(), "private")
@@ -108,9 +132,25 @@ class ConcurrentDataReadsTests(TestCase):
         self.assertEqual(repo.objects.get.call_count, 2)
 
     def test_semantic_metadata_and_agent_activity_do_not_fetch_snapshots(self):
-        entry = {"id": "d", "name": "Data", "currentVersion": 1, "tableName": "DATA",
-                 "versions": [{"version": 1, "columns": [], "rowCount": 3650, "embeddingStatus": "Ready", "embeddingCount": 3650}]}
-        with patch.object(semantic, "dataset_service") as service, patch.object(semantic, "semantic_registry") as registry:
+        entry = {
+            "id": "d",
+            "name": "Data",
+            "currentVersion": 1,
+            "tableName": "DATA",
+            "versions": [
+                {
+                    "version": 1,
+                    "columns": [],
+                    "rowCount": 3650,
+                    "embeddingStatus": "Ready",
+                    "embeddingCount": 3650,
+                }
+            ],
+        }
+        with (
+            patch.object(semantic, "dataset_service") as service,
+            patch.object(semantic, "semantic_registry") as registry,
+        ):
             service._entry.return_value = entry
             registry.list.return_value = []
             self.assertEqual(semantic.semantics("d", 1), [])
@@ -124,7 +164,10 @@ class ConcurrentDataReadsTests(TestCase):
             patch("api.platform.semantic.semantic_registry.items", return_value=[]),
         ):
             service._entry.return_value = entry
-            service._version_meta.return_value = {"rowCount": 3650, "embeddingCount": 3650}
+            service._version_meta.return_value = {
+                "rowCount": 3650,
+                "embeddingCount": 3650,
+            }
             result = dataset_agent_activity("d", version=1)
             service._snapshot.assert_not_called()
             self.assertEqual(result["result"]["rows_processed"], 3650)
@@ -139,14 +182,19 @@ class ConcurrentDataReadsTests(TestCase):
             return {"user": user, "widgets": []}
 
         def read(user):
-            token = current_identity.set({"workspace_id": "w", "tenant_id": "t", "user_id": user})
+            token = current_identity.set(
+                {"workspace_id": "w", "tenant_id": "t", "user_id": user}
+            )
             try:
                 start.wait(timeout=5)
                 return dashboard.get_dashboard()
             finally:
                 current_identity.reset(token)
 
-        with patch.object(dashboard, "_get_dashboard", side_effect=calculate), ThreadPoolExecutor(max_workers=8) as pool:
+        with (
+            patch.object(dashboard, "_get_dashboard", side_effect=calculate),
+            ThreadPoolExecutor(max_workers=8) as pool,
+        ):
             users = ["alice", "bob"] * 4
             results = list(pool.map(read, users))
         self.assertEqual([result["user"] for result in results], users)
@@ -154,9 +202,12 @@ class ConcurrentDataReadsTests(TestCase):
 
     def test_history_failure_releases_connection_pool_capacity(self):
         from api.services.history_service import ChatHistoryService
+
         with patch("api.services.history_service.db_manager") as manager:
             conn = manager.get_connection.return_value
-            conn.cursor.return_value.execute.side_effect = RuntimeError("Network failed")
+            conn.cursor.return_value.execute.side_effect = RuntimeError(
+                "Network failed"
+            )
             with self.assertRaises(HTTPException):
                 with ChatHistoryService()._cursor("read") as cursor:
                     cursor.execute("SELECT 1 FROM DUMMY")
@@ -183,13 +234,19 @@ class ConcurrentDataReadsTests(TestCase):
             return {"widgets": [{"value": 12}]}
 
         def read():
-            token = current_identity.set({"workspace_id": "w", "tenant_id": "t", "user_id": "alice"})
+            token = current_identity.set(
+                {"workspace_id": "w", "tenant_id": "t", "user_id": "alice"}
+            )
             try:
                 return dashboard.get_dashboard()
             finally:
                 current_identity.reset(token)
 
-        with patch.object(dashboard, "_get_dashboard", side_effect=calculate) as execute, patch.object(dashboard, "Future", ObservedFuture), ThreadPoolExecutor(max_workers=4) as pool:
+        with (
+            patch.object(dashboard, "_get_dashboard", side_effect=calculate) as execute,
+            patch.object(dashboard, "Future", ObservedFuture),
+            ThreadPoolExecutor(max_workers=4) as pool,
+        ):
             primary = pool.submit(read)
             try:
                 self.assertTrue(entered.wait(timeout=2))
@@ -197,7 +254,12 @@ class ConcurrentDataReadsTests(TestCase):
                 self.assertTrue(waiting.wait(timeout=2))
             finally:
                 release.set()
-            responses = [primary.result(timeout=2), *(f.result(timeout=2) for f in followers)]
+            responses = [
+                primary.result(timeout=2),
+                *(f.result(timeout=2) for f in followers),
+            ]
         execute.assert_called_once()
         responses[0]["widgets"][0]["value"] = 99
-        self.assertTrue(all(item["widgets"][0]["value"] == 12 for item in responses[1:]))
+        self.assertTrue(
+            all(item["widgets"][0]["value"] == 12 for item in responses[1:])
+        )

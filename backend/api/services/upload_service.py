@@ -9,7 +9,10 @@ from api.services.dataset_service import dataset_service
 from api.database.hana_table_service import hana_table_service
 from api.platform.agent_preprocessing import preprocessing_agent
 from api.platform.agent_domain_classifier import domain_classifier_agent
-from api.platform.agent_chart_recommender import chart_recommender_agent, recommendation_signature
+from api.platform.agent_chart_recommender import (
+    chart_recommender_agent,
+    recommendation_signature,
+)
 from api.platform.semantic import semantic_registry
 from api.platform.workflow import workflow_orchestrator
 from api.utils.logger import get_logger
@@ -343,9 +346,15 @@ class UploadService:
                         model=persisted_model,
                         require_review=True,
                     )
-                    stored = {recommendation_signature(item): item for item in [
-                        *semantic_registry.items(raw_entry, version, persisted_model.revision), *saved,
-                    ]}
+                    stored = {
+                        recommendation_signature(item): item
+                        for item in [
+                            *semantic_registry.items(
+                                raw_entry, version, persisted_model.revision
+                            ),
+                            *saved,
+                        ]
+                    }
                     linked = []
                     for rec in recommendations:
                         item = stored.get(recommendation_signature(rec))
@@ -353,7 +362,8 @@ class UploadService:
                             continue
                         definition = {
                             **item.model_dump(mode="json"),
-                            "dataset_id": dataset_id, "version": version,
+                            "dataset_id": dataset_id,
+                            "version": version,
                             "dataset_name": display_name or filename,
                         }
                         linked.append({**rec, "id": item.id, "definition": definition})
@@ -362,7 +372,9 @@ class UploadService:
                     logger.warning(
                         f"[UploadService] Note: Could not persist proposed recommendations: {exc}"
                     )
-                    warnings.append("Recommendations could not be saved for review. Retry recommendation generation in Build Your KPI.")
+                    warnings.append(
+                        "Recommendations could not be saved for review. Retry recommendation generation in Build Your KPI."
+                    )
             logger.info(
                 f"[UploadService] Agent 3 finished: Produced {len(recommendations)} recommended charts."
             )

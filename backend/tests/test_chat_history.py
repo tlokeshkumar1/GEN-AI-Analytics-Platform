@@ -51,7 +51,7 @@ class ChatHistoryTests(unittest.TestCase):
         self.assertNotIn("private", error.exception.detail)
         self.assertFalse(self.service._tables_initialized)
         self.connection.rollback.assert_called_once()
-        self.connection.close.assert_called_once()
+        self.manager.discard_connection.assert_called_once_with(self.connection)
         self.manager.return_connection.assert_not_called()
 
     def test_unowned_and_other_user_sessions_are_not_readable_or_deletable(self):
@@ -86,7 +86,7 @@ class ChatHistoryTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             self.service.create_session("real-user")
         self.connection.rollback.assert_called_once()
-        self.connection.close.assert_called_once()
+        self.manager.discard_connection.assert_called_once_with(self.connection)
 
     def test_startup_does_not_create_tables_when_the_schema_is_wrong(self):
         self.cursor.fetchone.return_value = None

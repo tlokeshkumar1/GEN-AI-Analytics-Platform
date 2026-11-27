@@ -3,7 +3,9 @@
 from api.platform.content import timestamp
 
 
-def remove_dataset_widgets(store, workspace_id, dataset_id, *, tenant_id=None, actor_id=None):
+def remove_dataset_widgets(
+    store, workspace_id, dataset_id, *, tenant_id=None, actor_id=None
+):
     removed = updated = 0
     for namespace in store.personal_file_namespaces():
         with store.transaction():
@@ -11,7 +13,9 @@ def remove_dataset_widgets(store, workspace_id, dataset_id, *, tenant_id=None, a
             if not index_row:
                 continue
             index = index_row["value"]
-            keys = [key for key, item in index.items() if item.get("kind") == "dashboard"]
+            keys = [
+                key for key, item in index.items() if item.get("kind") == "dashboard"
+            ]
             documents = store.get_many(namespace, keys)
             changed = False
             for key, row in documents.items():
@@ -25,7 +29,11 @@ def remove_dataset_widgets(store, workspace_id, dataset_id, *, tenant_id=None, a
                 count = 0
                 for page in doc.get("pages", []):
                     widgets = page.get("widgets", [])
-                    retained = [w for w in widgets if w.get("source", {}).get("dataset_id") != dataset_id]
+                    retained = [
+                        w
+                        for w in widgets
+                        if w.get("source", {}).get("dataset_id") != dataset_id
+                    ]
                     count += len(widgets) - len(retained)
                     page["widgets"] = retained
                 if not count:
@@ -34,7 +42,8 @@ def remove_dataset_widgets(store, workspace_id, dataset_id, *, tenant_id=None, a
                 for container in [doc, *doc.get("pages", [])]:
                     if "filter_groups" in container:
                         container["filter_groups"] = [
-                            group for group in container["filter_groups"]
+                            group
+                            for group in container["filter_groups"]
                             if group.get("source", {}).get("dataset_id") != dataset_id
                         ]
                 revision = row["revision"]
@@ -48,7 +57,11 @@ def remove_dataset_widgets(store, workspace_id, dataset_id, *, tenant_id=None, a
                 store.put(
                     namespace + ":history:" + key,
                     str(doc["revision"]),
-                    {"action": "dataset deleted", "dataset_id": dataset_id, "document": doc},
+                    {
+                        "action": "dataset deleted",
+                        "dataset_id": dataset_id,
+                        "document": doc,
+                    },
                 )
                 changed = True
                 removed += count

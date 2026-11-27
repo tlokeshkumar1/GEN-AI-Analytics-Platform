@@ -41,7 +41,11 @@ def _provider_diagnostic(response):
     try:
         body = response.json()
         error = body.get("error", body) if isinstance(body, dict) else {}
-        message = (error.get("message") or error.get("detail")) if isinstance(error, dict) else error
+        message = (
+            (error.get("message") or error.get("detail"))
+            if isinstance(error, dict)
+            else error
+        )
         if not isinstance(message, str):
             message = "No provider diagnostic message returned"
     except (ValueError, TypeError):
@@ -49,9 +53,20 @@ def _provider_diagnostic(response):
     if settings.NVIDIA_API_KEY:
         message = message.replace(settings.NVIDIA_API_KEY, "[redacted]")
     message = re.sub(r"(?i)bearer\s+\S+", "Bearer [redacted]", message)
-    message = re.sub(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", message)
+    message = re.sub(
+        r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+",
+        r"\1=[redacted]",
+        message,
+    )
     message = " ".join(message.split())[:300]
-    request_id = next((response.headers.get(name) for name in ("x-request-id", "request-id", "x-nv-request-id") if response.headers.get(name)), None)
+    request_id = next(
+        (
+            response.headers.get(name)
+            for name in ("x-request-id", "request-id", "x-nv-request-id")
+            if response.headers.get(name)
+        ),
+        None,
+    )
     if request_id and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", request_id):
         request_id = None
     return message, request_id
@@ -99,27 +114,43 @@ class AICoreService:
                 )
                 res.raise_for_status()
                 return res
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.HTTPError,
+            ) as e:
                 last_exception = e
-                response = e.response if isinstance(e, requests.exceptions.HTTPError) else None
+                response = (
+                    e.response if isinstance(e, requests.exceptions.HTTPError) else None
+                )
                 status = response.status_code if response is not None else None
-                retryable = status in (429, 500, 502, 503, 504) or not isinstance(e, requests.exceptions.HTTPError)
+                retryable = status in (429, 500, 502, 503, 504) or not isinstance(
+                    e, requests.exceptions.HTTPError
+                )
                 if retryable and attempt < max_retries:
                     wait_time = min(8, 2**attempt)
                     if response is not None:
                         try:
-                            wait_time = min(10, max(wait_time, float(response.headers.get("Retry-After", 0))))
+                            wait_time = min(
+                                10,
+                                max(
+                                    wait_time,
+                                    float(response.headers.get("Retry-After", 0)),
+                                ),
+                            )
                         except (TypeError, ValueError):
                             pass
                     logger.warning(
                         "Embedding request failed (HTTP %s, %s, attempt %s/%s); retrying in %ss",
-                        status, type(e).__name__, attempt + 1, max_retries + 1, wait_time,
+                        status,
+                        type(e).__name__,
+                        attempt + 1,
+                        max_retries + 1,
+                        wait_time,
                     )
                     time.sleep(wait_time)
                 else:
-                    logger.error(
-                        f"Request failed after {attempt + 1} attempts: {e}"
-                    )
+                    logger.error(f"Request failed after {attempt + 1} attempts: {e}")
                     raise
             except Exception as e:
                 last_exception = e
@@ -384,7 +415,11 @@ class AICoreService:
         }
         try:
             res = self._request_with_retry(
-                settings.NVIDIA_API_URL, headers, payload, timeout=(5, 30), max_retries=max_retries
+                settings.NVIDIA_API_URL,
+                headers,
+                payload,
+                timeout=(5, 30),
+                max_retries=max_retries,
             )
             items = sorted(res.json()["data"], key=lambda item: item.get("index", 0))
             if len(items) != len(texts):
@@ -397,7 +432,11 @@ class AICoreService:
         except requests.exceptions.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
             model = payload["model"]
-            diagnostic, request_id = _provider_diagnostic(exc.response) if exc.response is not None else ("No provider response", None)
+            diagnostic, request_id = (
+                _provider_diagnostic(exc.response)
+                if exc.response is not None
+                else ("No provider response", None)
+            )
             if status == 410:
                 message = (
                     f"Embedding model '{model}' is no longer available (HTTP 410). "
@@ -414,7 +453,9 @@ class AICoreService:
             if request_id:
                 message += f" Request ID: {request_id}."
             logger.error("%s Provider diagnostic: %s", message, diagnostic)
-            raise EmbeddingProviderError(message, status_code=status, request_id=request_id) from exc
+            raise EmbeddingProviderError(
+                message, status_code=status, request_id=request_id
+            ) from exc
         except Exception as exc:
             logger.exception("NVIDIA embedding request failed")
             raise EmbeddingProviderError(

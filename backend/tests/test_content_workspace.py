@@ -445,13 +445,20 @@ class FilesTests(TestCase):
             import hashlib
             import json
             from api.platform.content_publication import clear_calculation_cache
+
             clear_calculation_cache()
             self.addCleanup(clear_calculation_cache)
             original_key = "objects/" + "a" * 64
             original_snapshot = service._snapshot(entry, 1)
-            original_model = self.store.get(semantic_registry.namespace(entry, 1), "1")["value"]
+            original_model = self.store.get(semantic_registry.namespace(entry, 1), "1")[
+                "value"
+            ]
             original_item = self.store.get(ns, "count:1")["value"]
-            old_digest = hashlib.sha256(json.dumps([original_model, original_item, original_key], sort_keys=True).encode()).hexdigest()
+            old_digest = hashlib.sha256(
+                json.dumps(
+                    [original_model, original_item, original_key], sort_keys=True
+                ).encode()
+            ).hexdigest()
             service.repository.objects.keys.return_value = [original_key]
             service.repository.snapshot.return_value = original_snapshot
             entry["versions"] = [{"version": 1, "snapshotKey": "objects/" + "b" * 64}]
@@ -460,13 +467,23 @@ class FilesTests(TestCase):
             stable_digest = recovered["digest"]
             self.assertTrue(stable_digest.startswith("data-v2:"))
             from api.platform.content_publication import CalculationBatch
+
             batch = CalculationBatch([refs[-1], refs[-1]])
-            with patch.object(self.store, "get_many", wraps=self.store.get_many) as bulk:
+            with patch.object(
+                self.store, "get_many", wraps=self.store.get_many
+            ) as bulk:
                 for _ in range(2):
-                    calculate(self.owner, refs[-1], expected_digest=stable_digest, batch=batch)
+                    calculate(
+                        self.owner, refs[-1], expected_digest=stable_digest, batch=batch
+                    )
                 bulk.assert_called_once_with(ns, ["count:1"])
             entry["versions"][0]["snapshotKey"] = "objects/" + "c" * 64
-            self.assertEqual(calculate(self.owner, refs[-1], expected_digest=stable_digest)["digest"], stable_digest)
+            self.assertEqual(
+                calculate(self.owner, refs[-1], expected_digest=stable_digest)[
+                    "digest"
+                ],
+                stable_digest,
+            )
             entry["total"] = 99
             for pin in (old_digest, stable_digest):
                 with self.assertRaises(HTTPException) as changed:
@@ -474,10 +491,17 @@ class FilesTests(TestCase):
                 self.assertEqual(changed.exception.status_code, 409)
             entry["total"] = 47
             # A changed definition cannot pass the original legacy proof.
-            self.store.put(ns, "count:1", dict(original_item, title="Changed"), self.store.get(ns, "count:1")["revision"])
+            self.store.put(
+                ns,
+                "count:1",
+                dict(original_item, title="Changed"),
+                self.store.get(ns, "count:1")["revision"],
+            )
             with self.assertRaises(HTTPException):
                 calculate(self.owner, refs[-1], expected_digest=old_digest)
-            self.store.put(ns, "count:1", original_item, self.store.get(ns, "count:1")["revision"])
+            self.store.put(
+                ns, "count:1", original_item, self.store.get(ns, "count:1")["revision"]
+            )
             from api.models.content import FilterEdit
             from api.platform.content_dashboard import edit_filters, refresh
 

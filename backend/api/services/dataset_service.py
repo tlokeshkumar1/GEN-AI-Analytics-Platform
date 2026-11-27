@@ -254,7 +254,9 @@ class DatasetService:
         from api.platform.data_resolution import current_table
 
         number = entry["currentVersion"] if version is None else version
-        record = next((v for v in entry.get("versions", []) if v["version"] == number), None)
+        record = next(
+            (v for v in entry.get("versions", []) if v["version"] == number), None
+        )
         if record is None:
             raise HTTPException(404, "Dataset version not found.")
         meta = self._version_meta(entry, record)
@@ -273,7 +275,9 @@ class DatasetService:
                     409, "Migrate this dataset version to durable storage before use."
                 )
             if not include_index:
-                return self.repository.snapshot(item["snapshotKey"], include_index=False)
+                return self.repository.snapshot(
+                    item["snapshotKey"], include_index=False
+                )
             return self.repository.snapshot(item["snapshotKey"])
         cache_key = (entry["id"], number)
         with self._cache_lock:
@@ -354,7 +358,9 @@ class DatasetService:
                 "embeddingStatus": version.get("embeddingStatus", "Ready"),
                 "embeddingCount": version.get("embeddingCount", 0),
                 "embeddingError": version.get("embeddingError"),
-                "embeddingTotal": version.get("embeddingTotal", version.get("rowCount", 0)),
+                "embeddingTotal": version.get(
+                    "embeddingTotal", version.get("rowCount", 0)
+                ),
                 "hanaSyncStatus": version.get("hanaSyncStatus", "Ready"),
                 "tableName": version.get("tableName"),
                 "sheet_name": version.get("sheet_name"),
@@ -455,7 +461,9 @@ class DatasetService:
             "embeddingStatus": snap.get("embeddingStatus", "Ready"),
             "embeddingCount": snap.get("embeddingCount", 0),
             "embeddingError": snap.get("embeddingError"),
-            "embeddingTotal": snap.get("embeddingTotal", snap.get("rowCount", len(snap.get("rows", [])))),
+            "embeddingTotal": snap.get(
+                "embeddingTotal", snap.get("rowCount", len(snap.get("rows", [])))
+            ),
             "hanaSyncStatus": self._vector_sync_status(snap),
             "isActive": entry["id"] == active_id,
         }
@@ -488,17 +496,27 @@ class DatasetService:
     @staticmethod
     def _vector_sync_status(snapshot, default="Ready"):
         status = snapshot.get("hanaSyncStatus", default)
-        return "Blocked" if status == "Pending" and snapshot.get("embeddingStatus") == "Error" else status
+        return (
+            "Blocked"
+            if status == "Pending" and snapshot.get("embeddingStatus") == "Error"
+            else status
+        )
 
     def _store_index_result(self, entry, number, snapshot, catalog=None):
         """Commit retry state without changing the saved rows or source version."""
-        reference = self.repository.save_snapshot(snapshot) if self.repository is not None else None
+        reference = (
+            self.repository.save_snapshot(snapshot)
+            if self.repository is not None
+            else None
+        )
 
         def commit(current_catalog):
             current = current_catalog["datasets"].get(entry["id"])
             if current is None:
                 return
-            version = next((v for v in current.get("versions", []) if v["version"] == number), None)
+            version = next(
+                (v for v in current.get("versions", []) if v["version"] == number), None
+            )
             if version is None:
                 return
             stored_reference = reference
@@ -509,11 +527,26 @@ class DatasetService:
                     return
                 if latest_meta.get("embeddingCount", 0):
                     latest = self._snapshot(current, number)
-                    if latest.get("embeddingConfiguration") == snapshot.get("embeddingConfiguration"):
-                        merged = {**latest.get("embeddingCheckpoint", {}), **snapshot.get("embeddingCheckpoint", {})}
-                        allowed = {hashlib.sha256(chunk.encode()).hexdigest() for chunk in snapshot["chunks"]}
-                        snapshot["embeddingCheckpoint"] = {key: vector for key, vector in merged.items() if key in allowed}
-                        snapshot["embeddingCount"] = sum(hashlib.sha256(chunk.encode()).hexdigest() in merged for chunk in snapshot["chunks"])
+                    if latest.get("embeddingConfiguration") == snapshot.get(
+                        "embeddingConfiguration"
+                    ):
+                        merged = {
+                            **latest.get("embeddingCheckpoint", {}),
+                            **snapshot.get("embeddingCheckpoint", {}),
+                        }
+                        allowed = {
+                            hashlib.sha256(chunk.encode()).hexdigest()
+                            for chunk in snapshot["chunks"]
+                        }
+                        snapshot["embeddingCheckpoint"] = {
+                            key: vector
+                            for key, vector in merged.items()
+                            if key in allowed
+                        }
+                        snapshot["embeddingCount"] = sum(
+                            hashlib.sha256(chunk.encode()).hexdigest() in merged
+                            for chunk in snapshot["chunks"]
+                        )
                         if self.repository is not None:
                             stored_reference = self.repository.save_snapshot(snapshot)
             if stored_reference:
@@ -522,7 +555,18 @@ class DatasetService:
                 folder = self.output_dir / current["folder"]
                 self._write_json(folder / f".version_{number}.json", snapshot)
                 self._write_version_meta(folder, number, snapshot)
-            version.update({key: snapshot.get(key) for key in ("embeddingStatus", "embeddingCount", "embeddingError", "embeddingTotal", "hanaSyncStatus")})
+            version.update(
+                {
+                    key: snapshot.get(key)
+                    for key in (
+                        "embeddingStatus",
+                        "embeddingCount",
+                        "embeddingError",
+                        "embeddingTotal",
+                        "hanaSyncStatus",
+                    )
+                }
+            )
             self._write_json(self.catalog_path, current_catalog)
 
         if catalog is not None:
@@ -532,7 +576,9 @@ class DatasetService:
                 commit(self._catalog())
         self._invalidate()
 
-    def _index(self, chunks, previous=None, *, raise_on_error=False, resume=None, progress=None):
+    def _index(
+        self, chunks, previous=None, *, raise_on_error=False, resume=None, progress=None
+    ):
         from api.services.embedding_service import embedding_service
         from api.services.ai_core_service import EmbeddingProviderError
         from api.utils.logger import get_logger
@@ -554,7 +600,13 @@ class DatasetService:
                 embeddingTotal=len(chunks),
                 embeddingCount=sum(chunk in reusable for chunk in chunks),
                 embeddingConfiguration=configuration,
-                embeddingCheckpoint={hashlib.sha256(chunk.encode()).hexdigest(): reusable[chunk] for chunk in chunks if chunk in reusable} if error else {},
+                embeddingCheckpoint={
+                    hashlib.sha256(chunk.encode()).hexdigest(): reusable[chunk]
+                    for chunk in chunks
+                    if chunk in reusable
+                }
+                if error
+                else {},
             )
 
         try:
@@ -562,20 +614,34 @@ class DatasetService:
                 dict(zip(previous["chunks"], previous["embeddings"]))
                 if previous
                 and previous["embeddingStatus"] == "Ready"
-                and previous.get("embeddingConfiguration")
-                == configuration
+                and previous.get("embeddingConfiguration") == configuration
                 else {}
             )
             if resume and resume.get("embeddingConfiguration") == configuration:
                 saved = resume.get("embeddingCheckpoint", {})
-                reusable.update({chunk: saved[hashlib.sha256(chunk.encode()).hexdigest()] for chunk in chunks if hashlib.sha256(chunk.encode()).hexdigest() in saved})
-            reusable = {chunk: vector for chunk, vector in reusable.items() if valid(vector)}
+                reusable.update(
+                    {
+                        chunk: saved[hashlib.sha256(chunk.encode()).hexdigest()]
+                        for chunk in chunks
+                        if hashlib.sha256(chunk.encode()).hexdigest() in saved
+                    }
+                )
+            reusable = {
+                chunk: vector for chunk, vector in reusable.items() if valid(vector)
+            }
             missing = list(
                 dict.fromkeys(chunk for chunk in chunks if chunk not in reusable)
             )
             if missing:
-                get_logger("datasets").info("Embedding index | inputs=%s | reused=%s | missing=%s", len(chunks), len(chunks) - len(missing), len(missing))
-                reusable.update(zip(missing, embedding_service.batch_embeddings(missing)))
+                get_logger("datasets").info(
+                    "Embedding index | inputs=%s | reused=%s | missing=%s",
+                    len(chunks),
+                    len(chunks) - len(missing),
+                    len(missing),
+                )
+                reusable.update(
+                    zip(missing, embedding_service.batch_embeddings(missing))
+                )
             vectors = [reusable[chunk] for chunk in chunks]
             if len(vectors) != len(chunks) or any(
                 not v or not all(math.isfinite(x) for x in v) for v in vectors
@@ -584,8 +650,18 @@ class DatasetService:
             checkpoint()
             return vectors, "Ready"
         except Exception as error:
-            reusable.update({chunk: vector for chunk, vector in getattr(error, "completed", {}).items() if chunk in allowed and valid(vector)})
-            checkpoint(str(error) if isinstance(error, EmbeddingProviderError) else "Embedding generation failed. Check backend logs and retry embeddings.")
+            reusable.update(
+                {
+                    chunk: vector
+                    for chunk, vector in getattr(error, "completed", {}).items()
+                    if chunk in allowed and valid(vector)
+                }
+            )
+            checkpoint(
+                str(error)
+                if isinstance(error, EmbeddingProviderError)
+                else "Embedding generation failed. Check backend logs and retry embeddings."
+            )
             get_logger("datasets").exception(
                 "Embedding generation failed; current source text remains available for retrieval"
             )
@@ -705,7 +781,9 @@ class DatasetService:
                         previous = None
 
             progress = {}
-            vectors, embedding_status = self._index(snap["chunks"], previous, resume=snap, progress=progress)
+            vectors, embedding_status = self._index(
+                snap["chunks"], previous, resume=snap, progress=progress
+            )
             hana_status = self._sync_hana(
                 entry,
                 version,
@@ -894,7 +972,9 @@ class DatasetService:
         previous = self._snapshot(entry) if entry["versions"] else None
         progress = {}
         vectors, embedding_status = (
-            self._index(chunks, previous, progress=progress) if index else ([], "Pending")
+            self._index(chunks, previous, progress=progress)
+            if index
+            else ([], "Pending")
         )
         hana_status = (
             self._sync_hana(entry, number, chunks, vectors) if index else "Pending"
@@ -933,7 +1013,17 @@ class DatasetService:
                 **(provenance or {}),
             }
         )
-        entry["versions"][-1].update({key: snap.get(key) for key in ("embeddingCount", "embeddingError", "embeddingTotal", "hanaSyncStatus")})
+        entry["versions"][-1].update(
+            {
+                key: snap.get(key)
+                for key in (
+                    "embeddingCount",
+                    "embeddingError",
+                    "embeddingTotal",
+                    "hanaSyncStatus",
+                )
+            }
+        )
         entry.update(currentVersion=number, updatedAt=now)
         catalog["datasets"][entry["id"]] = entry
         catalog["activeDatasetId"] = entry["id"]
@@ -1307,8 +1397,14 @@ class DatasetService:
         return result
 
     def preview(
-        self, dataset_id, page=1, page_size=10, sort_field=None,
-        sort_dir="asc", search="", version=None,
+        self,
+        dataset_id,
+        page=1,
+        page_size=10,
+        sort_field=None,
+        sort_dir="asc",
+        search="",
+        version=None,
     ):
         """Read-only page: let HANA filter, sort and limit the current table.
 
@@ -1321,27 +1417,46 @@ class DatasetService:
         catalog = self._catalog()
         entry = self._entry(catalog, dataset_id)
         number = version or entry["currentVersion"]
-        record = next((v for v in entry.get("versions", []) if v["version"] == number), None)
+        record = next(
+            (v for v in entry.get("versions", []) if v["version"] == number), None
+        )
         if record is None:
             raise HTTPException(404, "Dataset version not found.")
         table = current_table(entry, number)
         if not table:
-            return self.data(dataset_id, page, page_size, sort_field, sort_dir, search, number)
+            return self.data(
+                dataset_id, page, page_size, sort_field, sort_dir, search, number
+            )
         meta = self._version_meta(entry, record)
-        if sort_field and meta and sort_field not in {c["name"] for c in meta["columns"]}:
+        if (
+            sort_field
+            and meta
+            and sort_field not in {c["name"] for c in meta["columns"]}
+        ):
             raise HTTPException(400, "Unknown sort column.")
         try:
             result = hana_table_service.get_table_data(
-                table, page=page, page_size=page_size, sort_col=sort_field,
-                sort_dir=sort_dir.upper(), search=search,
+                table,
+                page=page,
+                page_size=page_size,
+                sort_col=sort_field,
+                sort_dir=sort_dir.upper(),
+                search=search,
             )
         except ValueError as exc:
-            raise HTTPException(409, "The registered HANA table is unavailable. Reconcile the dataset mapping.") from exc
+            raise HTTPException(
+                409,
+                "The registered HANA table is unavailable. Reconcile the dataset mapping.",
+            ) from exc
         except HTTPException:
             raise
         except Exception as exc:
-            raise HTTPException(503, "HANA could not return this page. Please retry.") from exc
-        names = {c["name"].casefold(): c["name"] for c in (meta or {}).get("columns", [])}
+            raise HTTPException(
+                503, "HANA could not return this page. Please retry."
+            ) from exc
+        names = {
+            c["name"].casefold(): c["name"] for c in (meta or {}).get("columns", [])
+        }
         rows = []
         for position, source in enumerate(result["rows"]):
             row = {names.get(k.casefold(), k): value for k, value in source.items()}
@@ -1353,13 +1468,21 @@ class DatasetService:
             # Populate the small view metadata from the catalog, never a row snapshot.
             entry = copy.deepcopy(entry)
             record = next(v for v in entry["versions"] if v["version"] == number)
-            record.update(columns=[{"name": c["name"], "type": "string"} for c in result["columns"]],
-                          rowCount=result["totalRows"], embeddingStatus="Pending")
+            record.update(
+                columns=[
+                    {"name": c["name"], "type": "string"} for c in result["columns"]
+                ],
+                rowCount=result["totalRows"],
+                embeddingStatus="Pending",
+            )
         return {
             "dataset": self._item(entry, catalog.get("activeDatasetId")),
-            "rows": rows, "totalRows": result["filteredRows"],
-            "page": result["page"], "pageSize": result["pageSize"],
-            "totalPages": result["totalPages"], "readOnly": True,
+            "rows": rows,
+            "totalRows": result["filteredRows"],
+            "page": result["page"],
+            "pageSize": result["pageSize"],
+            "totalPages": result["totalPages"],
+            "readOnly": True,
         }
 
     def data(
@@ -1876,14 +1999,10 @@ class DatasetService:
                     None,
                 )
                 if version:
-                    file_path = (
-                        self.output_dir / entry["folder"] / version["filename"]
-                    )
+                    file_path = self.output_dir / entry["folder"] / version["filename"]
                     if file_path.exists():
                         try:
-                            df = self.parse_file(
-                                file_path.read_bytes(), file_path.name
-                            )
+                            df = self.parse_file(file_path.read_bytes(), file_path.name)
                             rows = self._rows(df)
                             snap["rows"] = rows
                         except Exception:
@@ -1900,16 +2019,26 @@ class DatasetService:
 
         progress = {}
         original_ready = snap.get("embeddingStatus") == "Ready"
+
         def retain_failed_attempt():
             # An unsuccessful refresh must preserve an existing working index.
             if not original_ready:
-                snap.update(progress, embeddings=[], embeddingStatus="Error", hanaSyncStatus="Blocked")
+                snap.update(
+                    progress,
+                    embeddings=[],
+                    embeddingStatus="Error",
+                    hanaSyncStatus="Blocked",
+                )
                 if not snap.get("embeddingError"):
-                    snap["embeddingError"] = "Embedding generation failed. Check backend logs and retry embeddings."
+                    snap["embeddingError"] = (
+                        "Embedding generation failed. Check backend logs and retry embeddings."
+                    )
                 self._store_index_result(entry, entry["currentVersion"], snap)
 
         try:
-            vectors, status = self._index(snap["chunks"], raise_on_error=True, resume=snap, progress=progress)
+            vectors, status = self._index(
+                snap["chunks"], raise_on_error=True, resume=snap, progress=progress
+            )
         except EmbeddingProviderError as exc:
             retain_failed_attempt()
             raise HTTPException(503, f"{exc} Dataset is still saved.") from exc
@@ -1962,13 +2091,17 @@ class DatasetService:
 
             identity = current_identity.get() or {}
             dashboard_cleanup = remove_dataset_widgets(
-                self.repository.store, workspace_id, dataset_id,
+                self.repository.store,
+                workspace_id,
+                dataset_id,
                 tenant_id=entry.get("tenant_id") or identity.get("tenant_id"),
                 actor_id=identity.get("user_id"),
             )
             logger.info(
                 "Removed dataset dashboard placements | dataset=%s | widgets=%s | dashboards=%s",
-                dataset_id, dashboard_cleanup["widgets_removed"], dashboard_cleanup["dashboards_updated"],
+                dataset_id,
+                dashboard_cleanup["widgets_removed"],
+                dashboard_cleanup["dashboards_updated"],
             )
 
         # 1. Cascade Purge: SAP HANA Cloud Physical Column Table
@@ -2306,8 +2439,13 @@ class DatasetService:
         import contextvars
 
         progress = {}
+
         def _index_and_sync():
-            vecs, st = self._index(chunks, previous, progress=progress) if index else ([], "Pending")
+            vecs, st = (
+                self._index(chunks, previous, progress=progress)
+                if index
+                else ([], "Pending")
+            )
             h_status = (
                 self._sync_hana(entry, number, chunks, vecs) if index else "Pending"
             )
@@ -2376,7 +2514,17 @@ class DatasetService:
                 **(provenance or {}),
             )
         )
-        entry["versions"][-1].update({key: snapshot.get(key) for key in ("embeddingCount", "embeddingError", "embeddingTotal", "hanaSyncStatus")})
+        entry["versions"][-1].update(
+            {
+                key: snapshot.get(key)
+                for key in (
+                    "embeddingCount",
+                    "embeddingError",
+                    "embeddingTotal",
+                    "hanaSyncStatus",
+                )
+            }
+        )
         entry.update(currentVersion=number, updatedAt=now)
         catalog["datasets"][entry["id"]] = entry
         catalog["activeDatasetId"] = entry["id"]
@@ -2402,7 +2550,9 @@ class DatasetService:
             self._snapshot(entry, max(previous_versions)) if previous_versions else None
         )
         progress = {}
-        vectors, status = self._index(snapshot["chunks"], previous, resume=snapshot, progress=progress)
+        vectors, status = self._index(
+            snapshot["chunks"], previous, resume=snapshot, progress=progress
+        )
         hana_status = self._sync_hana(entry, number, snapshot["chunks"], vectors)
         snapshot.update(
             embeddings=vectors,

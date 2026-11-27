@@ -242,7 +242,9 @@ class DatasetRepository:
             try:
                 return deepcopy(pending.result(timeout=90))
             except FutureTimeout:
-                raise HTTPException(503, "Dataset loading timed out. Please retry.") from None
+                raise HTTPException(
+                    503, "Dataset loading timed out. Please retry."
+                ) from None
         try:
             manifest = json.loads(self.objects.get(reference))
             data = self.objects.get(manifest["data"])
@@ -257,8 +259,10 @@ class DatasetRepository:
                     self._snapshot_cache[key] = loaded
                     self._snapshot_sizes[key] = size
                     self._snapshot_cache_bytes += size
-                    while (len(self._snapshot_cache) > self._snapshot_cache_max
-                           or self._snapshot_cache_bytes > self._snapshot_cache_max_bytes):
+                    while (
+                        len(self._snapshot_cache) > self._snapshot_cache_max
+                        or self._snapshot_cache_bytes > self._snapshot_cache_max_bytes
+                    ):
                         evicted, _ = self._snapshot_cache.popitem(last=False)
                         self._snapshot_cache_bytes -= self._snapshot_sizes.pop(evicted)
             pending.set_result(loaded)

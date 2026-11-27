@@ -555,12 +555,18 @@ class RecommendationQualityAndDeduplicationTests(unittest.TestCase):
 
     def test_user_requested_recommendations_remain_proposed_until_review(self):
         df, model = self._sales_dataframe_and_model()
-        self.store.put(self.registry.namespace(self.entry, 1), "1", model.model_dump(mode="json"))
+        self.store.put(
+            self.registry.namespace(self.entry, 1), "1", model.model_dump(mode="json")
+        )
         recs = self.recommender.recommend(df, model, max_items=3, fast_only=True)
         with patch.dict("os.environ", {"PLATFORM_AUTO_APPROVE_SEMANTICS": "true"}):
-            saved = self.registry.persist_recommendations(self.entry, 1, 1, recs, model=model, require_review=True)
+            saved = self.registry.persist_recommendations(
+                self.entry, 1, 1, recs, model=model, require_review=True
+            )
         self.assertEqual(len(saved), len(recs))
-        self.assertTrue(all(item.status == "proposed" and item.reviewer is None for item in saved))
+        self.assertTrue(
+            all(item.status == "proposed" and item.reviewer is None for item in saved)
+        )
 
 
 if __name__ == "__main__":

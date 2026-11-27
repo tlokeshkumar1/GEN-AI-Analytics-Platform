@@ -360,7 +360,13 @@ class SemanticRegistry:
         return [AnalyticsItem.model_validate(val) for val in rows]
 
     def persist_recommendations(
-        self, entry, version, revision, recommendations, model=None, require_review=False
+        self,
+        entry,
+        version,
+        revision,
+        recommendations,
+        model=None,
+        require_review=False,
     ):
         """Persist unique recommendations; user-facing generation can require explicit review."""
         from api.platform.agent_chart_recommender import (

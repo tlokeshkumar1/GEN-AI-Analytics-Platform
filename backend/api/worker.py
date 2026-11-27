@@ -28,7 +28,8 @@ def main():
     next_idle_log = 0
     logger.info(
         "Worker ready | id=%s | workspace=%s | concurrency=1 (one job at a time) | poll=2s",
-        worker_id, workspace,
+        worker_id,
+        workspace,
     )
     while True:
         try:
@@ -39,13 +40,19 @@ def main():
             if job_id:
                 next_idle_log = 0
             elif time.monotonic() >= next_idle_log:
-                logger.info("Waiting for runnable jobs | active=0 | workspace=%s", workspace)
+                logger.info(
+                    "Waiting for runnable jobs | active=0 | workspace=%s", workspace
+                )
                 next_idle_log = time.monotonic() + 30
         except KeyboardInterrupt:
             logger.info("Worker stopped by user")
             return
         except Exception:
-            logger.exception("Worker iteration failed; will retry in 2s" if not args.once else "Worker iteration failed")
+            logger.exception(
+                "Worker iteration failed; will retry in 2s"
+                if not args.once
+                else "Worker iteration failed"
+            )
             if args.once:
                 raise
         if args.once:

@@ -773,11 +773,26 @@ Dedicated vector storage for dataset-scoped RAG retrieval:
 
 ## Testing & Quality Verification
 
+GitHub Actions keeps the Windows frontend/backend checks and replaces their Ubuntu matrix entries with **SAP Cloud Foundry backend tests** and **SAP Cloud Foundry frontend and MTA tests**. The CF jobs run on a pinned GitHub Linux build host; they validate synthetic VCAP bindings, production authentication, the separate worker process, SAP approuter routing, and a strict `mbt build -p cf`. The resulting archive is checked for UI/API/worker artifacts and private configuration exclusions. `mta.yaml` is public deployment configuration; credentials stay in ignored private extensions and service bindings.
+
+These are offline compatibility and packaging tests, not live SAP deployment, HANA connectivity, or load tests. No workflow deploys or needs SAP credentials. To run the CF checks locally after installing the CI requirements:
+
+```bash
+python scripts/run_offline_tests.py --pattern test_cloud_foundry*.py --report ci-results/sap-cf-backend.json
+python scripts/check_cloud_foundry.py
+mbt validate --strict=true
+mbt build -p cf --strict=true -t ci-results --mtar sap-cloud-foundry.mtar
+python scripts/check_cloud_foundry.py --archive ci-results/sap-cloud-foundry.mtar
+```
+
+MBT requires GNU Make and Node.js. The existing Python quality and dependency jobs remain enabled.
+
+
 Run the backend and frontend test suites to verify core functionality, multi-table scoping, cross-table joins, cascade deletions, and UI rendering:
 
 ```bash
-# 1. Run all 18 backend unit & integration test suites
-python -m unittest discover -s backend/tests -v
+# 1. Run backend tests without local .env files or live services
+python scripts/run_offline_tests.py --report ci-results/backend.json
 
 # 2. Run frontend unit tests (Vitest)
 cd frontend

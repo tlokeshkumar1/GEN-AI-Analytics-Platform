@@ -10,7 +10,11 @@ import pandas as pd
 from fastapi import HTTPException
 from api.models.execution_context import current_identity
 from api.platform.content_dashboard import refresh_events
-from api.platform.content_publication import CalculationBatch, calculate, clear_calculation_cache
+from api.platform.content_publication import (
+    CalculationBatch,
+    calculate,
+    clear_calculation_cache,
+)
 from api.platform.semantic import semantic_registry
 from api.services.analytics_engine import analytics_engine
 from api.services.dataset_service import DatasetService
@@ -23,33 +27,85 @@ class CalculationPerformanceTests(TestCase):
         self.addCleanup(self.stack.close)
         clear_calculation_cache()
         self.addCleanup(clear_calculation_cache)
-        token = current_identity.set({"tenant_id": "t", "workspace_id": "w", "user_id": "alice"})
+        token = current_identity.set(
+            {"tenant_id": "t", "workspace_id": "w", "user_id": "alice"}
+        )
         self.addCleanup(current_identity.reset, token)
-        self.workspace = SimpleNamespace(scope={"tenant_id": "t", "workspace_id": "w", "user_id": "alice"})
+        self.workspace = SimpleNamespace(
+            scope={"tenant_id": "t", "workspace_id": "w", "user_id": "alice"}
+        )
         self.store = DocumentFixture()
         self.service = MagicMock()
         self.service.repository.store = self.store
         self.service.repository.objects.backend = "hana"
-        self.entry = {"id": "ds", "workspaceId": "w", "ownerId": "alice", "currentVersion": 1,
-                      "versions": [{"version": 1, "snapshotKey": "immutable-v1"}]}
+        self.entry = {
+            "id": "ds",
+            "workspaceId": "w",
+            "ownerId": "alice",
+            "currentVersion": 1,
+            "versions": [{"version": 1, "snapshotKey": "immutable-v1"}],
+        }
         self.service._catalog.return_value = {"datasets": {"ds": self.entry}}
         self.service._entry.side_effect = DatasetService._entry
-        self.service._snapshot.return_value = {"rows": [{"units": 2}, {"units": 3}], "columns": [{"name": "units", "type": "number"}]}
+        self.service._snapshot.return_value = {
+            "rows": [{"units": 2}, {"units": 3}],
+            "columns": [{"name": "units", "type": "number"}],
+        }
         self.ns = semantic_registry.namespace(self.entry, 1)
-        self.model = {"dataset_id": "ds", "data_version": 1, "revision": 1, "status": "approved", "grain": "row",
-                      "fields": [{"name": "units", "semantic_name": "Units", "type": "integer", "role": "measure", "aggregations": ["SUM"]}]}
+        self.model = {
+            "dataset_id": "ds",
+            "data_version": 1,
+            "revision": 1,
+            "status": "approved",
+            "grain": "row",
+            "fields": [
+                {
+                    "name": "units",
+                    "semantic_name": "Units",
+                    "type": "integer",
+                    "role": "measure",
+                    "aggregations": ["SUM"],
+                }
+            ],
+        }
         self.store.put(self.ns, "1", self.model)
         self.items_ns = semantic_registry.namespace(self.entry, 1, "analytics:1")
         for name in ("one", "two"):
-            self.store.put(self.items_ns, name + ":1", {
-                "id": name, "revision": 1, "title": "Units", "kind": "kpi", "semantic_revision": 1,
-                "status": "approved", "reviewer": "alice", "query_plan": {"metric": "units", "aggregation": "SUM"},
-                "dependencies": ["units"], "explanation": "Reviewed",
-            })
-        self.ref = {"id": "one", "revision": 1, "dataset_id": "ds", "version": 1, "semantic_revision": 1}
-        self.stack.enter_context(patch("api.platform.content_publication.dataset_service", self.service))
-        self.frame = self.stack.enter_context(patch("api.platform.content_publication.dataset_frame", return_value=pd.DataFrame({"units": [2, 3]})))
-        self.execute = self.stack.enter_context(patch.object(analytics_engine, "execute", wraps=analytics_engine.execute))
+            self.store.put(
+                self.items_ns,
+                name + ":1",
+                {
+                    "id": name,
+                    "revision": 1,
+                    "title": "Units",
+                    "kind": "kpi",
+                    "semantic_revision": 1,
+                    "status": "approved",
+                    "reviewer": "alice",
+                    "query_plan": {"metric": "units", "aggregation": "SUM"},
+                    "dependencies": ["units"],
+                    "explanation": "Reviewed",
+                },
+            )
+        self.ref = {
+            "id": "one",
+            "revision": 1,
+            "dataset_id": "ds",
+            "version": 1,
+            "semantic_revision": 1,
+        }
+        self.stack.enter_context(
+            patch("api.platform.content_publication.dataset_service", self.service)
+        )
+        self.frame = self.stack.enter_context(
+            patch(
+                "api.platform.content_publication.dataset_frame",
+                return_value=pd.DataFrame({"units": [2, 3]}),
+            )
+        )
+        self.execute = self.stack.enter_context(
+            patch.object(analytics_engine, "execute", wraps=analytics_engine.execute)
+        )
 
     def test_one_catalog_snapshot_and_frame_per_dataset_in_refresh(self):
         batch = CalculationBatch()
@@ -68,7 +124,12 @@ class CalculationPerformanceTests(TestCase):
         second = calculate(self.workspace, self.ref, cache_results=True)
         self.assertEqual(second["result"]["summary"]["value"], 5)
         self.assertEqual(self.execute.call_count, 1)
-        calculate(self.workspace, self.ref, cache_results=True, filters=[{"column": "units", "operator": ">", "value": 2}])
+        calculate(
+            self.workspace,
+            self.ref,
+            cache_results=True,
+            filters=[{"column": "units", "operator": ">", "value": 2}],
+        )
         self.assertEqual(self.execute.call_count, 2)
         other_scope = SimpleNamespace(scope=dict(self.workspace.scope, user_id="bob"))
         calculate(other_scope, self.ref, cache_results=True)
@@ -83,10 +144,17 @@ class CalculationPerformanceTests(TestCase):
             calculate(self.workspace, self.ref, cache_results=True)
         self.entry["ownerId"] = "alice"
         with self.assertRaises(HTTPException):
-            calculate(self.workspace, self.ref, cache_results=True, expected_digest="wrong")
+            calculate(
+                self.workspace, self.ref, cache_results=True, expected_digest="wrong"
+            )
         self.store.put(self.ns, "1", dict(self.model, status="rejected"), 1)
         with self.assertRaises(HTTPException):
-            calculate(self.workspace, self.ref, cache_results=True, expected_digest=result["digest"])
+            calculate(
+                self.workspace,
+                self.ref,
+                cache_results=True,
+                expected_digest=result["digest"],
+            )
         self.assertEqual(self.execute.call_count, 1)
 
 
@@ -96,7 +164,20 @@ class ProgressiveRefreshTests(TestCase):
         self.addCleanup(current_identity.reset, token)
 
     def widgets(self, count):
-        return [{"id": str(i), "digest": "pinned", "source": {"id": str(i), "revision": 1, "dataset_id": "ds", "version": 1, "semantic_revision": 1}} for i in range(count)]
+        return [
+            {
+                "id": str(i),
+                "digest": "pinned",
+                "source": {
+                    "id": str(i),
+                    "revision": 1,
+                    "dataset_id": "ds",
+                    "version": 1,
+                    "semantic_revision": 1,
+                },
+            }
+            for i in range(count)
+        ]
 
     def test_four_widgets_run_concurrently_with_request_identity(self):
         barrier = Barrier(4)
@@ -109,9 +190,15 @@ class ProgressiveRefreshTests(TestCase):
             return {"result": {"success": True}}
 
         with patch("api.platform.content_dashboard.calculate", side_effect=compute):
-            events = list(refresh_events(None, {"id": "d", "revision": 1}, {"widgets": self.widgets(5)}))
+            events = list(
+                refresh_events(
+                    None, {"id": "d", "revision": 1}, {"widgets": self.widgets(5)}
+                )
+            )
         self.assertEqual(len([e for e in events if e["type"] == "widget"]), 5)
-        self.assertTrue(all("error" not in e["value"] for e in events if e["type"] == "widget"))
+        self.assertTrue(
+            all("error" not in e["value"] for e in events if e["type"] == "widget")
+        )
         self.assertEqual(identities, ["alice"] * 5)
 
     def test_fast_widget_is_yielded_while_slow_widget_is_still_running(self):
@@ -123,7 +210,9 @@ class ProgressiveRefreshTests(TestCase):
             return {"result": {"success": True}}
 
         with patch("api.platform.content_dashboard.calculate", side_effect=compute):
-            events = refresh_events(None, {"id": "d", "revision": 1}, {"widgets": self.widgets(2)})
+            events = refresh_events(
+                None, {"id": "d", "revision": 1}, {"widgets": self.widgets(2)}
+            )
             self.assertEqual(next(events)["type"], "start")
             try:
                 first = next(events)
@@ -144,15 +233,32 @@ class ProgressiveRefreshTests(TestCase):
         app.include_router(router)
         client = TestClient(app)
         resource_id, page_id = "a" * 32, "b" * 32
-        with patch("api.platform.content_dashboard.prepare_refresh", side_effect=HTTPException(403, "Access revoked")):
-            response = client.post(f"/api/content/files/{resource_id}/refresh?page_id={page_id}&stream=true")
+        with patch(
+            "api.platform.content_dashboard.prepare_refresh",
+            side_effect=HTTPException(403, "Access revoked"),
+        ):
+            response = client.post(
+                f"/api/content/files/{resource_id}/refresh?page_id={page_id}&stream=true"
+            )
             self.assertEqual(response.status_code, 403)
             self.assertEqual(response.json()["detail"], "Access revoked")
         with (
-            patch("api.platform.content_dashboard.prepare_refresh", return_value=(None, {"id": resource_id, "revision": 1}, {"widgets": self.widgets(2)})),
-            patch("api.platform.content_dashboard.calculate", return_value={"result": {"success": True}}) as execute,
+            patch(
+                "api.platform.content_dashboard.prepare_refresh",
+                return_value=(
+                    None,
+                    {"id": resource_id, "revision": 1},
+                    {"widgets": self.widgets(2)},
+                ),
+            ),
+            patch(
+                "api.platform.content_dashboard.calculate",
+                return_value={"result": {"success": True}},
+            ) as execute,
         ):
-            response = client.post(f"/api/content/files/{resource_id}/refresh?page_id={page_id}&stream=true&force=true")
+            response = client.post(
+                f"/api/content/files/{resource_id}/refresh?page_id={page_id}&stream=true&force=true"
+            )
             self.assertEqual(response.status_code, 200)
             self.assertIn("application/x-ndjson", response.headers["content-type"])
             self.assertEqual(response.headers["cache-control"], "private, no-store")
@@ -160,4 +266,6 @@ class ProgressiveRefreshTests(TestCase):
             self.assertEqual(events[0]["type"], "start")
             self.assertEqual(events[-1]["type"], "complete")
             self.assertEqual(len(events), 4)
-            self.assertTrue(all(call.kwargs["force"] for call in execute.call_args_list))
+            self.assertTrue(
+                all(call.kwargs["force"] for call in execute.call_args_list)
+            )

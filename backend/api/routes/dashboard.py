@@ -8,7 +8,11 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
 
-from api.models.execution_context import current_identity, current_selection, require_dataset_access
+from api.models.execution_context import (
+    current_identity,
+    current_selection,
+    require_dataset_access,
+)
 from api.platform.semantic import semantic_registry, now
 from api.platform.contracts import AnalyticsItem
 from api.platform.agent_chart_recommender import chart_recommender_agent
@@ -24,7 +28,9 @@ _DASHBOARD_CACHE: Dict[Any, Dict[str, Any]] = {}
 _DASHBOARD_CACHE_LOCK = threading.Lock()
 _DASHBOARD_CACHE_TTL = 120.0  # seconds
 _DASHBOARD_IN_FLIGHT = {}
-_DASHBOARD_WIDGET_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="executive-widget")
+_DASHBOARD_WIDGET_POOL = ThreadPoolExecutor(
+    max_workers=8, thread_name_prefix="executive-widget"
+)
 
 
 def clear_dashboard_cache():
@@ -226,8 +232,15 @@ def get_dashboard(refresh: bool = False):
     identity = current_identity.get() or {}
     selection = current_selection.get()
     scope = selection.context.model_dump_json() if selection else None
-    key = (identity.get("tenant_id"), identity.get("workspace_id"), identity.get("user_id"),
-           identity.get("role"), tuple(sorted(identity.get("roles", []))), scope, refresh)
+    key = (
+        identity.get("tenant_id"),
+        identity.get("workspace_id"),
+        identity.get("user_id"),
+        identity.get("role"),
+        tuple(sorted(identity.get("roles", []))),
+        scope,
+        refresh,
+    )
     with _DASHBOARD_CACHE_LOCK:
         pending = _DASHBOARD_IN_FLIGHT.get(key)
         leader = pending is None
@@ -238,7 +251,9 @@ def get_dashboard(refresh: bool = False):
         try:
             return deepcopy(pending.result(timeout=90))
         except FutureTimeout:
-            raise HTTPException(503, "Dashboard loading timed out. Please retry.") from None
+            raise HTTPException(
+                503, "Dashboard loading timed out. Please retry."
+            ) from None
     try:
         result = _get_dashboard(refresh)
         pending.set_result(deepcopy(result))
@@ -434,7 +449,9 @@ def _get_dashboard(refresh=False):
         widgets = []
         if tasks:
             futures = [
-                _DASHBOARD_WIDGET_POOL.submit(contextvars.copy_context().run, _execute_widget, t)
+                _DASHBOARD_WIDGET_POOL.submit(
+                    contextvars.copy_context().run, _execute_widget, t
+                )
                 for t in tasks
             ]
             widgets = [w for w in (f.result() for f in futures) if w is not None]
@@ -481,9 +498,15 @@ def _get_dashboard(refresh=False):
                 table = current_table(selection.entry, context.version)
                 # The semantic model supplies field roles; five sample rows only
                 # guide chart choices. Widget totals still execute over all rows in SQL.
-                rows = hana_client.execute_query(f"SELECT * FROM {quote_identifier(table)} LIMIT 5", native_types=True)
+                rows = hana_client.execute_query(
+                    f"SELECT * FROM {quote_identifier(table)} LIMIT 5",
+                    native_types=True,
+                )
                 logical = {c["name"].casefold(): c["name"] for c in snapshot["columns"]}
-                rows = [{logical.get(k.casefold(), k): v for k, v in row.items()} for row in rows]
+                rows = [
+                    {logical.get(k.casefold(), k): v for k, v in row.items()}
+                    for row in rows
+                ]
                 df = dataset_service._frame(rows, snapshot["columns"])
             else:
                 df = dataset_service._frame(snapshot["rows"], snapshot["columns"])

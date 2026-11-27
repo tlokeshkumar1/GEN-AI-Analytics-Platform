@@ -37,13 +37,20 @@ class HANAVectorClient:
             raise RuntimeError("HANA vector database is unavailable")
         cursor = None
         try:
-            logger.info("HANA vector sync started | vectors=%s | connection_wait=%.3fs", len(chunks), time.monotonic() - started)
+            logger.info(
+                "HANA vector sync started | vectors=%s | connection_wait=%.3fs",
+                len(chunks),
+                time.monotonic() - started,
+            )
             conn.setautocommit(False)
             cursor = conn.cursor()
             prefix = f"{dataset_id}:v{version}:"
             stage = time.monotonic()
             cursor.execute("DELETE FROM VECTOR_TABLE WHERE ID LIKE ?", (prefix + "%",))
-            logger.info("HANA vector replacement cleared | elapsed=%.3fs", time.monotonic() - stage)
+            logger.info(
+                "HANA vector replacement cleared | elapsed=%.3fs",
+                time.monotonic() - stage,
+            )
             metadata = json.dumps(
                 {
                     "dataset_id": dataset_id,
@@ -111,13 +118,20 @@ class HANAVectorClient:
                     )
                     logger.info(
                         "HANA sync progress: %s/%s vectors staged in VECTOR_TABLE | batch_elapsed=%.3fs",
-                        end, total, time.monotonic() - stage,
+                        end,
+                        total,
+                        time.monotonic() - stage,
                     )
 
             stage = time.monotonic()
             logger.info("HANA vector commit started | vectors=%s", len(chunks))
             conn.commit()
-            logger.info("HANA vector sync committed | vectors=%s | commit_elapsed=%.3fs | total_elapsed=%.3fs", len(chunks), time.monotonic() - stage, time.monotonic() - started)
+            logger.info(
+                "HANA vector sync committed | vectors=%s | commit_elapsed=%.3fs | total_elapsed=%.3fs",
+                len(chunks),
+                time.monotonic() - stage,
+                time.monotonic() - started,
+            )
             cursor.close()
             cursor = None
         except Exception:

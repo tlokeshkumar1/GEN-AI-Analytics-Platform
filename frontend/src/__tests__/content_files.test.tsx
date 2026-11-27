@@ -222,7 +222,7 @@ describe('My Files', () => {
   });
   it('asks for a name on first Save and updates the same destination on the next Save', async () => {
     vi.mocked(api.get).mockImplementation(async url => ({ data: url === '/content/tree' ? [folder] :
-      url.startsWith('/dashboard?') ? { title: 'Dashboard', widgets: [], status: 'draft' } : [] }));
+      (url === '/dashboard' || url.startsWith('/dashboard?')) ? { title: 'Dashboard', widgets: [], status: 'draft' } : [] }));
     vi.mocked(api.post).mockResolvedValue({ data: dashboard });
     const navigate = vi.fn();
     render(<ExecutiveDashboard onNavigate={navigate} />);

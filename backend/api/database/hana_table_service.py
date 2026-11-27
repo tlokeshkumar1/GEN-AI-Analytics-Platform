@@ -336,29 +336,52 @@ class HANATableService:
 
             dtype = df[col].dtype
             values = series.tolist()
-            numeric = all(isinstance(value, (Integral, Real, Decimal)) and not isinstance(value, bool) for value in values)
-            if pd.api.types.is_bool_dtype(dtype) or all(isinstance(value, bool) for value in values):
+            numeric = all(
+                isinstance(value, (Integral, Real, Decimal))
+                and not isinstance(value, bool)
+                for value in values
+            )
+            if pd.api.types.is_bool_dtype(dtype) or all(
+                isinstance(value, bool) for value in values
+            ):
                 hana_type = "BOOLEAN"
-            elif numeric and all(isinstance(value, Integral) and -(2**63) <= value < 2**63 for value in values):
+            elif numeric and all(
+                isinstance(value, Integral) and -(2**63) <= value < 2**63
+                for value in values
+            ):
                 hana_type = "BIGINT"
             elif numeric and any(isinstance(value, Decimal) for value in values):
-                numbers = [value if isinstance(value, Decimal) else Decimal(str(value)) for value in values]
+                numbers = [
+                    value if isinstance(value, Decimal) else Decimal(str(value))
+                    for value in values
+                ]
                 if any(not value.is_finite() for value in numbers):
-                    raise ValueError(f"Column '{clean_col}' contains non-finite decimal values.")
+                    raise ValueError(
+                        f"Column '{clean_col}' contains non-finite decimal values."
+                    )
                 scale = max(max(0, -value.as_tuple().exponent) for value in numbers)
-                whole = max(max(0, value.adjusted() + 1) if value else 0 for value in numbers)
+                whole = max(
+                    max(0, value.adjusted() + 1) if value else 0 for value in numbers
+                )
                 precision = max(1, whole + scale)
                 if precision > 38:
-                    raise ValueError(f"Column '{clean_col}' exceeds HANA's exact decimal precision of 38 digits.")
+                    raise ValueError(
+                        f"Column '{clean_col}' exceeds HANA's exact decimal precision of 38 digits."
+                    )
                 hana_type = f"DECIMAL({precision}, {scale})"
             elif numeric and all(isinstance(value, Integral) for value in values):
                 precision = max(len(str(abs(int(value)))) for value in values)
                 if precision > 38:
-                    raise ValueError(f"Column '{clean_col}' exceeds HANA's exact decimal precision of 38 digits.")
+                    raise ValueError(
+                        f"Column '{clean_col}' exceeds HANA's exact decimal precision of 38 digits."
+                    )
                 hana_type = f"DECIMAL({precision}, 0)"
             elif numeric:
                 hana_type = "DOUBLE"
-            elif pd.api.types.is_datetime64_any_dtype(dtype) or all(isinstance(value, (datetime.date, datetime.datetime)) for value in values):
+            elif pd.api.types.is_datetime64_any_dtype(dtype) or all(
+                isinstance(value, (datetime.date, datetime.datetime))
+                for value in values
+            ):
                 has_time = any(
                     getattr(t, "hour", 0) != 0 or getattr(t, "minute", 0) != 0
                     for t in series.head(20)
