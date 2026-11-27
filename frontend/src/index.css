@@ -1,5 +1,25 @@
 @import "tailwindcss";
 
+/* Scope the navy status palette to the entire ingestion cockpit, including
+   shared timeline and recommendation components. Tailwind color utilities
+   inherit these tokens for text, loaders, borders, rings, and backgrounds. */
+.ingestion-cockpit {
+  --color-emerald-50: #eef2f8;
+  --color-emerald-100: #dde5f0;
+  --color-emerald-200: #bccce0;
+  --color-emerald-300: #95adcc;
+  --color-emerald-400: #647fa8;
+  --color-emerald-500: #24436b;
+  --color-emerald-600: #1b3558;
+  --color-emerald-700: #152b49;
+  --color-emerald-800: #11243d;
+  --color-emerald-900: #0c1a2e;
+  --color-emerald-950: #081222;
+  --color-success: #1b3558;
+  --color-success-soft: #eef2f8;
+  --color-success-muted: #dde5f0;
+}
+
 /* ============================================================
    ASTRYX-INSPIRED DESIGN SYSTEM — GLOBAL TOKENS
    Adapted from the Astryx Neutral theme for Tailwind CSS v4

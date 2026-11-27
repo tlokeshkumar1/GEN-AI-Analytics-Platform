@@ -7,6 +7,8 @@ import os
 import tempfile
 import threading
 import uuid
+from copy import deepcopy
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -101,6 +103,11 @@ class ArtifactStore:
                 client.close()
         return key
 
+    def keys(self):
+        if self.backend != "hana":
+            raise ValueError("Artifact identifier lookup requires HANA storage")
+        return metadata_store().keys(self.OBJECT_NAMESPACE)
+
     def get(self, key):
         if (
             not key.startswith("objects/")
@@ -154,6 +161,10 @@ class DatasetRepository:
         self._snapshot_cache: OrderedDict[str, dict] = OrderedDict()
         self._snapshot_cache_lock = threading.Lock()
         self._snapshot_cache_max = 32
+        self._snapshot_cache_bytes = 0
+        self._snapshot_cache_max_bytes = 64 * 1024 * 1024
+        self._snapshot_sizes = {}
+        self._snapshot_loads = {}
 
     @contextmanager
     def writer(self):
@@ -213,23 +224,51 @@ class DatasetRepository:
             json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
         )
 
-    def snapshot(self, reference):
+    def snapshot(self, reference, *, include_index=True):
+        """Share immutable reads, not mutable results or a lock held during I/O."""
+        key = (reference, include_index)
         with self._snapshot_cache_lock:
-            cached = self._snapshot_cache.get(reference)
+            cached = self._snapshot_cache.get(key)
             if cached is not None:
-                self._snapshot_cache.move_to_end(reference)
-                return cached
-        manifest = json.loads(self.objects.get(reference))
-        loaded = {
-            **json.loads(self.objects.get(manifest["data"])),
-            **json.loads(self.objects.get(manifest["index"])),
-        }
-        with self._snapshot_cache_lock:
-            self._snapshot_cache[reference] = loaded
-            self._snapshot_cache.move_to_end(reference)
-            while len(self._snapshot_cache) > self._snapshot_cache_max:
-                self._snapshot_cache.popitem(last=False)
-        return loaded
+                self._snapshot_cache.move_to_end(key)
+            pending = self._snapshot_loads.get(key)
+            leader = cached is None and pending is None
+            if leader:
+                pending = Future()
+                self._snapshot_loads[key] = pending
+        if cached is not None:
+            return deepcopy(cached)
+        if not leader:
+            try:
+                return deepcopy(pending.result(timeout=90))
+            except FutureTimeout:
+                raise HTTPException(503, "Dataset loading timed out. Please retry.") from None
+        try:
+            manifest = json.loads(self.objects.get(reference))
+            data = self.objects.get(manifest["data"])
+            loaded = json.loads(data)
+            size = len(data)
+            if include_index:
+                index = self.objects.get(manifest["index"])
+                loaded.update(json.loads(index))
+                size += len(index)
+            with self._snapshot_cache_lock:
+                if size <= self._snapshot_cache_max_bytes:
+                    self._snapshot_cache[key] = loaded
+                    self._snapshot_sizes[key] = size
+                    self._snapshot_cache_bytes += size
+                    while (len(self._snapshot_cache) > self._snapshot_cache_max
+                           or self._snapshot_cache_bytes > self._snapshot_cache_max_bytes):
+                        evicted, _ = self._snapshot_cache.popitem(last=False)
+                        self._snapshot_cache_bytes -= self._snapshot_sizes.pop(evicted)
+            pending.set_result(loaded)
+            return deepcopy(loaded)
+        except BaseException as exc:
+            pending.set_exception(exc)
+            raise
+        finally:
+            with self._snapshot_cache_lock:
+                self._snapshot_loads.pop(key, None)
 
     def save_snapshot(self, snapshot):
         index_fields = {
@@ -238,6 +277,9 @@ class DatasetRepository:
             "embeddingStatus",
             "hanaSyncStatus",
             "embeddingConfiguration",
+            "embeddingError",
+            "embeddingTotal",
+            "embeddingCheckpoint",
         }
         data = {k: v for k, v in snapshot.items() if k not in index_fields}
         index = {k: v for k, v in snapshot.items() if k in index_fields}

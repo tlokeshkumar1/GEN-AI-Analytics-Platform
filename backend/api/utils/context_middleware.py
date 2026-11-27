@@ -225,11 +225,14 @@ class DatasetContextMiddleware:
                         422,
                         "Dataset version and semantic revision must be positive integers.",
                     ) from None
-                snapshot = (
-                    await run_in_threadpool(dataset_service._snapshot, entry, version)
-                    if needs_snapshot
-                    else {}
-                )
+                snapshot = {}
+                if needs_snapshot:
+                    if path.startswith("/api/dashboard") or path in ("/api/analytics", "/api/insights/execute"):
+                        snapshot = await run_in_threadpool(dataset_service.query_snapshot, entry, version)
+                    else:
+                        snapshot = await run_in_threadpool(
+                            dataset_service._snapshot, entry, version, include_index=is_chat
+                        )
                 selection_token = current_selection.set(
                     DatasetSelection(context, pinned_entry, snapshot)
                 )

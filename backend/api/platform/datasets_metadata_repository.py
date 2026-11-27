@@ -182,6 +182,8 @@ class DatasetsMetadataRepository:
             return None
 
     def save_catalog(self, catalog: Dict[str, Any]) -> bool:
+        started = time.monotonic()
+        logger.info("HANA catalog save started | datasets=%s", len(catalog.get("datasets", {})))
         self.invalidate_cache()
         client = self._client()
         if not client:
@@ -279,7 +281,8 @@ class DatasetsMetadataRepository:
                     )
 
             logger.info(
-                f"Successfully saved {len(datasets)} datasets to HANA DATASETS_METADATA"
+                "Successfully saved %s datasets to HANA DATASETS_METADATA | elapsed=%.3fs",
+                len(datasets), time.monotonic() - started,
             )
             return True
         except Exception as exc:

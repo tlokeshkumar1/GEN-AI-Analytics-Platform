@@ -3,7 +3,7 @@ import api from '../services/api';
 import {
   getDatasets, getDatasetData, updateDatasetRows, appendDatasetData,
   deleteDatasetRows, deleteDataset, rollbackDataset, activateDataset,
-  reindexDataset, previewAppendFile,
+  reindexDataset, previewAppendFile, getDatasetPreview,
 } from '../services/datasetService';
 import { uploadDatasetFile } from '../services/uploadService';
 
@@ -14,10 +14,19 @@ vi.mock('../services/api', () => ({
 beforeEach(() => vi.resetAllMocks());
 
 describe('Dataset API integration', () => {
+  it('uses the bounded HANA preview path for read-only browsing', async () => {
+    const data = { rows: [{ id: 'preview:2:1:0', Quantity: 7 }], totalRows: 10000000, readOnly: true };
+    vi.mocked(api.get).mockResolvedValue({ data });
+    expect(await getDatasetPreview('large', 1, 50, 'Quantity', 'desc', 'East', 2)).toEqual(data);
+    expect(api.get).toHaveBeenCalledWith('/datasets/large/preview', {
+      params: { page: 1, pageSize: 50, sortField: 'Quantity', sortDir: 'desc', search: 'East', version: 2 },
+      signal: undefined, timeout: 30_000,
+    });
+  });
   it('returns only backend datasets, including a genuinely empty list', async () => {
     vi.mocked(api.get).mockResolvedValue({ data: [] });
     expect(await getDatasets()).toEqual([]);
-    expect(api.get).toHaveBeenCalledWith('/datasets');
+    expect(api.get).toHaveBeenCalledWith('/datasets', { timeout: 20_000 });
   });
 
   it('passes pagination, sort, search and real rows through to the API', async () => {

@@ -1,12 +1,14 @@
 import React from 'react';
 import { Database, Cpu, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
-import { EmbeddingStatus, HanaSyncStatus } from '../../types/dataset';
+import { DatasetItem, EmbeddingStatus, HanaSyncStatus } from '../../types/dataset';
 
 interface StatusBadgeProps {
   type: 'embedding' | 'hana';
   status?: EmbeddingStatus | HanaSyncStatus;
   chunkCount?: number;
   className?: string;
+  embeddingStatus?: EmbeddingStatus;
+  errorMessage?: string | null;
 }
 
 export const DatasetStatusBadge: React.FC<StatusBadgeProps> = ({
@@ -14,9 +16,12 @@ export const DatasetStatusBadge: React.FC<StatusBadgeProps> = ({
   status = 'Pending',
   chunkCount,
   className = '',
+  embeddingStatus,
+  errorMessage,
 }) => {
+  const isBlocked = type === 'hana' && (status === 'Blocked' || (status === 'Pending' && embeddingStatus === 'Error'));
   const isReady = status === 'Ready';
-  const isProcessing = status === 'Indexing' || status === 'Pending';
+  const isProcessing = !isBlocked && (status === 'Indexing' || status === 'Pending');
   const isError = status === 'Error';
 
   let label = '';
@@ -34,13 +39,16 @@ export const DatasetStatusBadge: React.FC<StatusBadgeProps> = ({
       title = 'Vector embedding generation is queued in the background.';
     } else {
       label = 'Embeddings: Error';
-      title = 'Embedding generation failed; chat falls back to current source text.';
+      title = errorMessage || 'Embedding generation failed; chat falls back to current source text.';
     }
   } else {
     // hana
     if (isReady) {
       label = 'HANA: Synced';
       title = 'Vectors are synchronized to SAP HANA Cloud vector engine.';
+    } else if (isBlocked) {
+      label = 'HANA: Waiting for embeddings';
+      title = 'Vector synchronization is blocked until embedding generation succeeds. The uploaded table data remains saved.';
     } else if (isProcessing) {
       label = 'HANA: Syncing…';
       title = 'Synchronizing vectors with SAP HANA Cloud.';
@@ -52,6 +60,8 @@ export const DatasetStatusBadge: React.FC<StatusBadgeProps> = ({
 
   const badgeColor = isReady
     ? 'bg-[var(--color-success-soft)] text-[var(--color-success)] border-[var(--color-success-muted)]'
+    : isBlocked
+    ? 'bg-[var(--color-warning-soft)] text-[var(--color-warning)] border-[var(--color-warning-muted)]'
     : isProcessing
     ? 'bg-[var(--color-warning-soft)] text-[var(--color-warning)] border-[var(--color-warning-muted)] animate-pulse'
     : 'bg-[var(--color-error-soft)] text-[var(--color-error)] border-[var(--color-error-muted)]';
@@ -74,3 +84,16 @@ export const DatasetStatusBadge: React.FC<StatusBadgeProps> = ({
     </div>
   );
 };
+
+export function DatasetIndexStatus({ dataset }: { dataset: DatasetItem }) {
+  return <div className="flex min-w-0 flex-col items-start gap-2">
+    <div className="flex items-center gap-2 flex-wrap">
+      <DatasetStatusBadge type="embedding" status={dataset.embeddingStatus} chunkCount={dataset.embeddingCount} errorMessage={dataset.embeddingError} />
+      <DatasetStatusBadge type="hana" status={dataset.hanaSyncStatus} embeddingStatus={dataset.embeddingStatus} />
+    </div>
+    {dataset.embeddingStatus === 'Error' && <p role="alert" className="max-w-3xl break-words text-xs text-[var(--color-error)]">
+      {dataset.embeddingError || 'Embedding generation failed. Your file data is saved; retry embeddings to resume.'}
+      {!!dataset.embeddingCount && <> {dataset.embeddingCount} of {dataset.embeddingTotal || dataset.rowCount} vectors retained for retry.</>}
+    </p>}
+  </div>;
+}

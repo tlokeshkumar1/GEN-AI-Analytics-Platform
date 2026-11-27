@@ -1,4 +1,5 @@
-import { usePublicationDestination } from './PublishToFiles';
+import { RecommendationReview, type RecommendedChartItem } from './RecommendationReview';
+export type { RecommendedChartItem } from './RecommendationReview';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
@@ -29,17 +30,6 @@ export interface PreprocessingAudit {
   null_fixes_by_column?: Record<string, number>;
 }
 
-export interface RecommendedChartItem {
-  id: string;
-  title: string;
-  kind: string;
-  query_plan: Record<string, any>;
-  explanation: string;
-  selected_by_default: boolean;
-  preview_value?: string;
-  preview_rows?: Array<Record<string, any>>;
-}
-
 export interface IngestionResult {
   status?: string;
   ready_for_publication?: boolean;
@@ -61,6 +51,7 @@ export interface IngestionResult {
     success?: boolean;
   };
   semantic_model?: {
+    revision?: number;
     grain?: string;
     fields?: Array<{
       name: string;
@@ -109,9 +100,6 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   onNavigate,
   onNavigateToBuildKpi,
 }) => {
-  const [selectedChartIds, setSelectedChartIds] = useState<Record<string, boolean>>({});
-  const [isPublishing, setIsPublishing] = useState(false);
-  const [publishError, setPublishError] = useState<string | null>(null);
   const recommendationsRef = useRef<HTMLDivElement>(null);
 
   // Real-time dynamic stage timing and progress
@@ -120,15 +108,12 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   const [stageDurations, setStageDurations] = useState<Record<number, string>>({});
   const [activeStageNumber, setActiveStageNumber] = useState<number | null>(null);
 
-  // Reset internal timing and selection state when a new upload starts or modal opens
+  // Reset timing when a new upload starts.
   useEffect(() => {
     if (isProcessing) {
       stageStartTimesRef.current = {};
       setActiveElapsedMs({});
       setStageDurations({});
-      setSelectedChartIds({});
-      setIsPublishing(false);
-      setPublishError(null);
     }
   }, [isProcessing, filename]);
 
@@ -179,22 +164,13 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
         selectContext({
           datasetId: result.dataset.id,
           version,
-          semanticRevision: 1,
+          semanticRevision: result.semantic_model?.revision || 1,
         });
       }
     }
-    const recs = result?.recommendations || partialResult?.recommendations;
-    if (recs && recs.length > 0) {
-      const initial: Record<string, boolean> = {};
-      recs.forEach(r => {
-        initial[r.id] = r.selected_by_default !== false;
-      });
-      setSelectedChartIds(initial);
-    }
-    setPublishError(null);
   }, [result, partialResult]);
 
-  const { chooseStored, destinationDialog } = usePublicationDestination(onNavigate);
+
   if (!isOpen) return null;
 
   const getStageStatus = (stageNum: number): IngestionStageStatus => {
@@ -252,50 +228,13 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
     ? Math.min(98, Math.round((completedStagesCount * 25) + (runningStageProgress * 0.25)))
     : result ? 100 : 0;
 
-  const toggleChartSelect = (id: string) => {
-    setSelectedChartIds(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const selectAllCharts = () => {
-    const next: Record<string, boolean> = {};
-    result?.recommendations?.forEach(r => {
-      next[r.id] = true;
-    });
-    setSelectedChartIds(next);
-  };
-
-  const deselectAllCharts = () => {
-    const next: Record<string, boolean> = {};
-    result?.recommendations?.forEach(r => {
-      next[r.id] = false;
-    });
-    setSelectedChartIds(next);
-  };
-
-  const selectedCount = Object.values(selectedChartIds).filter(Boolean).length;
-
-  const handlePublish = async () => {
-    if (!result?.recommendations) return;
-    if (result.ready_for_publication === false) {
-      setPublishError(result.warnings?.join(' ') || 'Complete ingestion and semantic review before publishing.');
-      return;
-    }
-    const approvedItems = result.recommendations.filter(r => selectedChartIds[r.id]);
-    if (approvedItems.length === 0) {
-      onClose();
-      return;
-    }
-
-    await chooseStored(approvedItems.map(i => i.id), result.dataset?.id);
-  };
-
   const handleGoToBuildKpi = () => {
     if (result?.dataset?.id) {
       const version = result.version || result.dataset.currentVersion || 1;
       selectContext({
         datasetId: result.dataset.id,
         version,
-        semanticRevision: 1,
+        semanticRevision: result.semantic_model?.revision || 1,
       });
     }
     onClose();
@@ -312,7 +251,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   const fields = effective?.semantic_model?.fields || [];
   const cloudTable = effective?.cloud_table?.table_name;
 
-  // Clean white surfaces with green running/success telemetry and red error states
+  // Clean white surfaces with navy running/success telemetry and red error states
   const planningSteps: PlanStep[] = [
     {
       id: 'step-1',
@@ -766,8 +705,8 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-3 sm:p-6 overflow-y-auto animate-fade-in">
-      {destinationDialog}
+    <div className="ingestion-cockpit fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-3 sm:p-6 overflow-y-auto animate-fade-in">
+
       {/* High-End Professional Enterprise Card Modal */}
       <div className="bg-white border border-slate-200/90 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900">
 
@@ -907,101 +846,17 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
           {/* 🎯 STAGE 5: Interactive Executive Dashboard Approval (Checkboxes) */}
           {result?.recommendations && result.recommendations.length > 0 && (
             <div ref={recommendationsRef} className="pt-2 border-t border-slate-200 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                    <Sliders className="w-4 h-4 text-slate-700" />
-                    <span>Select KPIs & Charts to Include on Dashboard:</span>
-                    <span className="text-xs text-slate-500 font-mono">
-                      ({selectedCount} of {result.recommendations.length} selected)
-                    </span>
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    Check the boxes for the KPIs and charts you want to include on the Executive Dashboard, or open Build Your KPI to customize.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={selectAllCharts}
-                    className="px-2.5 py-1 text-xs font-semibold rounded bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition-colors cursor-pointer"
-                  >
-                    Select All
-                  </button>
-                  <button
-                    type="button"
-                    onClick={deselectAllCharts}
-                    className="px-2.5 py-1 text-xs font-semibold rounded bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition-colors cursor-pointer"
-                  >
-                    Deselect All
-                  </button>
-                </div>
-              </div>
-
-              {publishError && (
-                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
-                  {publishError}
-                </div>
-              )}
-
-              {/* Chart Cards with Checkboxes */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                {result.recommendations.map(chart => {
-                  const isChecked = !!selectedChartIds[chart.id];
-
-                  return (
-                    <div
-                      key={chart.id}
-                      onClick={() => toggleChartSelect(chart.id)}
-                      className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${isChecked
-                        ? 'border-slate-900 bg-slate-50/80 text-slate-900 shadow-xs ring-1 ring-slate-900'
-                        : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
-                        }`}
-                    >
-                      <div>
-                        <div className="flex items-start justify-between gap-2 mb-1.5">
-                          <div className="flex items-center gap-2.5">
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={() => toggleChartSelect(chart.id)}
-                              onClick={e => e.stopPropagation()}
-                              className="w-4 h-4 rounded text-emerald-600 bg-white border-slate-300 focus:ring-emerald-500 cursor-pointer accent-emerald-600"
-                            />
-                            <span className="text-xs font-bold text-slate-900">
-                              {chart.title}
-                            </span>
-                          </div>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-100 border border-slate-200 text-slate-700 shrink-0">
-                            {chart.kind.toUpperCase()}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 pl-6.5 line-clamp-2">
-                          {chart.explanation}
-                        </p>
-                      </div>
-
-                      <div className="mt-3 pt-2 border-t border-slate-200 flex items-center justify-between text-xs pl-6.5">
-                        {chart.preview_value ? (
-                          <div className="text-[11px] font-mono font-bold text-emerald-600">
-                            {chart.preview_value}
-                          </div>
-                        ) : chart.preview_rows ? (
-                          <div className="text-[10px] text-slate-500">
-                            {chart.preview_rows.length} preview data points
-                          </div>
-                        ) : (
-                          <div className="text-[10px] text-slate-400">Query verified</div>
-                        )}
-                        <span className={`text-[10px] font-semibold ${isChecked ? 'text-emerald-600' : 'text-slate-400'}`}>
-                          {isChecked ? '✓ Include on Dashboard' : 'Omit'}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+              <h3 className="text-sm font-bold text-slate-900">Review recommended KPIs &amp; charts</h3>
+              <p className="text-xs text-slate-500">Approve or reject individual cards or the selected group, then publish the approved widgets to your dashboards.</p>
+              <RecommendationReview
+                key={`${result.dataset?.id}:${result.version || result.dataset?.currentVersion}:${result.semantic_model?.revision || 1}`}
+                recommendations={result.recommendations}
+                datasetId={result.dataset?.id}
+                version={result.version || result.dataset?.currentVersion || 1}
+                semanticRevision={result.semantic_model?.revision || 1}
+                disabled={result.ready_for_publication === false}
+                navigate={onNavigate}
+              />
             </div>
           )}
 
@@ -1028,21 +883,7 @@ export const AIAgentIngestionStepper: React.FC<AIAgentIngestionStepperProps> = (
                 <span>Build Your KPI</span>
               </button>
             )}
-            {result?.recommendations && (
-              <button
-                type="button"
-                disabled={isPublishing || selectedCount === 0 || result.ready_for_publication === false}
-                onClick={handlePublish}
-                className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold rounded-lg bg-slate-900 hover:bg-black text-white disabled:opacity-40 transition-all cursor-pointer shadow-xs"
-              >
-                <CheckCircle2 className={`w-4 h-4 ${isPublishing ? 'animate-spin text-emerald-400' : 'text-white'}`} />
-                <span>
-                  {isPublishing
-                    ? 'Publishing…'
-                    : `Publish on Dashboard (${selectedCount})`}
-                </span>
-              </button>
-            )}
+
           </div>
         </div>
 

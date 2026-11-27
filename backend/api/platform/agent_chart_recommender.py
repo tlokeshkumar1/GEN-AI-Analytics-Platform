@@ -300,7 +300,7 @@ class ChartRecommenderAgent:
         df: pd.DataFrame,
         model: SemanticModel,
         existing_items: Optional[Iterable[Any]] = None,
-        max_items: int = 6,
+        max_items: Optional[int] = None,
         dataset_name: Optional[str] = None,
         fast_only: bool = False,
     ) -> List[Dict[str, Any]]:
@@ -309,6 +309,11 @@ class ChartRecommenderAgent:
         excluding anything semantically equivalent to `existing_items`.
         When fast_only=True, skips LLM generation and directly uses dynamic statistical candidates (<5ms).
         """
+        if max_items is None:
+            try:
+                max_items = max(1, min(30, int(os.getenv("PLATFORM_RECOMMENDATION_LIMIT", "18"))))
+            except ValueError:
+                max_items = 18
         if df is None or df.empty or not model or not model.fields:
             return []
 
@@ -436,11 +441,9 @@ class ChartRecommenderAgent:
             if retry_candidates:
                 _add_with_diversity(retry_candidates)
 
-        # 2. When LLM is offline/unavailable or produced no net-new valid items,
-        #    derive non-duplicate recommendations dynamically from observed distributions.
-        if (not llm_available or not recommendations) and len(
-            recommendations
-        ) < max_items:
+        # Fill the remaining budget with validated, non-duplicate views derived
+        # from observed distributions, including when the LLM returned too few.
+        if len(recommendations) < max_items:
             stat_candidates = self._generate_dynamic_statistical_candidates(
                 df, model, profiles
             )
@@ -700,7 +703,7 @@ class ChartRecommenderAgent:
             )
 
             response = ai_core_service.generate_structured_completion(
-                prompt, max_tokens=1800, temperature=0.15
+                prompt, max_tokens=max(1800, min(8192, max_items * 320)), temperature=0.15
             )
             if not response:
                 return [], False
@@ -1272,6 +1275,7 @@ class ChartRecommenderAgent:
                 ),
                 "selected_by_default": bool(candidate.get("selected_by_default", True)),
                 "status": "proposed",
+                "preview_result": {**exec_result.to_dict(), "data": exec_result.data[:15]},
             }
 
             if kind == "kpi":

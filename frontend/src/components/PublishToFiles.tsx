@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import api from '../services/api';
 import type { AnalyticsDefinition } from '../services/semanticService';
 import { getRecommendations } from '../services/semanticService';
+import { runWidgetTask } from '../services/widgetTaskQueue';
 import {
   control,
   contentChanged,
@@ -14,13 +15,15 @@ import {
   fileInput,
   fileLabel,
   filePrimaryButton,
+  fileSecondaryButton,
   useFiles,
 } from './ContentFiles';
 
 export function publishable(item: AnalyticsDefinition) {
   return (
     item.status === 'approved' &&
-    Boolean(item.reviewer && item.reviewer !== 'system' && item.dataset_id && item.version)
+    // The API verifies system-reviewed widgets against their exact published revision.
+    Boolean(item.reviewer && item.dataset_id && item.version && item.semantic_revision && item.revision)
   );
 }
 
@@ -95,7 +98,7 @@ export function PublishToFiles({
   close: () => void;
   navigate: (p: string) => void;
 }) {
-  const { files, error: treeError } = useFiles();
+  const { files, error: treeError, loading: loadingTree } = useFiles();
   const [chosen, setChosen] = useState<number[]>(items.map((_, i) => i));
   const [id, setId] = useState('');
   const [search, setSearch] = useState('');
@@ -106,7 +109,7 @@ export function PublishToFiles({
   const [duplicates, setDuplicates] = useState('skip');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  type Target = { id: string; name: string; page: string; revision: number };
+  type Target = { id: string; name: string; page: string; pageName?: string; revision: number };
   const [extra, setExtra] = useState<Target[]>([]);
   const [outcomes, setOutcomes] = useState<Record<string, { count?: number; error?: string }>>({});
   const [retry, setRetry] = useState(0);
@@ -135,7 +138,7 @@ export function PublishToFiles({
     return () => abort.abort();
   }, [id, retry]);
   async function publish() {
-    if (!targets.length || busy) return;
+    if (!chosen.length || !targets.length || busy || (!!id && !current)) return;
     if (chosen.some(i => !publishable(items[i]))) { setError('Approve the selected definitions in Widgets before publishing.'); return; }
     setBusy(true);
     setError('');
@@ -144,22 +147,22 @@ export function PublishToFiles({
         const { dataset_id, version, semantic_revision, id, revision } = items[i];
         return { dataset_id, version, semantic_revision, id, revision };
       });
-      for (const t of targets) {
-        if (outcomes[t.id]?.count !== undefined) continue;
+      await Promise.all(targets.map(async t => {
+        if (outcomes[t.id]?.count !== undefined) return;
         try {
-          const { data } = await api.post('/content/files/' + t.id + '/publish', {
+          const { data } = await runWidgetTask(() => api.post('/content/files/' + t.id + '/publish', {
             sources,
             request_id: requestId,
             revision: t.revision,
             page_id: t.page,
             duplicates,
-          });
+          }));
           setOutcomes((v) => ({ ...v, [t.id]: { count: data.placements_written } }));
           onPublished?.(chosen.map(i => items[i].id));
         } catch (err) {
           setOutcomes((v) => ({ ...v, [t.id]: { error: fileError(err) } }));
         }
-      }
+      }));
       contentChanged();
     } finally {
       setBusy(false);
@@ -167,13 +170,15 @@ export function PublishToFiles({
   }
   const current =
     doc && doc.id === id && page
-      ? { id, name: filePath(files, doc), page, revision: doc.revision }
+      ? { id, name: filePath(files, doc), page, pageName: doc.pages.find(p => p.id === page)?.name, revision: doc.revision }
       : undefined;
   const targets = current ? [...extra.filter((t) => t.id !== id), current] : extra;
   const submitted = Object.keys(outcomes).length > 0;
+  const unready = chosen.filter(i => !publishable(items[i]));
   return (
     <FileDialog
       title="Publish to dashboard"
+      busy={busy}
       close={() => {
         if (!busy) close();
       }}
@@ -207,7 +212,7 @@ export function PublishToFiles({
         <FolderDestination files={files} folder={parent || ''} onChange={value => { setParent(value); setId(''); }} />
         <div className="flex min-w-0 flex-wrap items-end gap-2">
           <label className={`${fileLabel} min-w-0 flex-1`}>Dashboard
-            <select className={fileInput} value={id} onChange={e => setId(e.target.value)}>
+            <select className={fileInput} disabled={loadingTree} value={id} onChange={e => setId(e.target.value)}>
               <option value="">Choose dashboard</option>
               {files.filter(f => f.kind === 'dashboard' && f.permission !== 'view' &&
                 (f.parent_id === parent || (f.permission === 'edit' && !parent)) &&
@@ -215,14 +220,16 @@ export function PublishToFiles({
                 <option value={f.id} key={f.id}>{filePath(files, f)}</option>)}
             </select>
           </label>
-          <button className={control} disabled={!parent} onClick={() => setForm('dashboard')}>+ New Dashboard</button>
+          <button type="button" className={`${fileSecondaryButton} shrink-0`} disabled={!parent || loadingTree} onClick={() => setForm('dashboard')}>+ New Dashboard</button>
         </div>
-        {!files.some(f => f.kind === 'dashboard' && f.parent_id === parent && f.permission !== 'view') &&
-          <p>No dashboards in this folder. Create a dashboard to continue.</p>}
+        {loadingTree && <p role="status" className="text-sm text-[var(--color-text-muted)]">Loading destinations…</p>}
+        {id && !doc && !error && <p role="status" className="text-sm text-[var(--color-text-muted)]">Loading dashboard pages…</p>}
+        {!loadingTree && parent && !files.some(f => f.kind === 'dashboard' && f.parent_id === parent && f.permission !== 'view') &&
+          <p className="text-sm text-[var(--color-text-muted)]">No dashboards in this folder. Create a dashboard to continue.</p>}
         {doc && (
-          <label>
-            Page{' '}
-            <select className={control} value={page} onChange={(e) => setPage(e.target.value)}>
+          <label className={fileLabel}>
+            Page
+            <select className={fileInput} value={page} onChange={(e) => setPage(e.target.value)}>
               {doc.pages.map((p) => (
                 <option value={p.id} key={p.id}>
                   {p.name}
@@ -242,17 +249,20 @@ export function PublishToFiles({
             Include this destination and choose another
           </button>
         )}
-        {extra.map((t) => (
-          <div key={t.id}>
-            {t.name}{' '}
-            <button
-              aria-label={'Remove ' + t.name}
-              onClick={() => setExtra(extra.filter((x) => x.id !== t.id))}
-            >
-              Remove
-            </button>
-          </div>
-        ))}
+        {targets.length > 0 && <section aria-label="Selected destinations" className="grid gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-subtle)] p-3">
+          <h3 className="text-sm font-semibold">Selected destinations ({targets.length})</h3>
+          <p className="text-xs text-[var(--color-text-muted)]">Widgets will be published to each dashboard listed below.</p>
+          {targets.map(t => <div key={t.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-background-surface)] p-3">
+            <div className="min-w-0 text-sm">
+              <p className="break-words font-medium">{t.name}</p>
+              {t.pageName && <p className="mt-1 text-xs text-[var(--color-text-muted)]">Page: {t.pageName}</p>}
+            </div>
+            <button type="button" className={`${control} shrink-0`} aria-label={'Remove ' + t.name} onClick={() => {
+              setExtra(extra.filter(x => x.id !== t.id));
+              if (id === t.id) setId('');
+            }}>Remove</button>
+          </div>)}
+        </section>}
         {doc?.pages
           .find((p) => p.id === page)
           ?.widgets.some((w) =>
@@ -260,11 +270,11 @@ export function PublishToFiles({
               (i) => w.source.dataset_id === items[i].dataset_id && w.source.id === items[i].id,
             ),
           ) && <p>Selected definitions already have placements on this page.</p>}
-        <label>
-          Existing placements{' '}
+        <label className={fileLabel}>
+          Existing placements
           <select
             value={duplicates}
-            className={control}
+            className={fileInput}
             onChange={(e) => setDuplicates(e.target.value)}
           >
             <option value="skip">Skip duplicates</option>
@@ -272,12 +282,16 @@ export function PublishToFiles({
             <option value="add">Add another placement</option>
           </select>
         </label>
+        {unready.length > 0 && <p role="status" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-background-subtle)] p-3 text-sm text-[var(--color-text-secondary)]">
+          {unready.length} selected widget(s) need approval or a saved source version. Review them in Widgets before publishing.
+        </p>}
         <button
+          type="button"
           className={filePrimaryButton}
-          disabled={!chosen.length || !targets.length || (!!id && !current)}
+          disabled={!chosen.length || !targets.length || (!!id && !current) || unready.length > 0 || loadingTree}
           onClick={publish}
         >
-          Publish selected ({chosen.length})
+          {busy ? 'Publishing…' : `Publish selected (${chosen.length})`}
         </button>
       </fieldset>
       {(error || treeError) && (

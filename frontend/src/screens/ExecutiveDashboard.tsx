@@ -1,22 +1,15 @@
 import { SaveDashboardDialog } from '../components/SaveDashboard';
 import { contentChanged, control, Dashboard, fileError } from '../components/ContentFiles';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import api, { getApiErrorMessage } from '../services/api';
-import { ensureDefaultContext, selectedContext } from '../services/executionContext';
+import { selectedContext } from '../services/executionContext';
+import { cachedExecutiveDashboard, executiveDashboardScope, invalidateExecutiveDashboard, loadExecutiveDashboard, type ExecutiveDashboardData } from '../services/executiveDashboardService';
 import { AnalyticsWidget, formatTableCell } from '../components/AnalyticsWidget';
-import { AnalyticsDefinition, ExecutionResult } from '../services/semanticService';
+import { AnalyticsDefinition } from '../services/semanticService';
 import { getDatasets } from '../services/datasetService';
 
-type DashboardData = {
-  title: string;
-  widgets: { definition: AnalyticsDefinition; result: ExecutionResult }[];
-  status: string;
-};
-
-let cachedDashboardPayload: DashboardData | null = null;
-
 export function invalidateDashboardCache() {
-  cachedDashboardPayload = null;
+  invalidateExecutiveDashboard();
 }
 
 interface SourceInfo {
@@ -144,9 +137,11 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [saveMenu, setSaveMenu] = useState(false);
-  const [dashboard, setDashboard] = useState<DashboardData | null>(cachedDashboardPayload);
+  const [dashboard, setDashboard] = useState<ExecutiveDashboardData | null>(cachedExecutiveDashboard);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(!cachedDashboardPayload);
+  const [loading, setLoading] = useState(!cachedExecutiveDashboard());
+  const requestSequence = useRef(0);
+  const mounted = useRef(true);
   const [datasetMap, setDatasetMap] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -169,43 +164,41 @@ export function ExecutiveDashboard({ onNavigate }: { onNavigate: (path: string) 
   }, []);
 
   const load = async (forceRefresh = false) => {
-    const shouldBypass = forceRefresh || !cachedDashboardPayload;
-    if (shouldBypass) {
-      setLoading(true);
-    }
+    const sequence = ++requestSequence.current;
+    setLoading(true);
     setError('');
     try {
-      if (!selectedContext()) {
-        await ensureDefaultContext();
-      }
-      const endpoint = shouldBypass ? '/dashboard?refresh=true' : '/dashboard';
-      const data = (await api.get(endpoint)).data;
-      cachedDashboardPayload = data;
+      const { scope, data } = await loadExecutiveDashboard(forceRefresh);
+      if (!mounted.current || sequence !== requestSequence.current || scope !== executiveDashboardScope()) return;
       setDashboard(data);
     } catch (err) {
-      cachedDashboardPayload = null;
+      if (!mounted.current || sequence !== requestSequence.current) return;
       setDashboard(null);
       setError(getApiErrorMessage(err, 'Dashboard could not be loaded.'));
     } finally {
-      setLoading(false);
+      if (mounted.current && sequence === requestSequence.current) setLoading(false);
     }
   };
 
   useEffect(() => {
+    mounted.current = true;
     void load();
 
     const handleDashboardUpdated = () => {
-      cachedDashboardPayload = null;
+      invalidateDashboardCache();
       void load(true);
     };
+    const handleContextChanged = () => { void load(); };
     const clearSaved = () => { setSavedDoc(undefined); setSaveMessage(''); };
     window.addEventListener('dataset-context-changed', clearSaved);
     window.addEventListener('dashboard_updated', handleDashboardUpdated);
-    window.addEventListener('dataset-context-changed', handleDashboardUpdated);
+    window.addEventListener('dataset-context-changed', handleContextChanged);
     return () => {
+      mounted.current = false;
+      requestSequence.current += 1;
       window.removeEventListener('dataset-context-changed', clearSaved);
       window.removeEventListener('dashboard_updated', handleDashboardUpdated);
-      window.removeEventListener('dataset-context-changed', handleDashboardUpdated);
+      window.removeEventListener('dataset-context-changed', handleContextChanged);
     };
   }, []);
 

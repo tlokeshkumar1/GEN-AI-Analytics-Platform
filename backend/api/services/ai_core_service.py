@@ -3,6 +3,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from typing import List, Optional
 import time
+import re
 from api.config import settings
 from api.utils.logger import get_logger
 
@@ -28,6 +29,32 @@ def _create_http_session() -> requests.Session:
 
 class EmbeddingProviderError(RuntimeError):
     """Actionable embedding failure safe to return to an authenticated caller."""
+
+    def __init__(self, message, *, status_code=None, request_id=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.request_id = request_id
+
+
+def _provider_diagnostic(response):
+    """Log only a bounded diagnostic, never request inputs or auth headers."""
+    try:
+        body = response.json()
+        error = body.get("error", body) if isinstance(body, dict) else {}
+        message = (error.get("message") or error.get("detail")) if isinstance(error, dict) else error
+        if not isinstance(message, str):
+            message = "No provider diagnostic message returned"
+    except (ValueError, TypeError):
+        message = "Provider returned a non-JSON error response"
+    if settings.NVIDIA_API_KEY:
+        message = message.replace(settings.NVIDIA_API_KEY, "[redacted]")
+    message = re.sub(r"(?i)bearer\s+\S+", "Bearer [redacted]", message)
+    message = re.sub(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", message)
+    message = " ".join(message.split())[:300]
+    request_id = next((response.headers.get(name) for name in ("x-request-id", "request-id", "x-nv-request-id") if response.headers.get(name)), None)
+    if request_id and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", request_id):
+        request_id = None
+    return message, request_id
 
 
 class AICoreService:
@@ -72,17 +99,26 @@ class AICoreService:
                 )
                 res.raise_for_status()
                 return res
-            except requests.exceptions.Timeout as e:
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
                 last_exception = e
-                if attempt < max_retries:
-                    wait_time = (2**attempt) * 1  # 1s, 2s
+                response = e.response if isinstance(e, requests.exceptions.HTTPError) else None
+                status = response.status_code if response is not None else None
+                retryable = status in (429, 500, 502, 503, 504) or not isinstance(e, requests.exceptions.HTTPError)
+                if retryable and attempt < max_retries:
+                    wait_time = min(8, 2**attempt)
+                    if response is not None:
+                        try:
+                            wait_time = min(10, max(wait_time, float(response.headers.get("Retry-After", 0))))
+                        except (TypeError, ValueError):
+                            pass
                     logger.warning(
-                        f"Request timeout (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s..."
+                        "Embedding request failed (HTTP %s, %s, attempt %s/%s); retrying in %ss",
+                        status, type(e).__name__, attempt + 1, max_retries + 1, wait_time,
                     )
                     time.sleep(wait_time)
                 else:
                     logger.error(
-                        f"Request failed after {max_retries + 1} attempts: {e}"
+                        f"Request failed after {attempt + 1} attempts: {e}"
                     )
                     raise
             except Exception as e:
@@ -326,7 +362,7 @@ class AICoreService:
         return self.generate_embeddings([text], input_type="query")[0]
 
     def generate_embeddings(
-        self, texts: List[str], input_type="passage"
+        self, texts: List[str], input_type="passage", *, max_retries=2
     ) -> List[List[float]]:
         api_key = settings.NVIDIA_API_KEY
         if not api_key:
@@ -348,7 +384,7 @@ class AICoreService:
         }
         try:
             res = self._request_with_retry(
-                settings.NVIDIA_API_URL, headers, payload, timeout=30, max_retries=2
+                settings.NVIDIA_API_URL, headers, payload, timeout=(5, 30), max_retries=max_retries
             )
             items = sorted(res.json()["data"], key=lambda item: item.get("index", 0))
             if len(items) != len(texts):
@@ -361,6 +397,7 @@ class AICoreService:
         except requests.exceptions.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else None
             model = payload["model"]
+            diagnostic, request_id = _provider_diagnostic(exc.response) if exc.response is not None else ("No provider response", None)
             if status == 410:
                 message = (
                     f"Embedding model '{model}' is no longer available (HTTP 410). "
@@ -370,10 +407,14 @@ class AICoreService:
                 message = "The embedding provider rejected authentication. Check NVIDIA_API_KEY and model access on the backend."
             elif status == 429:
                 message = "The embedding provider rate limit was reached. Wait briefly, then refresh embeddings."
+            elif status in (500, 502, 503, 504):
+                message = f"The embedding provider failed (HTTP {status}) for model '{model}'. Retry embeddings; completed batches will be reused."
             else:
                 message = f"The embedding provider rejected the request (HTTP {status}). Check the configured embedding model and endpoint."
-            logger.error(message)
-            raise EmbeddingProviderError(message) from exc
+            if request_id:
+                message += f" Request ID: {request_id}."
+            logger.error("%s Provider diagnostic: %s", message, diagnostic)
+            raise EmbeddingProviderError(message, status_code=status, request_id=request_id) from exc
         except Exception as exc:
             logger.exception("NVIDIA embedding request failed")
             raise EmbeddingProviderError(

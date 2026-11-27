@@ -255,7 +255,9 @@ def profile(dataset_id: str, version: int):
 
 @router.get("/api/datasets/{dataset_id}/versions/{version}/semantics")
 def semantics(dataset_id: str, version: int):
-    entry, _ = dataset_version(dataset_id, version, for_chat=True)
+    entry = dataset_service._entry(dataset_service._catalog(), dataset_id, for_chat=True)
+    if not any(item["version"] == version for item in entry.get("versions", [])):
+        raise HTTPException(404, "Dataset version not found.")
     return semantic_registry.list(entry, version, for_chat=True)
 
 

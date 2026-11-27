@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { usePublicationDestination } from '../components/PublishToFiles';
 import api, { getApiErrorMessage } from '../services/api';
+import { runWidgetTask } from '../services/widgetTaskQueue';
 import { selectedContext, ensureDefaultContext, selectContext } from '../services/executionContext';
 import { hasAdminRole } from '../services/authService';
 import { getDatasets } from '../services/datasetService';
@@ -536,7 +537,19 @@ export function GraphStudio({
     setError('');
     setPublishedSuccess(false);
     try {
-      const updated = await reviewDefinition(item, decision);
+      const updated = await runWidgetTask(() => reviewDefinition(item, decision));
+      setGeneratedWidgets(previous => {
+        const next = previous.map(widget => {
+          const existing = widget.definition;
+          return existing.id === item.id && existing.revision === item.revision &&
+            existing.dataset_id === item.dataset_id && existing.version === item.version &&
+            existing.semantic_revision === item.semantic_revision
+            ? { ...widget, saved: true, definition: { ...existing, ...updated, status: updated?.status || decision } }
+            : widget;
+        });
+        generatedWidgetCache = next;
+        return next;
+      });
       setItems(previous =>
         previous.map(existing =>
           existing.id === item.id && existing.revision === item.revision &&
@@ -548,7 +561,6 @@ export function GraphStudio({
       );
       if (decision === 'approved') {
         invalidateDashboardCache();
-      window.dispatchEvent(new Event('dashboard_updated'));
         window.dispatchEvent(new Event('dashboard_updated'));
       }
       setMessage(
@@ -656,7 +668,7 @@ export function GraphStudio({
     const canonical = Object.fromEntries(Object.entries(item).filter(([key]) =>
       ['id', 'title', 'kind', 'revision', 'semantic_revision', 'query_plan', 'dependencies', 'explanation', 'status'].includes(key))) as unknown as AnalyticsDefinition;
     const saved = await saveDefinition(canonical);
-    addGenerated({ definition: { ...item, ...saved, dataset_id: selectedDatasetId,
+    addGenerated({ saved: true, definition: { ...item, ...saved, dataset_id: selectedDatasetId,
       dataset_name: datasets.find(d => d.id === selectedDatasetId)?.name,
       version: datasets.find(d => d.id === selectedDatasetId)?.currentVersion || 1 }, result });
     setItems(await getRecommendations(true));
@@ -888,7 +900,7 @@ export function GraphStudio({
                   const proposals = Array.isArray(newlyProposed) ? newlyProposed : (newlyProposed as any)?.items || [];
                   for (const item of proposals) {
                     const result = await executePlan(item.query_plan);
-                    if (result.success) addGenerated({ definition: { ...item, dataset_id: item.dataset_id || selectedDatasetId,
+                    if (result.success) addGenerated({ saved: true, definition: { ...item, dataset_id: item.dataset_id || selectedDatasetId,
                       version: datasets.find(d => d.id === selectedDatasetId)?.currentVersion || 1 }, result });
                   }
                 }
@@ -1920,7 +1932,19 @@ export function GraphStudio({
       </div>
       {(!widgetsOnly || generatedWidgets.length > 0) && <GeneratedWidgetSections navigate={onNavigate} key={widgetsOnly ? 'library' : `${activeMode}:${selectedDatasetId}`} widgets={generatedWidgets.filter(widget =>
         widgetsOnly || (widget.source === activeMode && (!selectedDatasetId || selectedDatasetId === 'all' || widget.definition.dataset_id === selectedDatasetId))
-      )} onPublished={ids => {
+      )} onDefinitionUpdated={(original, updated) => {
+        const matches = (item: AnalyticsDefinition) => item.id === original.id && item.revision === original.revision && item.dataset_id === original.dataset_id && item.version === original.version && item.semantic_revision === original.semantic_revision;
+        setGeneratedWidgets(prev => {
+          const next = prev.map(w => w.definition === original ? { ...w, definition: updated, saved: true } : w);
+          generatedWidgetCache = next;
+          return next;
+        });
+        setItems(prev => [...prev.filter(item => !matches(item)), updated]);
+        if (updated.status === 'approved') {
+          invalidateDashboardCache();
+          window.dispatchEvent(new Event('dashboard_updated'));
+        }
+      }} onPublished={ids => {
         setGeneratedWidgets(prev => {
           const next = prev.map(w => ids.includes(w.definition.id) ? { ...w, published: true } : w);
           generatedWidgetCache = next;
@@ -2364,21 +2388,20 @@ export function GraphStudio({
                             <span>{isCardDeleting ? 'Deleting...' : 'Delete'}</span>
                           </button>
 
-                          {item.status==='approved' && item.reviewer==='system' && <button className="rounded border px-2 py-1 text-xs" disabled={busy || isCardReviewing} onClick={()=>void handleReviewItem(item,'approved')}>Confirm for My Files</button>}
-                          {item.status === 'proposed' && (
-                            <div className="flex items-center gap-1.5 pl-1.5 border-l border-[var(--color-border)]">
                               <button
                                 type="button"
-                                disabled={busy || isPreviewLoading || isCardReviewing}
+                                aria-label={`${item.status === 'approved' && item.reviewer !== 'system' ? 'Approved' : 'Approve'} ${item.title}`}
+                                disabled={busy || isPreviewLoading || isCardReviewing || isCardDeleting || (item.status !== 'proposed' && !(item.status === 'approved' && item.reviewer === 'system'))}
                                 onClick={() => void handleReviewItem(item, 'approved')}
                                 className="bg-[var(--color-success)] hover:opacity-90 text-white font-medium text-xs px-2.5 py-1.5 rounded-[var(--radius-element)] flex items-center gap-1 shadow-[var(--shadow-2xs)] transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                               >
                                 <span className={`material-symbols-outlined text-[15px] ${reviewingDecision === 'approved' ? 'animate-spin' : ''}`}>
                                   {reviewingDecision === 'approved' ? 'progress_activity' : 'check'}
                                 </span>
-                                <span>{reviewingDecision === 'approved' ? 'Approving...' : 'Approve'}</span>
+                                <span>{reviewingDecision === 'approved' ? 'Approving...' : item.status === 'approved' && item.reviewer !== 'system' ? 'Approved' : 'Approve'}</span>
                               </button>
-
+                          {item.status === 'proposed' && (
+                            <div className="flex items-center gap-1.5 pl-1.5 border-l border-[var(--color-border)]">
                               <button
                                 type="button"
                                 disabled={busy || isPreviewLoading || isCardReviewing}

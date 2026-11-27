@@ -8,7 +8,8 @@ import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { ContentFiles } from './components/ContentFiles';
 const PersonalDashboard = lazy(() => import('./screens/PersonalDashboard').then(m => ({default:m.PersonalDashboard})));
-const personalRoute = (path:string) => /^dashboards\/[a-f0-9]{32}$/.test(path) || path === 'my-files';
+import { dashboardIdFromRoute, dashboardRoute, personalRoute } from './services/dashboardRoutes';
+import { useFileTree } from './services/fileTreeCache';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { CommandPalette } from './components/CommandPalette';
 import { AgentActivityModal } from './components/AgentActivityModal';
@@ -76,7 +77,7 @@ export default function App() {
   });
   const [activePath, setActivePath] = useState<string>(() => {
     try {
-      const pathname = window.location.pathname.replace(/^\/+/, '').toLowerCase();
+      const pathname = window.location.pathname.replace(/^\/+/, '');
       if (personalRoute(pathname)) return pathname;
       if (pathname === 'hanaadmin' || pathname === 'hana-admin') return 'hanaadmin';
       const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
@@ -90,6 +91,18 @@ export default function App() {
     return 'executive-dashboard';
   });
   const [hasOpenedChat, setHasOpenedChat] = useState(false);
+  const routeTree = useFileTree(false, false, isAuthenticated);
+  const dashboardId = dashboardIdFromRoute(routeTree.files, activePath);
+  const sidebarPath = dashboardId ? 'dashboards/' + dashboardId : activePath;
+  useEffect(() => {
+    if (!isAuthenticated || !dashboardId || routeTree.loading) return;
+    const canonical = 'dashboards/' + dashboardId;
+    const url = '/' + dashboardRoute(routeTree.files, dashboardId);
+    if (activePath !== canonical) setActivePath(canonical);
+    if (window.location.pathname !== url) {
+      window.history.replaceState({ ...window.history.state, screen: canonical }, '', url + window.location.search + window.location.hash);
+    }
+  }, [isAuthenticated, dashboardId, routeTree.files, routeTree.loading, activePath]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -148,7 +161,7 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       try {
-        const pathname = window.location.pathname.replace(/^\/+/, '').toLowerCase();
+        const pathname = window.location.pathname.replace(/^\/+/, '');
         if (personalRoute(pathname)) setActivePath(pathname);
         else if (window.history.state?.screen) setActivePath(window.history.state.screen);
         else if (pathname === 'hanaadmin' || pathname === 'hana-admin') {
@@ -311,7 +324,8 @@ export default function App() {
     }
     if (personalRoute(path)) {
       window.history.replaceState({screen:activePath}, '');
-      window.history.pushState({screen:path}, '', '/'+path);
+      const id = dashboardIdFromRoute(routeTree.files, path);
+      window.history.pushState({screen:path}, '', '/' + (id ? dashboardRoute(routeTree.files, id) : path));
     } else if (path === 'hanaadmin') {
       window.history.pushState({}, '', '/hanaadmin');
     } else if (path === 'executive-dashboard') {
@@ -428,7 +442,7 @@ export default function App() {
 
       {/* Global Sidebar Navigation (Drawer on mobile, Compact on tablet, Expandable on desktop) */}
       <Sidebar
-        activePath={activePath}
+        activePath={sidebarPath}
         onNavigate={handleNavigate}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -447,7 +461,9 @@ export default function App() {
         <main className="w-full pt-14 bg-[var(--color-background-body)] min-h-screen min-h-dvh pb-28 lg:pb-32">
           <Suspense fallback={<ScreenFallback />}>
             <div className="w-full max-w-[var(--content-max-width)] mx-auto px-4 sm:px-5 lg:px-8 py-5">
-              {activePath.startsWith('dashboards/') && <PersonalDashboard key={currentUser?.user_id+activePath} id={activePath.slice(11)} navigate={handleNavigate}/>}
+              {activePath.startsWith('dashboards/') && (dashboardId
+                ? <PersonalDashboard key={currentUser?.user_id+dashboardId} id={dashboardId} navigate={handleNavigate}/>
+                : routeTree.loading ? <ScreenFallback /> : <p role="alert">{routeTree.error || 'Dashboard unavailable. Select it from My Files.'}</p>)}
               {activePath === 'my-files' && <ContentFiles key={currentUser?.user_id} userKey={currentUser?.email || ''} active={activePath} navigate={handleNavigate}/>}
               {activePath === 'executive-dashboard' && (
                 <ExecutiveDashboard onNavigate={handleNavigate} />

@@ -25,10 +25,14 @@ from api.services.dataset_service import dataset_service
 class CalculationBatch:
     """Request-local source preparation shared by concurrent widgets."""
 
-    def __init__(self):
+    def __init__(self, sources=()):
         self.lock = threading.RLock()
         self.values = {}
         self.cache_hits = 0
+        self.definition_keys = {}
+        for source in sources:
+            key = (source["dataset_id"], source["version"], source["semantic_revision"])
+            self.definition_keys.setdefault(key, set()).add(f"{source['id']}:{source['revision']}")
 
     def get(self, key, load):
         with self.lock:
@@ -42,6 +46,7 @@ _results = OrderedDict()
 _result_bytes = 0
 _RESULT_TTL = 120
 _RESULT_MAX_BYTES = 16 * 1024 * 1024
+_legacy_proofs = OrderedDict()
 
 
 def clear_calculation_cache():
@@ -49,6 +54,43 @@ def clear_calculation_cache():
     with _result_lock:
         _results.clear()
         _result_bytes = 0
+        _legacy_proofs.clear()
+
+
+def snapshot_data_digest(snapshot):
+    """Publication pins data and schema; vector indexing is independent."""
+    return hashlib.sha256(json.dumps(
+        [snapshot.get("columns"), snapshot.get("rows"), snapshot.get("source_backend")],
+        sort_keys=True, ensure_ascii=False, allow_nan=False,
+    ).encode()).hexdigest()
+
+
+def legacy_pin_matches(repository, model, item, expected, snapshot, digest, memo):
+    """Recover an old pin only after proving its original data is unchanged."""
+    proof = (expected, digest)
+    with _result_lock:
+        if proof in _legacy_proofs:
+            _legacy_proofs.move_to_end(proof)
+            return True
+    # Only IDs are loaded. Fetch the one immutable manifest authenticated by
+    # the original digest; never scan the contents of unrelated snapshots.
+    keys = memo("artifact-keys", repository.objects.keys)
+    original = next((key for key in keys if hashlib.sha256(
+        json.dumps([model, item, key], sort_keys=True).encode()
+    ).hexdigest() == expected), None)
+    if original is None:
+        return False
+    try:
+        old = memo(("legacy-snapshot", original), lambda: repository.snapshot(original))
+    except (FileNotFoundError, ValueError, KeyError):
+        return False
+    if "rows" not in old or snapshot_data_digest(old) != snapshot_data_digest(snapshot):
+        return False
+    with _result_lock:
+        _legacy_proofs[proof] = True
+        while len(_legacy_proofs) > 512:
+            _legacy_proofs.popitem(last=False)
+    return True
 
 
 def _cached_result(key):
@@ -126,10 +168,17 @@ def calculate(
     ):
         raise HTTPException(409, "Semantic source mismatch.")
     items_ns = semantic_registry.namespace(entry, version, f"analytics:{revision}")
-    row = memo(
-        ("document", items_ns, ref["id"], ref["revision"]),
-        lambda: source_store.get(items_ns, f"{ref['id']}:{ref['revision']}"),
-    )
+    requested = batch.definition_keys.get((entry["id"], version, revision)) if batch else None
+    if requested:
+        definitions = memo(
+            ("definitions", items_ns), lambda: source_store.get_many(items_ns, sorted(requested))
+        )
+        row = definitions.get(f"{ref['id']}:{ref['revision']}")
+    else:
+        row = memo(
+            ("document", items_ns, ref["id"], ref["revision"]),
+            lambda: source_store.get(items_ns, f"{ref['id']}:{ref['revision']}"),
+        )
     if not row:
         raise HTTPException(404, "Definition unavailable.")
     item = AnalyticsItem.model_validate(row["value"])
@@ -177,12 +226,25 @@ def calculate(
         ),
         None,
     )
-    digest = hashlib.sha256(
+    legacy_digest = hashlib.sha256(
         json.dumps(
             [model_row["value"], row["value"], manifest], sort_keys=True
         ).encode()
     ).hexdigest()
-    if expected_digest is not None and expected_digest != digest:
+    snapshot = memo(
+        ("snapshot", entry["id"], version),
+        lambda: dataset_service._snapshot(entry, version, include_index=False),
+    )
+    if snapshot.get("source_backend") == "hana" or "rows" not in snapshot:
+        raise HTTPException(409, "This version requires a complete pinned snapshot.")
+    data_digest = memo(("data-digest", entry["id"], version), lambda: snapshot_data_digest(snapshot))
+    digest = "data-v2:" + hashlib.sha256(json.dumps(
+        [model_row["value"], row["value"], data_digest], sort_keys=True,
+    ).encode()).hexdigest()
+    valid_pin = expected_digest is None or expected_digest in (digest, legacy_digest)
+    if not valid_pin and len(expected_digest) == 64 and all(c in "0123456789abcdef" for c in expected_digest):
+        valid_pin = legacy_pin_matches(repository, model_row["value"], row["value"], expected_digest, snapshot, digest, memo)
+    if not valid_pin:
         raise HTTPException(
             409, "The pinned definition or snapshot changed. Review and republish."
         )
@@ -203,12 +265,6 @@ def calculate(
                 with batch.lock:
                     batch.cache_hits += 1
             return cached
-    snapshot = memo(
-        ("snapshot", entry["id"], version),
-        lambda: dataset_service._snapshot(entry, version),
-    )
-    if snapshot.get("source_backend") == "hana" or "rows" not in snapshot:
-        raise HTTPException(409, "This version requires a complete pinned snapshot.")
     context = ExecutionContext(
         **{k: workspace.scope[k] for k in ("workspace_id", "user_id")},
         dataset_id=entry["id"],

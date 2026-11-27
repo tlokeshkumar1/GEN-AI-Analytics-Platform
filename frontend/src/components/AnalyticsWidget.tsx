@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { AnalyticsDefinition, ExecutionResult } from '../services/semanticService';
 import {
   parseTemporalSortKey,
@@ -37,6 +37,7 @@ export function AnalyticsWidget({
   showTable = true,
   isDashboard = false,
 }: AnalyticsWidgetProps) {
+  if (result.status === 'loading') return <p role="status" className="py-4 text-xs text-[var(--color-text-secondary)]">Calculating widget data…</p>;
   if (!result.success) {
     return (
       <div role="alert" className="p-3 rounded-[var(--radius-element)] bg-[var(--color-error-soft)] border border-[var(--color-error-muted)] text-[var(--color-error)] text-xs font-medium">
@@ -56,7 +57,7 @@ export function AnalyticsWidget({
   const valueKey = 'value' in rawRows[0] ? 'value' : measures.find(key => key in rawRows[0]) || columns[columns.length - 1];
   const labelKey = columns.find(key => key !== valueKey && !measures.includes(key)) || columns[0];
 
-  const rows = useMemo(() => {
+  const rows = (() => {
     if (!rawRows || !rawRows.length) return [];
     const copy = [...rawRows];
     const sortConfig = definition.query_plan?.sort as { column?: string; direction?: string } | undefined;
@@ -82,10 +83,11 @@ export function AnalyticsWidget({
       });
     }
     return copy;
-  }, [rawRows, definition.query_plan, labelKey]);
+  })();
 
-  const values = rows.map(row => row[valueKey] == null ? null : Number(row[valueKey]));
+  const values = rows.map(row => row[valueKey] == null || row[valueKey] === '' ? null : Number(row[valueKey]));
   const finite = values.filter((v): v is number => v !== null && Number.isFinite(v));
+  if (definition.kind !== 'table' && !finite.length) return <p role="alert" className="py-4 text-xs text-[var(--color-error)]">No numeric values were returned for this widget. Recalculate it or review its metric.</p>;
   const low = Math.min(0, ...finite);
   const high = Math.max(0, ...finite);
 

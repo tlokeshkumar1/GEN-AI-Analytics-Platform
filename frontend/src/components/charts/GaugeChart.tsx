@@ -19,7 +19,8 @@ export const GaugeChart: React.FC<GaugeChartProps> = ({
   isCurrencyMetric,
 }) => {
   const finite = values.filter((v): v is number => v !== null && Number.isFinite(v));
-  const currentVal = values[0] ?? 0;
+  const currentVal = values[0];
+  if (currentVal == null || !Number.isFinite(currentVal)) return <p role="alert" className="text-xs py-4">No valid numeric value is available for this gauge.</p>;
   const maxVal = finite.length > 1 ? Math.max(...finite) : (currentVal > 0 ? currentVal * 1.25 : 100);
   const pct = Math.min(1, Math.max(0, currentVal / (maxVal || 1)));
   const angle = Math.PI - pct * Math.PI;

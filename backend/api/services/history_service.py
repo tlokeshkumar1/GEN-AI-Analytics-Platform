@@ -68,7 +68,7 @@ class ChatHistoryService:
                     failed = True
             if failed:
                 try:
-                    conn.close()
+                    db_manager.discard_connection(conn)
                 except Exception:
                     pass
             else:

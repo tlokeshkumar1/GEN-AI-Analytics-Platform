@@ -6,6 +6,7 @@ import struct
 import threading
 import datetime
 from decimal import Decimal
+from numbers import Integral, Real
 from typing import List, Dict, Any, Optional
 import pandas as pd
 from api.database.connection import db_manager
@@ -70,10 +71,34 @@ class HANATableService:
         self._overview_cache: Dict[str, Any] = {}
         self._overview_cache_lock = threading.Lock()
         self._overview_cache_ttl = 60.0  # seconds
+        self._page_columns_cache = {}
+        self._page_columns_lock = threading.Lock()
 
     def clear_overview_cache(self):
         with self._overview_cache_lock:
             self._overview_cache.clear()
+        with self._page_columns_lock:
+            self._page_columns_cache.clear()
+
+    def _page_columns(self, cursor, table, schema):
+        key = (id(db_manager), settings.HANA_ADDRESS, schema, table)
+        with self._page_columns_lock:
+            cached = self._page_columns_cache.get(key)
+            if cached and time.monotonic() - cached[0] < 30:
+                return copy.deepcopy(cached[1])
+        # Only schema is shared; every request still queries current counts/rows.
+        cursor.execute(
+            "SELECT 1 FROM SYS.TABLES WHERE SCHEMA_NAME = CURRENT_SCHEMA AND TABLE_NAME = ?",
+            (table,),
+        )
+        if not cursor.fetchone():
+            raise ValueError(f"Table '{table}' does not exist in schema '{schema}'.")
+        columns = self._fetch_columns_on_cursor(cursor, table)
+        with self._page_columns_lock:
+            self._page_columns_cache[key] = (time.monotonic(), copy.deepcopy(columns))
+            while len(self._page_columns_cache) > 128:
+                self._page_columns_cache.pop(next(iter(self._page_columns_cache)))
+        return columns
 
     def _ensure_schema(self, conn, cursor) -> Optional[str]:
         schema = settings.HANA_SCHEMA
@@ -310,13 +335,30 @@ class HANATableService:
                 continue
 
             dtype = df[col].dtype
-            if pd.api.types.is_bool_dtype(dtype):
+            values = series.tolist()
+            numeric = all(isinstance(value, (Integral, Real, Decimal)) and not isinstance(value, bool) for value in values)
+            if pd.api.types.is_bool_dtype(dtype) or all(isinstance(value, bool) for value in values):
                 hana_type = "BOOLEAN"
-            elif pd.api.types.is_integer_dtype(dtype):
+            elif numeric and all(isinstance(value, Integral) and -(2**63) <= value < 2**63 for value in values):
                 hana_type = "BIGINT"
-            elif pd.api.types.is_float_dtype(dtype):
-                hana_type = "DECIMAL(15, 2)"
-            elif pd.api.types.is_datetime64_any_dtype(dtype):
+            elif numeric and any(isinstance(value, Decimal) for value in values):
+                numbers = [value if isinstance(value, Decimal) else Decimal(str(value)) for value in values]
+                if any(not value.is_finite() for value in numbers):
+                    raise ValueError(f"Column '{clean_col}' contains non-finite decimal values.")
+                scale = max(max(0, -value.as_tuple().exponent) for value in numbers)
+                whole = max(max(0, value.adjusted() + 1) if value else 0 for value in numbers)
+                precision = max(1, whole + scale)
+                if precision > 38:
+                    raise ValueError(f"Column '{clean_col}' exceeds HANA's exact decimal precision of 38 digits.")
+                hana_type = f"DECIMAL({precision}, {scale})"
+            elif numeric and all(isinstance(value, Integral) for value in values):
+                precision = max(len(str(abs(int(value)))) for value in values)
+                if precision > 38:
+                    raise ValueError(f"Column '{clean_col}' exceeds HANA's exact decimal precision of 38 digits.")
+                hana_type = f"DECIMAL({precision}, 0)"
+            elif numeric:
+                hana_type = "DOUBLE"
+            elif pd.api.types.is_datetime64_any_dtype(dtype) or all(isinstance(value, (datetime.date, datetime.datetime)) for value in values):
                 has_time = any(
                     getattr(t, "hour", 0) != 0 or getattr(t, "minute", 0) != 0
                     for t in series.head(20)
@@ -646,18 +688,7 @@ class HANATableService:
             cursor = conn.cursor()
             schema = self._ensure_schema(conn, cursor)
 
-            # Verify table exists in current schema
-            cursor.execute(
-                "SELECT 1 FROM SYS.TABLES WHERE SCHEMA_NAME = CURRENT_SCHEMA AND TABLE_NAME = ?",
-                (clean_table,),
-            )
-            if not cursor.fetchone():
-                raise ValueError(
-                    f"Table '{clean_table}' does not exist in schema '{schema}'."
-                )
-
-            # Fetch columns inline on the same cursor (avoids a second HANA connection)
-            cols = self._fetch_columns_on_cursor(cursor, clean_table)
+            cols = self._page_columns(cursor, clean_table, schema)
             col_names = [c["name"] for c in cols]
 
             # Validate sort column

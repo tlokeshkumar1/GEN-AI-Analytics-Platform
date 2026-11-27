@@ -132,6 +132,17 @@ class ExcelDatasetService:
 
         selection = current_selection.get()
         if selection is not None:
+            if selection.snapshot.get("lazy_snapshot"):
+                if selection.snapshot.get("rowCount", 0) > settings.MAX_IN_MEMORY_ANALYTICS_ROWS:
+                    raise RuntimeError(
+                        "This analysis needs database execution at this dataset size. "
+                        "Use a supported database aggregate instead of an in-memory calculation."
+                    )
+                from api.services.dataset_service import dataset_service
+
+                saved = dataset_service._snapshot(selection.entry, selection.context.version, include_index=False)
+                if saved.get("source_backend") != "hana":
+                    return dataset_service._frame(saved["rows"], saved["columns"])
             rows = selection.snapshot.get("rows")
             if (
                 "rows" in selection.snapshot

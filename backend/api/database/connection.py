@@ -48,6 +48,8 @@ class HANAConnectionManager:
                 password=self.password,
                 encrypt="true",
                 sslValidateCertificate="true" if self.validate_cert else "false",
+                connectTimeout=settings.HANA_CONNECT_TIMEOUT_MS,
+                communicationTimeout=settings.HANA_COMMUNICATION_TIMEOUT_MS,
             )
             if self.schema:
                 cursor = conn.cursor()

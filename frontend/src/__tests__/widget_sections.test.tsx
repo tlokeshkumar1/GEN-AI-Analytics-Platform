@@ -5,6 +5,7 @@ import { GeneratedWidgetSections, GeneratedWidget } from '../components/dashboar
 import { Sidebar } from '../components/Sidebar';
 import { GraphStudio } from '../screens/GraphStudio';
 import api from '../services/api';
+import { PublishToFiles, publishable } from '../components/PublishToFiles';
 
 vi.mock('../services/api', () => ({ default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
   getApiErrorMessage: (e: Error) => e.message }));
@@ -25,11 +26,100 @@ it('hides the results area until widgets are generated', () => {
   expect(screen.queryByLabelText('Generated results')).toBeNull();
   expect(screen.queryByRole('button', { name: /Publish Selected/ })).toBeNull();
 });
+it('saves and approves a generated preview, then publishes the returned saved revision with its source headers', async () => {
+  setupDestination();
+  vi.mocked(api.post).mockImplementation(async (url, body: any) => ({ data:
+    url === '/insights/definitions' ? { ...body, revision: 7, status: 'proposed' } :
+    url.endsWith('/review') ? { revision: 7, status: 'approved', reviewer: 'alice' } : { placements_written: 1 } }));
+  const widget = draft('Generated chart', 'bar');
+  widget.definition = { ...widget.definition, status: 'proposed', reviewer: undefined };
+  render(<GeneratedWidgetSections widgets={[widget]} onPublished={vi.fn()} />);
+  expect(screen.getByRole('button', { name: 'Publish Generated chart' })).toHaveProperty('disabled', true);
+  fireEvent.click(screen.getByRole('button', { name: 'Approve Generated chart' }));
+  await screen.findByRole('button', { name: 'Approved Generated chart' });
+  expect(api.post).toHaveBeenCalledWith('/insights/definitions', expect.objectContaining({ id: 'Generated chart' }), expect.objectContaining({ headers: {
+    'X-Dataset-Id': 'projects', 'X-Dataset-Version': '3', 'X-Semantic-Revision': '2',
+  } }));
+  expect(api.post).toHaveBeenCalledWith('/insights/definitions/Generated chart/7/review', { decision: 'approved' }, expect.objectContaining({ headers: {
+    'X-Dataset-Id': 'projects', 'X-Dataset-Version': '3', 'X-Semantic-Revision': '2',
+  } }));
+  fireEvent.click(screen.getByRole('button', { name: 'Publish Generated chart' }));
+  await screen.findByRole('option', { name: 'My Files / Reports' });
+  fireEvent.change(screen.getByLabelText('Folder'), { target: { value: folder.id } });
+  fireEvent.change(screen.getByLabelText('Dashboard'), { target: { value: target.id } });
+  await screen.findByRole('option', { name: 'Overview' });
+  fireEvent.click(screen.getByRole('button', { name: 'Publish selected (1)' }));
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/content/files/' + target.id + '/publish', expect.objectContaining({ sources: [
+    { id: 'Generated chart', revision: 7, dataset_id: 'projects', version: 3, semantic_revision: 2 },
+  ] })));
+});
+it('rejects an already saved preview without saving another revision and blocks publishing', async () => {
+  vi.mocked(api.post).mockResolvedValue({ data: { status: 'rejected', reviewer: 'alice' } });
+  const widget = { ...draft('Generated KPI', 'kpi'), saved: true };
+  widget.definition = { ...widget.definition, status: 'proposed', reviewer: undefined };
+  render(<GeneratedWidgetSections widgets={[widget]} onPublished={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Reject Generated KPI' }));
+  await screen.findByText('Rejected');
+  expect(api.post).toHaveBeenCalledTimes(1);
+  expect(api.post).toHaveBeenCalledWith('/insights/definitions/Generated KPI/1/review', { decision: 'rejected' }, expect.anything());
+  expect(screen.getByRole('button', { name: 'Publish Generated KPI' })).toHaveProperty('disabled', true);
+  expect(screen.getByRole('checkbox')).toHaveProperty('disabled', true);
+});
+it('keeps a saved revision after review fails so retry does not create another revision', async () => {
+  vi.mocked(api.post).mockImplementation(async (url, body: any) => {
+    if (url === '/insights/definitions') return { data: { ...body, revision: 4, status: 'proposed' } };
+    throw new Error('Review unavailable');
+  });
+  const widget = draft('Retry KPI', 'kpi');
+  widget.definition = { ...widget.definition, status: 'proposed', reviewer: undefined };
+  render(<GeneratedWidgetSections widgets={[widget]} onPublished={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Approve Retry KPI' }));
+  await screen.findByRole('alert');
+  fireEvent.click(screen.getByRole('button', { name: 'Approve Retry KPI' }));
+  await waitFor(() => expect(api.post).toHaveBeenCalledTimes(3));
+  expect(vi.mocked(api.post).mock.calls.filter(([url]) => url === '/insights/definitions')).toHaveLength(1);
+  expect(api.post).toHaveBeenLastCalledWith('/insights/definitions/Retry KPI/4/review', { decision: 'approved' }, expect.anything());
+});
 const folder = { id: 'f'.repeat(32), kind: 'folder', name: 'Reports', permission: 'owner' };
 const target = { id: 'a'.repeat(32), kind: 'dashboard', name: 'Sales', parent_id: folder.id, revision: 4, permission: 'owner', pages: [{ id: 'b'.repeat(32), name: 'Overview', widgets: [] }] };
 function setupDestination() {
   vi.mocked(api.get).mockImplementation(async url => ({ data: url === '/content/tree' ? [folder, target] : target }));
 }
+it('accepts system-approved source references while keeping unreviewed widgets blocked', () => {
+  const approved = { ...draft('Published KPI', 'kpi').definition, reviewer: 'system' };
+  expect(publishable(approved)).toBe(true);
+  expect(publishable({ ...approved, status: 'proposed' })).toBe(false);
+  expect(publishable({ ...approved, reviewer: undefined })).toBe(false);
+  expect(publishable({ ...approved, version: undefined })).toBe(false);
+});
+it('clearly lists included destinations after the picker resets and disables publishing when removed', async () => {
+  setupDestination();
+  render(<PublishToFiles items={[draft('KPI', 'kpi').definition]} close={vi.fn()} navigate={vi.fn()} />);
+  const publish = screen.getByRole('button', { name: 'Publish selected (1)' });
+  expect(publish).toHaveProperty('disabled', true);
+  await screen.findByRole('option', { name: 'My Files / Reports' });
+  fireEvent.change(screen.getByLabelText('Folder'), { target: { value: folder.id } });
+  fireEvent.change(screen.getByLabelText('Dashboard'), { target: { value: target.id } });
+  await screen.findByRole('option', { name: 'Overview' });
+  expect(screen.getByRole('region', { name: 'Selected destinations' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Include this destination and choose another' }));
+  expect(screen.getByLabelText('Dashboard')).toHaveProperty('value', '');
+  expect(publish).toHaveProperty('disabled', false);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove My Files / Reports / Sales' }));
+  expect(publish).toHaveProperty('disabled', true);
+  expect(api.post).not.toHaveBeenCalled();
+});
+it('explains approval requirements before submission instead of allowing a rejected publish attempt', async () => {
+  setupDestination();
+  render(<PublishToFiles items={[{ ...draft('Draft KPI', 'kpi').definition, status: 'proposed' }]} close={vi.fn()} navigate={vi.fn()} />);
+  await screen.findByRole('option', { name: 'My Files / Reports' });
+  fireEvent.change(screen.getByLabelText('Folder'), { target: { value: folder.id } });
+  fireEvent.change(screen.getByLabelText('Dashboard'), { target: { value: target.id } });
+  await screen.findByRole('option', { name: 'Overview' });
+  expect(screen.getByText(/need approval or a saved source version/)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Publish selected (1)' })).toHaveProperty('disabled', true);
+  expect(api.post).not.toHaveBeenCalled();
+});
 it('groups previews and requires a confirmed destination with the original dataset reference', async () => {
   setupDestination();
   vi.mocked(api.post).mockResolvedValue({ data: { placements_written: 1 } });
@@ -135,7 +225,25 @@ it('shows saved widget cards in the Widgets library with creation inputs hidden'
   expect(await screen.findByRole('heading', { name: 'Saved KPI' })).toBeTruthy();
   expect(screen.getByRole('button', { name: /Preview Live/ })).toBeTruthy();
   expect(screen.getByRole('button', { name: /Edit Query/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Approved Saved KPI' })).toHaveProperty('disabled', true);
   expect(screen.queryByRole('button', { name: /Execute Analysis/ })).toBeNull();
+});
+it('offers Approve on each system-recommended library card and confirms through the review endpoint', async () => {
+  const item = { ...draft('Suggested KPI', 'kpi').definition, reviewer: 'system' };
+  vi.mocked(api.get).mockImplementation(async url => ({ data:
+    url === '/datasets' ? [{ id: 'projects', name: 'Projects', currentVersion: 3, isActive: true, columns: [] }] :
+    url.includes('semantics') ? [{ revision: 2, status: 'approved', fields: [], relationships: [], derived_metrics: [] }] :
+    url.includes('/recommendations') ? [item] : url.includes('/insights/dashboard') ? { items: [] } : [] }));
+  vi.mocked(api.post).mockResolvedValue({ data: { ...item, reviewer: 'alice' } });
+  render(<GraphStudio widgetsOnly onNavigate={vi.fn()} />);
+  const approve = await screen.findByRole('button', { name: 'Approve Suggested KPI' });
+  expect(approve).toHaveProperty('disabled', false);
+  fireEvent.click(approve);
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/insights/definitions/Suggested KPI/1/review', { decision: 'approved' }, expect.objectContaining({ headers: {
+    'X-Dataset-Id': 'projects', 'X-Dataset-Version': '3', 'X-Semantic-Revision': '2',
+  } })));
+  await waitFor(() => expect(approve).toHaveProperty('disabled', true));
+  expect(screen.getByRole('button', { name: 'Approved Suggested KPI' })).toBe(approve);
 });
 it('places a manually created widget in KPI Generation without opening the library', async () => {
   setupStudio();

@@ -188,6 +188,19 @@ def dataset_data(
     )
 
 
+@router.get("/{dataset_id}/preview")
+def dataset_preview(
+    dataset_id: str,
+    page: int = Query(1, ge=1),
+    pageSize: int = Query(25, ge=1, le=500),
+    sortField: str | None = None,
+    sortDir: Literal["asc", "desc"] = "asc",
+    search: str = Query("", max_length=500),
+    version: int | None = Query(None, ge=1),
+):
+    return dataset_service.preview(dataset_id, page, pageSize, sortField, sortDir, search, version)
+
+
 @router.put("/{dataset_id}/rows")
 def update_rows(
     dataset_id: str, payload: RowsPayload, request: Request, sync: bool = Query(False)
@@ -292,15 +305,22 @@ def dataset_versions(dataset_id: str):
 @router.get("/{dataset_id}/status")
 def dataset_status(dataset_id: str, version: int | None = Query(None, ge=1)):
     entry = dataset_service._entry(dataset_service._catalog(), dataset_id)
-    snap = dataset_service._snapshot(entry, version)
+    number = version or entry["currentVersion"]
+    record = next((item for item in entry.get("versions", []) if item["version"] == number), None)
+    if record is None:
+        raise HTTPException(404, "Dataset version not found.")
+    # Status polling needs only the small manifest, not thousands of vectors.
+    snap = dataset_service._version_meta(entry, record) or dataset_service._snapshot(entry, number, include_index=False)
     return {
         "datasetId": dataset_id,
         "name": entry["name"],
         "currentVersion": version or entry["currentVersion"],
         "embeddingStatus": snap.get("embeddingStatus", "Pending"),
         "embeddingCount": snap.get("embeddingCount", 0),
-        "hanaSyncStatus": snap.get("hanaSyncStatus", "Pending"),
-        "rowCount": len(snap.get("rows", [])),
+        "embeddingError": snap.get("embeddingError"),
+        "embeddingTotal": snap.get("embeddingTotal") or snap.get("rowCount", len(snap.get("chunks", []))),
+        "hanaSyncStatus": dataset_service._vector_sync_status(snap, default="Pending"),
+        "rowCount": snap.get("rowCount", len(snap.get("rows", []))),
     }
 
 
@@ -310,10 +330,15 @@ def dataset_agent_activity(dataset_id: str, version: int | None = Query(None, ge
     entry = dataset_service._entry(cat, dataset_id)
     require_dataset_access(entry)
     v = version or entry.get("currentVersion", 1)
-    snap = dataset_service._snapshot(entry, v)
+    record = next((item for item in entry.get("versions", []) if item["version"] == v), None)
+    if record is None:
+        raise HTTPException(404, "Dataset version not found.")
+    snap = dataset_service._version_meta(entry, record)
+    if snap is None:
+        snap = dataset_service._snapshot(entry, v, include_index=False)
 
     rows = snap.get("rows", [])
-    row_count = len(rows)
+    row_count = snap.get("rowCount", len(rows))
 
     # 1. Preprocessing audit from upload provenance or recalculate
     audit = entry.get("preprocessingAudit") or snap.get("preprocessingAudit")

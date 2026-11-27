@@ -321,12 +321,12 @@ describe('Platform correctness and navigation', () => {
     expect(await screen.findByRole('button', { name: /Hide Preview/i })).toBeTruthy();
 
     // Approve spinner
-    fireEvent.click(screen.getByRole('button', { name: /Approve$/i }));
-    const approvingBtn = await screen.findByRole('button', { name: /Approving\.\.\./i });
+    fireEvent.click(screen.getByRole('button', { name: /^Approve /i }));
+    const approvingBtn = (await screen.findByText('Approving...')).closest('button')!;
     expect(approvingBtn.querySelector('.animate-spin')).toBeTruthy();
     resolveReview({ data: { ...proposedItem, status: 'approved' } });
     await vi.waitFor(() => {
-      expect(screen.queryByRole('button', { name: /Approving\.\.\./i })).toBeNull();
+      expect(screen.queryByText('Approving...')).toBeNull();
     });
     expect(screen.getByText('Approved (Rev 1)')).toBeTruthy();
   });
@@ -382,9 +382,9 @@ describe('Platform correctness and navigation', () => {
     expect(screen.getByText('Metric Beta')).toBeTruthy();
 
     // Click Approve on first card, then immediately click Reject on second card while first is still pending
-    const approveButtons = screen.getAllByRole('button', { name: /Approve$/i });
+    const approveButtons = screen.getAllByRole('button', { name: /^Approve /i });
     fireEvent.click(approveButtons[0]);
-    expect(await screen.findByRole('button', { name: /Approving\.\.\./i })).toBeTruthy();
+    expect(await screen.findByText('Approving...')).toBeTruthy();
 
     const rejectButtons = screen.getAllByRole('button', { name: /Reject$/i });
     // Second card's Reject button must still be enabled
@@ -393,18 +393,18 @@ describe('Platform correctness and navigation', () => {
 
     // Both spinners must be visible concurrently
     expect(await screen.findByRole('button', { name: /Rejecting\.\.\./i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Approving\.\.\./i })).toBeTruthy();
+    expect(screen.getByText('Approving...')).toBeTruthy();
 
     // Resolve out-of-order (B finishes before A)
     resolvers.b({ data: { ...itemB, status: 'rejected' } });
     await vi.waitFor(() => {
       expect(screen.queryByRole('button', { name: /Rejecting\.\.\./i })).toBeNull();
     });
-    expect(screen.getByRole('button', { name: /Approving\.\.\./i })).toBeTruthy();
+    expect(screen.getByText('Approving...')).toBeTruthy();
 
     resolvers.a({ data: { ...itemA, status: 'approved' } });
     await vi.waitFor(() => {
-      expect(screen.queryByRole('button', { name: /Approving\.\.\./i })).toBeNull();
+      expect(screen.queryByText('Approving...')).toBeNull();
     });
 
     expect(screen.getByText('Approved (Rev 1)')).toBeTruthy();

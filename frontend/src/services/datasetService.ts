@@ -3,8 +3,16 @@ import api from './api';
 import { DatasetItem, DatasetRow, DatasetDataResult } from '../types/dataset';
 
 const DATASETS_CACHE_TTL_MS = 15_000;
-let datasetsCache: { data: DatasetItem[]; timestamp: number } | null = null;
-let inFlightDatasetsRequest: Promise<DatasetItem[]> | null = null;
+let datasetsCache: { scope: string; data: DatasetItem[]; timestamp: number } | null = null;
+let inFlightDatasetsRequest: { scope: string; promise: Promise<DatasetItem[]> } | null = null;
+let datasetsGeneration = 0;
+
+function datasetAccountScope(): string {
+  try {
+    const user = JSON.parse(sessionStorage.getItem('auth_user') || localStorage.getItem('auth_user') || '{}');
+    return JSON.stringify([user.tenant_id, user.workspace_id, user.user_id || user.email, user.role, user.roles]);
+  } catch { return 'signed-out'; }
+}
 
 const isTestEnv = (): boolean =>
   typeof import.meta !== 'undefined' &&
@@ -12,6 +20,8 @@ const isTestEnv = (): boolean =>
 
 export function invalidateDatasetsCache(): void {
   datasetsCache = null;
+  inFlightDatasetsRequest = null;
+  datasetsGeneration += 1;
 }
 
 export async function getDatasets(syncTables = false, forceRefresh = false): Promise<DatasetItem[]> {
@@ -19,26 +29,29 @@ export async function getDatasets(syncTables = false, forceRefresh = false): Pro
     invalidateDatasetsCache();
     return (await api.get<DatasetItem[]>('/datasets', { params: { sync_tables: true } })).data;
   }
+  if (forceRefresh) invalidateDatasetsCache();
+  const scope = datasetAccountScope();
+  const generation = datasetsGeneration;
   const useTtlCache = !isTestEnv() && !forceRefresh;
-  if (useTtlCache && datasetsCache && Date.now() - datasetsCache.timestamp < DATASETS_CACHE_TTL_MS) {
+  if (useTtlCache && datasetsCache?.scope === scope && Date.now() - datasetsCache.timestamp < DATASETS_CACHE_TTL_MS) {
     return datasetsCache.data;
   }
-  if (!forceRefresh && inFlightDatasetsRequest) {
-    return inFlightDatasetsRequest;
+  if (!forceRefresh && inFlightDatasetsRequest?.scope === scope) {
+    return inFlightDatasetsRequest.promise;
   }
-  const req = api.get<DatasetItem[]>('/datasets')
+  const req = api.get<DatasetItem[]>('/datasets', { timeout: 20_000 })
     .then(res => {
-      if (!isTestEnv()) {
-        datasetsCache = { data: res.data, timestamp: Date.now() };
+      if (!isTestEnv() && generation === datasetsGeneration && scope === datasetAccountScope()) {
+        datasetsCache = { scope, data: res.data, timestamp: Date.now() };
       }
       return res.data;
     })
     .finally(() => {
-      if (inFlightDatasetsRequest === req) {
+      if (inFlightDatasetsRequest?.promise === req) {
         inFlightDatasetsRequest = null;
       }
     });
-  inFlightDatasetsRequest = req;
+  inFlightDatasetsRequest = { scope, promise: req };
   return req;
 }
 
@@ -60,6 +73,14 @@ export async function getDatasetData(datasetId: string, page = 1, pageSize = 10,
     ...(signal ? { signal } : {}),
   })).data;
   return result;
+}
+
+export async function getDatasetPreview(datasetId: string, page = 1, pageSize = 10,
+  sortField?: string, sortDir: 'asc' | 'desc' = 'asc', searchQuery?: string, version?: number, signal?: AbortSignal): Promise<DatasetDataResult> {
+  return (await api.get<DatasetDataResult>(`/datasets/${datasetId}/preview`, {
+    params: { page, pageSize, sortField, sortDir, search: searchQuery, ...(version ? { version } : {}) },
+    signal, timeout: 30_000,
+  })).data;
 }
 
 export async function updateDatasetRows(datasetId: string, rows: DatasetRow[]) {
@@ -98,6 +119,7 @@ export async function deleteDataset(datasetId: string) {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('dashboard_updated'));
     window.dispatchEvent(new Event('dataset-context-changed'));
+    window.dispatchEvent(new CustomEvent('content-files-changed'));
   }
   return res;
 }
@@ -123,6 +145,8 @@ export async function getDatasetStatus(datasetId: string, version?: number): Pro
   currentVersion: number;
   embeddingStatus: DatasetItem['embeddingStatus'];
   embeddingCount: number;
+  embeddingTotal?: number;
+  embeddingError?: string | null;
   hanaSyncStatus: DatasetItem['hanaSyncStatus'];
   rowCount: number;
 }> {

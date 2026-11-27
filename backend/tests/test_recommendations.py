@@ -533,13 +533,34 @@ class RecommendationQualityAndDeduplicationTests(unittest.TestCase):
         self.assertNotIn(
             "ORD-1006", mock_llm.call_args_list[0].args[0]
         )  # strictly first 5 rows
-        # Must NOT pad with hardcoded fallback items when LLM succeeded
-        self.assertEqual(len(recs), 2)
+        # Keep valid AI views and fill remaining slots with data-driven views.
+        self.assertEqual(len(recs), 6)
         titles = [r["title"] for r in recs]
-        self.assertEqual(titles, ["Average Margin %", "Margin % by Sales Channel"])
+        self.assertIn("Average Margin %", titles)
+        self.assertIn("Margin % by Sales Channel", titles)
         existing_concepts = {concept_signature(e) for e in existing}
         for r in recs:
             self.assertNotIn(concept_signature(r), existing_concepts)
+
+    def test_default_budget_produces_more_than_six_distinct_valid_views(self):
+        df, model = self._sales_dataframe_and_model()
+        with patch.dict("os.environ", {"PLATFORM_RECOMMENDATION_LIMIT": "18"}):
+            recs = self.recommender.recommend(df, model, fast_only=True)
+        self.assertGreater(len(recs), 6)
+        self.assertLessEqual(len(recs), 18)
+        self.assertEqual(len({concept_signature(rec) for rec in recs}), len(recs))
+        self.assertTrue(any(rec["kind"] == "kpi" for rec in recs))
+        self.assertTrue(any(rec["kind"] != "kpi" for rec in recs))
+        self.assertTrue(all(rec["preview_result"]["success"] for rec in recs))
+
+    def test_user_requested_recommendations_remain_proposed_until_review(self):
+        df, model = self._sales_dataframe_and_model()
+        self.store.put(self.registry.namespace(self.entry, 1), "1", model.model_dump(mode="json"))
+        recs = self.recommender.recommend(df, model, max_items=3, fast_only=True)
+        with patch.dict("os.environ", {"PLATFORM_AUTO_APPROVE_SEMANTICS": "true"}):
+            saved = self.registry.persist_recommendations(self.entry, 1, 1, recs, model=model, require_review=True)
+        self.assertEqual(len(saved), len(recs))
+        self.assertTrue(all(item.status == "proposed" and item.reviewer is None for item in saved))
 
 
 if __name__ == "__main__":

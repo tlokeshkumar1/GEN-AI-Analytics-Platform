@@ -360,9 +360,9 @@ class SemanticRegistry:
         return [AnalyticsItem.model_validate(val) for val in rows]
 
     def persist_recommendations(
-        self, entry, version, revision, recommendations, model=None
+        self, entry, version, revision, recommendations, model=None, require_review=False
     ):
-        """Persist non-duplicate recommendation dicts as directly approved AnalyticsItems at revision 1."""
+        """Persist unique recommendations; user-facing generation can require explicit review."""
         from api.platform.agent_chart_recommender import (
             concept_signature,
             extract_query_dependencies,
@@ -380,7 +380,8 @@ class SemanticRegistry:
 
         saved: list[AnalyticsItem] = []
         auto_approve = (
-            os.getenv("PLATFORM_AUTO_APPROVE_SEMANTICS", "true").lower() == "true"
+            not require_review
+            and os.getenv("PLATFORM_AUTO_APPROVE_SEMANTICS", "true").lower() == "true"
         )
         for rec in recommendations:
             query = QueryPlan.model_validate(rec["query_plan"])
@@ -440,12 +441,11 @@ class SemanticRegistry:
             df,
             model,
             existing_items=existing,
-            max_items=6,
             dataset_name=dataset_name,
             fast_only=fast_only,
         )
         items = self.persist_recommendations(
-            entry, version, revision, recommendations, model=model
+            entry, version, revision, recommendations, model=model, require_review=True
         )
         result = AnalyticsPlan(
             dataset_id=entry["id"],

@@ -45,6 +45,9 @@ class DocumentFixture:
     def list(self, ns):
         return [dict(id=k, **deepcopy(r)) for (n, k), r in self.rows.items() if n == ns]
 
+    def get_many(self, ns, keys):
+        return {key: self.get(ns, key) for key in keys if (ns, key) in self.rows}
+
     def delete(self, ns, key):
         self.rows.pop((ns, key), None)
 
@@ -340,7 +343,7 @@ class FilesTests(TestCase):
         catalog = {"datasets": {}}
         service._catalog.return_value = catalog
         service._entry.side_effect = DatasetService._entry
-        service._snapshot.side_effect = lambda entry, version: {
+        service._snapshot.side_effect = lambda entry, version, *, include_index=True: {
             "columns": [{"name": "units", "type": "number"}],
             "rows": [{"units": entry["total"] * version}],
         }
@@ -438,6 +441,43 @@ class FilesTests(TestCase):
             receipt = publish(self.owner, doc["id"], req)
             self.assertEqual(receipt, publish(self.owner, doc["id"], req))
             self.assertEqual(receipt["placements_written"], 2)
+            # Reindexing changes the manifest, not the published rows/schema.
+            import hashlib
+            import json
+            from api.platform.content_publication import clear_calculation_cache
+            clear_calculation_cache()
+            self.addCleanup(clear_calculation_cache)
+            original_key = "objects/" + "a" * 64
+            original_snapshot = service._snapshot(entry, 1)
+            original_model = self.store.get(semantic_registry.namespace(entry, 1), "1")["value"]
+            original_item = self.store.get(ns, "count:1")["value"]
+            old_digest = hashlib.sha256(json.dumps([original_model, original_item, original_key], sort_keys=True).encode()).hexdigest()
+            service.repository.objects.keys.return_value = [original_key]
+            service.repository.snapshot.return_value = original_snapshot
+            entry["versions"] = [{"version": 1, "snapshotKey": "objects/" + "b" * 64}]
+            recovered = calculate(self.owner, refs[-1], expected_digest=old_digest)
+            self.assertEqual(recovered["result"]["summary"]["value"], 47)
+            stable_digest = recovered["digest"]
+            self.assertTrue(stable_digest.startswith("data-v2:"))
+            from api.platform.content_publication import CalculationBatch
+            batch = CalculationBatch([refs[-1], refs[-1]])
+            with patch.object(self.store, "get_many", wraps=self.store.get_many) as bulk:
+                for _ in range(2):
+                    calculate(self.owner, refs[-1], expected_digest=stable_digest, batch=batch)
+                bulk.assert_called_once_with(ns, ["count:1"])
+            entry["versions"][0]["snapshotKey"] = "objects/" + "c" * 64
+            self.assertEqual(calculate(self.owner, refs[-1], expected_digest=stable_digest)["digest"], stable_digest)
+            entry["total"] = 99
+            for pin in (old_digest, stable_digest):
+                with self.assertRaises(HTTPException) as changed:
+                    calculate(self.owner, refs[-1], expected_digest=pin)
+                self.assertEqual(changed.exception.status_code, 409)
+            entry["total"] = 47
+            # A changed definition cannot pass the original legacy proof.
+            self.store.put(ns, "count:1", dict(original_item, title="Changed"), self.store.get(ns, "count:1")["revision"])
+            with self.assertRaises(HTTPException):
+                calculate(self.owner, refs[-1], expected_digest=old_digest)
+            self.store.put(ns, "count:1", original_item, self.store.get(ns, "count:1")["revision"])
             from api.models.content import FilterEdit
             from api.platform.content_dashboard import edit_filters, refresh
 

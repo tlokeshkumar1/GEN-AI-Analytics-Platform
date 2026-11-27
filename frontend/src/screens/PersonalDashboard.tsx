@@ -45,13 +45,6 @@ export function PersonalDashboard({ id, navigate }: { id: string; navigate: (p: 
   const executionSignature = useRef('');
   const forceRefresh = useRef(false);
   useEffect(() => {
-    const abort = new AbortController();
-    api.post('/content/files/' + id + '/opened', null, { signal: abort.signal }).catch((err) => {
-      if (!abort.signal.aborted) setError(fileError(err));
-    });
-    return () => abort.abort();
-  }, [id]);
-  useEffect(() => {
     const reload = (event: Event) => {
       const detail = (event as CustomEvent).detail;
       preserveResults.current = detail?.dashboardId === id && detail?.layoutOnly === true;

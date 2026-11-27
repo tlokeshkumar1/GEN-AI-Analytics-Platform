@@ -2,12 +2,13 @@ import contextvars
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
+from copy import deepcopy
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
 
-from api.models.execution_context import current_selection
+from api.models.execution_context import current_identity, current_selection, require_dataset_access
 from api.platform.semantic import semantic_registry, now
 from api.platform.contracts import AnalyticsItem
 from api.platform.agent_chart_recommender import chart_recommender_agent
@@ -22,6 +23,8 @@ router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 _DASHBOARD_CACHE: Dict[Any, Dict[str, Any]] = {}
 _DASHBOARD_CACHE_LOCK = threading.Lock()
 _DASHBOARD_CACHE_TTL = 120.0  # seconds
+_DASHBOARD_IN_FLIGHT = {}
+_DASHBOARD_WIDGET_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="executive-widget")
 
 
 def clear_dashboard_cache():
@@ -220,8 +223,35 @@ def _publish_recommended_charts(req: PublishRecommendedRequest):
 
 @router.get("")
 def get_dashboard(refresh: bool = False):
-    if refresh:
-        clear_dashboard_cache()
+    identity = current_identity.get() or {}
+    selection = current_selection.get()
+    scope = selection.context.model_dump_json() if selection else None
+    key = (identity.get("tenant_id"), identity.get("workspace_id"), identity.get("user_id"),
+           identity.get("role"), tuple(sorted(identity.get("roles", []))), scope, refresh)
+    with _DASHBOARD_CACHE_LOCK:
+        pending = _DASHBOARD_IN_FLIGHT.get(key)
+        leader = pending is None
+        if leader:
+            pending = Future()
+            _DASHBOARD_IN_FLIGHT[key] = pending
+    if not leader:
+        try:
+            return deepcopy(pending.result(timeout=90))
+        except FutureTimeout:
+            raise HTTPException(503, "Dashboard loading timed out. Please retry.") from None
+    try:
+        result = _get_dashboard(refresh)
+        pending.set_result(deepcopy(result))
+        return result
+    except BaseException as exc:
+        pending.set_exception(exc)
+        raise
+    finally:
+        with _DASHBOARD_CACHE_LOCK:
+            _DASHBOARD_IN_FLIGHT.pop(key, None)
+
+
+def _get_dashboard(refresh=False):
 
     catalog = dataset_service._catalog()
     datasets_map = catalog.get("datasets", {})
@@ -247,7 +277,7 @@ def get_dashboard(refresh: bool = False):
 
             ds_version = active_ds.get("currentVersion") or 1
             try:
-                ds_snapshot = dataset_service._snapshot(active_ds, ds_version)
+                ds_snapshot = dataset_service.query_snapshot(active_ds, ds_version)
                 ds_models = semantic_registry.list(active_ds, ds_version, for_chat=True)
                 approved_models = [
                     m for m in ds_models if m.get("status") == "approved"
@@ -282,6 +312,7 @@ def get_dashboard(refresh: bool = False):
         }
 
     context = selection.context
+    require_dataset_access(selection.entry)
 
     # Collect published dashboards across all datasets in the workspace so uploading a new file
     # never removes KPIs and charts published from earlier datasets.
@@ -295,6 +326,7 @@ def get_dashboard(refresh: bool = False):
             continue
         ds_version = ds_entry.get("currentVersion") or 1
         try:
+            require_dataset_access(ds_entry)
             ds_models = semantic_registry.list(ds_entry, ds_version, for_chat=True)
             approved_models = [m for m in ds_models if m.get("status") == "approved"]
             ds_sem_rev = max(
@@ -317,6 +349,8 @@ def get_dashboard(refresh: bool = False):
             logger.warning(f"Skipping dashboard lookup for dataset {ds_id}: {exc}")
 
     cache_key = (
+        (current_identity.get() or {}).get("tenant_id"),
+        context.user_id,
         context.workspace_id,
         context.dataset_id,
         context.version,
@@ -330,7 +364,7 @@ def get_dashboard(refresh: bool = False):
             if cache_key in _DASHBOARD_CACHE:
                 cached_entry = _DASHBOARD_CACHE[cache_key]
                 if now - cached_entry.get("timestamp", 0) < _DASHBOARD_CACHE_TTL:
-                    return cached_entry["data"]
+                    return deepcopy(cached_entry["data"])
 
     if dataset_publications:
         from api.models.execution_context import DatasetSelection, ExecutionContext
@@ -351,7 +385,7 @@ def get_dashboard(refresh: bool = False):
             definitions = semantic_registry.items(
                 ds_entry, ds_version, ds_sem_rev, allow_chat_member=True
             )
-            ds_snapshot = dataset_service._snapshot(ds_entry, ds_version)
+            ds_snapshot = dataset_service.query_snapshot(ds_entry, ds_version)
             ds_context = ExecutionContext(
                 workspace_id=context.workspace_id,
                 dataset_id=ds_id,
@@ -399,12 +433,11 @@ def get_dashboard(refresh: bool = False):
 
         widgets = []
         if tasks:
-            with ThreadPoolExecutor(max_workers=min(16, len(tasks))) as executor:
-                futures = [
-                    executor.submit(contextvars.copy_context().run, _execute_widget, t)
-                    for t in tasks
-                ]
-                widgets = [w for w in (f.result() for f in futures) if w is not None]
+            futures = [
+                _DASHBOARD_WIDGET_POOL.submit(contextvars.copy_context().run, _execute_widget, t)
+                for t in tasks
+            ]
+            widgets = [w for w in (f.result() for f in futures) if w is not None]
 
         active_pub_title = next(
             (
@@ -422,9 +455,11 @@ def get_dashboard(refresh: bool = False):
         }
         with _DASHBOARD_CACHE_LOCK:
             _DASHBOARD_CACHE[cache_key] = {
-                "data": response_data,
+                "data": deepcopy(response_data),
                 "timestamp": time.time(),
             }
+            while len(_DASHBOARD_CACHE) > 128:
+                _DASHBOARD_CACHE.pop(next(iter(_DASHBOARD_CACHE)))
         return response_data
 
     # Ensure model exists for auto-recommendation fallback
@@ -438,8 +473,20 @@ def get_dashboard(refresh: bool = False):
     # Fallback auto-recommendations if unpublished: generate from model so dashboard is never empty
     if model:
         try:
-            snapshot = dataset_service._snapshot(selection.entry, context.version)
-            df = dataset_service._frame(snapshot["rows"], snapshot["columns"])
+            snapshot = dataset_service.query_snapshot(selection.entry, context.version)
+            if snapshot.get("lazy_snapshot"):
+                from api.database.hana_client import hana_client
+                from api.platform.data_resolution import current_table, quote_identifier
+
+                table = current_table(selection.entry, context.version)
+                # The semantic model supplies field roles; five sample rows only
+                # guide chart choices. Widget totals still execute over all rows in SQL.
+                rows = hana_client.execute_query(f"SELECT * FROM {quote_identifier(table)} LIMIT 5", native_types=True)
+                logical = {c["name"].casefold(): c["name"] for c in snapshot["columns"]}
+                rows = [{logical.get(k.casefold(), k): v for k, v in row.items()} for row in rows]
+                df = dataset_service._frame(rows, snapshot["columns"])
+            else:
+                df = dataset_service._frame(snapshot["rows"], snapshot["columns"])
             recs = chart_recommender_agent.recommend(df, model, fast_only=True)
 
             default_recs = [r for r in recs if r.get("selected_by_default")]
@@ -470,16 +517,13 @@ def get_dashboard(refresh: bool = False):
 
             auto_widgets = []
             if default_recs:
-                with ThreadPoolExecutor(
-                    max_workers=min(8, len(default_recs))
-                ) as executor:
-                    futures = [
-                        executor.submit(
-                            contextvars.copy_context().run, _execute_auto_widget, r
-                        )
-                        for r in default_recs
-                    ]
-                    auto_widgets = [f.result() for f in futures]
+                futures = [
+                    _DASHBOARD_WIDGET_POOL.submit(
+                        contextvars.copy_context().run, _execute_auto_widget, r
+                    )
+                    for r in default_recs
+                ]
+                auto_widgets = [f.result() for f in futures]
 
             if auto_widgets:
                 response_data = {
@@ -490,9 +534,11 @@ def get_dashboard(refresh: bool = False):
                 }
                 with _DASHBOARD_CACHE_LOCK:
                     _DASHBOARD_CACHE[cache_key] = {
-                        "data": response_data,
+                        "data": deepcopy(response_data),
                         "timestamp": time.time(),
                     }
+                    while len(_DASHBOARD_CACHE) > 128:
+                        _DASHBOARD_CACHE.pop(next(iter(_DASHBOARD_CACHE)))
                 return response_data
         except Exception as exc:
             logger.warning(f"Auto-dashboard recommendation error: {exc}")

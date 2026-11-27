@@ -133,6 +133,37 @@ class MetadataStore:
                 {"id": row[0], **self._decode(row[1:])} for row in cursor.fetchall()
             ]
 
+    def keys(self, namespace):
+        """Read identifiers without transferring document or vector payloads."""
+        with self.transaction() as cursor:
+            cursor.execute(
+                "SELECT DOCUMENT_ID FROM PLATFORM_DOCUMENTS WHERE NAMESPACE=? ORDER BY DOCUMENT_ID",
+                (namespace,),
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def personal_file_namespaces(self):
+        """Find owner indexes without loading dashboard histories or payloads."""
+        with self.transaction() as cursor:
+            cursor.execute(
+                "SELECT NAMESPACE FROM PLATFORM_DOCUMENTS "
+                "WHERE DOCUMENT_ID = ? AND NAMESPACE LIKE ?",
+                ("index", "files-v1:%"),
+            )
+            return [row[0] for row in cursor.fetchall() if row[0].count(":") == 1]
+
+    def get_many(self, namespace, keys):
+        keys = list(dict.fromkeys(keys))
+        if not keys:
+            return {}
+        with self.transaction() as cursor:
+            placeholders = ",".join("?" for _ in keys)
+            cursor.execute(
+                f"SELECT DOCUMENT_ID, REVISION, PAYLOAD FROM PLATFORM_DOCUMENTS WHERE NAMESPACE=? AND DOCUMENT_ID IN ({placeholders})",
+                (namespace, *keys),
+            )
+            return {row[0]: self._decode(row[1:]) for row in cursor.fetchall()}
+
     def put(self, namespace, key, value, expected_revision=0):
         payload = json.dumps(value, ensure_ascii=False, allow_nan=False, default=str)
         with self.transaction() as cursor:

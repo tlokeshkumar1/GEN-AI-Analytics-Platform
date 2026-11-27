@@ -1,4 +1,5 @@
 import api from './api';
+import type { RecommendedChartItem } from '../components/RecommendationReview';
 import { invalidateDatasetsCache } from './datasetService';
 import { contextHeaders } from './executionContext';
 import { DatasetItem } from '../types/dataset';
@@ -48,16 +49,7 @@ export interface UploadResponse {
   };
   domain?: string;
   semantic_model?: Record<string, any>;
-  recommendations?: Array<{
-    id: string;
-    title: string;
-    kind: string;
-    query_plan: Record<string, any>;
-    explanation: string;
-    selected_by_default: boolean;
-    preview_value?: string;
-    preview_rows?: Array<Record<string, any>>;
-  }>;
+  recommendations?: RecommendedChartItem[];
 }
 
 export const getDatabaseTables = async (): Promise<{ tables: CloudTableInfo[] }> => {

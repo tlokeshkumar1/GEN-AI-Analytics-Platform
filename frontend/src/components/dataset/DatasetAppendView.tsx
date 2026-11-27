@@ -14,7 +14,7 @@ import {
 import { DatasetItem, DatasetRow, AppendValidationResult } from '../../types/dataset';
 import { appendDatasetData, previewAppendFile } from '../../services/datasetService';
 import { getApiErrorMessage } from '../../services/api';
-import { DatasetStatusBadge } from './DatasetStatusBadge';
+import { DatasetIndexStatus } from './DatasetStatusBadge';
 
 interface DatasetAppendViewProps {
   dataset: DatasetItem;
@@ -135,17 +135,7 @@ export const DatasetAppendView: React.FC<DatasetAppendViewProps> = ({
             {dataset.name} ({dataset.rowCount.toLocaleString()} current rows)
           </span>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <DatasetStatusBadge
-            type="embedding"
-            status={dataset.embeddingStatus}
-            chunkCount={dataset.embeddingCount}
-          />
-          <DatasetStatusBadge
-            type="hana"
-            status={dataset.hanaSyncStatus}
-          />
-        </div>
+        <DatasetIndexStatus dataset={dataset} />
       </div>
 
       {/* Mode Switcher Header */}

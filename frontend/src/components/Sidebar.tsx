@@ -384,7 +384,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Scrollable Navigation Body */}
         <div className="flex-1 overflow-y-auto min-h-0 py-2 px-2 space-y-1">
           <nav className="flex flex-col gap-1">
-            {/* 1) AI Dashboards Section */}
+            {/* 1) My Files Section */}
+            {effectiveCollapsed ? renderNavItem({id:'my-files',label:'My Files',badge:null,icon:'folder'}) :
+              <ContentFiles key={user?.email} userKey={user?.email || ''} navigate={(path) => { onNavigate(path); onClose(); }} active={activePath}/>}
+
+            {/* 2) AI Dashboards Section */}
             {effectiveCollapsed ? (
               // Collapsed mode: direct icons with tooltips
               <div className="space-y-0.5">
@@ -398,9 +402,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </SidebarSection>
             )}
 
-            {effectiveCollapsed ? renderNavItem({id:'my-files',label:'My Files',badge:null,icon:'folder'}) :
-              <ContentFiles key={user?.email} userKey={user?.email || ''} navigate={(path) => { onNavigate(path); onClose(); }} active={activePath}/>}
-            {/* 2) Administration Section (Admin / Admin+User only) */}
+            {/* 3) Administration Section (Admin / Admin+User only) */}
             {isAdmin && (
               <>
                 {effectiveCollapsed ? (
@@ -416,7 +418,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </>
             )}
 
-            {/* 3) Other Services Section */}
+            {/* 4) Other Services Section */}
             <div className="pt-2 my-1 border-t border-[var(--color-border)] flex flex-col gap-0.5">
               {!effectiveCollapsed && (
                 <div className="px-2 py-1 mb-0.5">

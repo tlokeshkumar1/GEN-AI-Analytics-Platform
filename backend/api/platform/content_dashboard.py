@@ -82,6 +82,10 @@ def restore_revision(resource_id: ResourceId, previous: int, body: Revision):
         if not row or doc["kind"] != "dashboard":
             raise HTTPException(404, "Dashboard revision unavailable.")
         old = row["value"]["document"]
+        # History is immutable; reject a restore whose sources were deleted.
+        for page in old.get("pages", []):
+            for widget in page.get("widgets", []):
+                calculate(workspace, widget["source"], expected_digest=widget["digest"])
         for key in ("name", "description", "pages", "publication_status"):
             doc[key] = old[key]
         doc["filter_groups"] = old.get("filter_groups", [])
@@ -115,7 +119,7 @@ def prepare_refresh(resource_id: ResourceId, page_id: ResourceId):
 
 
 def refresh_events(workspace, doc, page, force=False):
-    batch = CalculationBatch()
+    batch = CalculationBatch(widget["source"] for widget in page["widgets"])
     started = time.monotonic()
 
     def execute(widget):
@@ -136,7 +140,7 @@ def refresh_events(workspace, doc, page, force=False):
         except Exception:
             logger.exception("Dashboard widget execution failed | widget=%s", widget["id"])
             value = {"error": "Widget execution failed. Refresh to retry."}
-        logger.info("Dashboard widget ready | widget=%s | elapsed=%.3fs", widget["id"], time.monotonic() - widget_started)
+        logger.info("Dashboard widget finished | widget=%s | status=%s | elapsed=%.3fs", widget["id"], "error" if "error" in value else "ready", time.monotonic() - widget_started)
         return {"type": "widget", "id": widget["id"], "value": value, "revision": doc["revision"]}
 
     yield {"type": "start", "revision": doc["revision"], "total": len(page["widgets"])}

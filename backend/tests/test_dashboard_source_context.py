@@ -4,6 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _isolated_packages as _isolated_packages
@@ -11,11 +12,37 @@ from api.models.execution_context import (
     DatasetSelection,
     ExecutionContext,
     current_selection,
+    current_identity,
 )
 from api.routes import dashboard
 
 
 class DashboardSourceContextTests(unittest.TestCase):
+    def test_cached_dashboard_and_worker_identity_are_isolated_between_users(self):
+        registry = Mock()
+        registry.list.return_value = [{"revision": 3, "status": "approved"}]
+        registry.store.get.return_value = {"revision": 1, "value": {"items": [{"id": "metric", "revision": 1}]}}
+        item = Mock(id="metric", revision=1, title="Metric")
+        item.model_dump.return_value = {"id": "metric", "revision": 1, "kind": "kpi"}
+        registry.items.return_value = [item]
+        base = current_selection.get()
+        with patch.object(dashboard, "semantic_registry", registry), patch.object(dashboard, "dataset_service") as datasets, patch.object(dashboard, "analytics_engine") as engine:
+            datasets._catalog.return_value = {"datasets": self.entries}
+            datasets._snapshot.return_value = {}
+            datasets.query_snapshot.side_effect = lambda entry, version: datasets._snapshot(entry, version, include_index=False)
+            engine.execute.side_effect = lambda plan: SimpleNamespace(to_dict=lambda: {"success": True, "user": current_identity.get()["user_id"]})
+            for user in ("alice", "bob", "alice"):
+                identity = current_identity.set({"workspace_id": "default", "tenant_id": "t", "user_id": user, "role": "admin"})
+                selection = current_selection.set(DatasetSelection(base.context.model_copy(update={"user_id": user}), base.entry, base.snapshot))
+                try:
+                    result = dashboard.get_dashboard()
+                    self.assertTrue(result["widgets"])
+                    self.assertTrue(all(w["result"]["user"] == user for w in result["widgets"]))
+                finally:
+                    current_selection.reset(selection)
+                    current_identity.reset(identity)
+            self.assertEqual(engine.execute.call_count, 4)
+
     def test_publication_status_retains_dataset_context_for_repeated_widget_ids(self):
         from api.routes import semantic
 
@@ -93,6 +120,7 @@ class DashboardSourceContextTests(unittest.TestCase):
         ):
             datasets._catalog.return_value = {"datasets": self.entries}
             datasets._snapshot.return_value = {}
+            datasets.query_snapshot.side_effect = lambda entry, version: datasets._snapshot(entry, version, include_index=False)
             engine.execute.return_value.to_dict.return_value = {"success": True}
             response = dashboard.get_dashboard(refresh=True)
         definitions = [widget["definition"] for widget in response["widgets"]]
@@ -128,6 +156,7 @@ class DashboardSourceContextTests(unittest.TestCase):
                 "datasets": {"alpha": self.entries["alpha"]}
             }
             datasets._snapshot.return_value = {"rows": [], "columns": []}
+            datasets.query_snapshot.side_effect = lambda entry, version: datasets._snapshot(entry, version, include_index=False)
             engine.execute.return_value.to_dict.return_value = {"success": True}
             response = dashboard.get_dashboard(refresh=True)
         definition = response["widgets"][0]["definition"]

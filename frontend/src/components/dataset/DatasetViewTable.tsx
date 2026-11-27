@@ -12,9 +12,9 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { DatasetItem, DatasetRow } from '../../types/dataset';
-import { getDatasetData } from '../../services/datasetService';
+import { getDatasetPreview } from '../../services/datasetService';
 import { getApiErrorMessage } from '../../services/api';
-import { DatasetStatusBadge } from './DatasetStatusBadge';
+import { DatasetIndexStatus } from './DatasetStatusBadge';
 import { agentActivityStore } from '../../services/agentActivityStore';
 
 interface DatasetViewTableProps {
@@ -65,7 +65,7 @@ export const DatasetViewTable: React.FC<DatasetViewTableProps> = ({
     setIsLoading(true);
     setError(null);
     try {
-      const data = await getDatasetData(
+      const data = await getDatasetPreview(
         dataset.id,
         currentPage,
         pageSize,
@@ -239,17 +239,7 @@ export const DatasetViewTable: React.FC<DatasetViewTableProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <DatasetStatusBadge
-            type="embedding"
-            status={dataset.embeddingStatus}
-            chunkCount={dataset.embeddingCount}
-          />
-          <DatasetStatusBadge
-            type="hana"
-            status={dataset.hanaSyncStatus}
-          />
-        </div>
+        <DatasetIndexStatus dataset={dataset} />
       </div>
 
       {/* Table Action & Filter Toolbar */}

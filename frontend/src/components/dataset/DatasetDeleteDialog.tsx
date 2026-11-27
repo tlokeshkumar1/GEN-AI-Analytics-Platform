@@ -238,6 +238,7 @@ export const DatasetDeleteDialog: React.FC<DatasetDeleteDialogProps> = ({
                   <li>Semantic models & analytics in PLATFORM_METADATA</li>
                   <li>Catalog entries in DATASETS_METADATA</li>
                   <li>High-dimensional embeddings in VECTOR_TABLE</li>
+                  <li>This dataset's saved KPI and chart placements in My Files dashboards</li>
                   <li>Local version files, snapshots, and runtime caches</li>
                 </ul>
               </div>

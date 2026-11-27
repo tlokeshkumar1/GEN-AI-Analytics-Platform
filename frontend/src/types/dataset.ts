@@ -15,7 +15,7 @@ export interface DatasetColumn {
 }
 
 export type EmbeddingStatus = 'Ready' | 'Pending' | 'Indexing' | 'Error';
-export type HanaSyncStatus = 'Ready' | 'Pending' | 'Error';
+export type HanaSyncStatus = 'Ready' | 'Pending' | 'Error' | 'Blocked';
 
 export interface DatasetItem {
   id: string;
@@ -40,6 +40,8 @@ export interface DatasetItem {
   versions?: DatasetVersion[];
   embeddingStatus?: EmbeddingStatus;
   embeddingCount?: number;
+  embeddingTotal?: number;
+  embeddingError?: string | null;
   hanaSyncStatus?: HanaSyncStatus;
   isActive?: boolean;
 }

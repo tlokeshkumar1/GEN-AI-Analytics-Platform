@@ -132,7 +132,7 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
     const isProcessing =
       activeDataset.embeddingStatus === 'Indexing' ||
       activeDataset.embeddingStatus === 'Pending' ||
-      activeDataset.hanaSyncStatus === 'Pending';
+      (activeDataset.hanaSyncStatus === 'Pending' && activeDataset.embeddingStatus !== 'Error');
     if (!isProcessing) return;
 
     const interval = setInterval(async () => {
@@ -141,12 +141,16 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
         if (
           status.embeddingStatus !== activeDataset.embeddingStatus ||
           status.hanaSyncStatus !== activeDataset.hanaSyncStatus ||
+          status.embeddingCount !== activeDataset.embeddingCount ||
+          status.embeddingError !== activeDataset.embeddingError ||
           status.currentVersion !== activeDataset.currentVersion
         ) {
           const updated = {
             ...activeDataset,
             embeddingStatus: status.embeddingStatus,
             embeddingCount: status.embeddingCount,
+            embeddingTotal: status.embeddingTotal,
+            embeddingError: status.embeddingError,
             hanaSyncStatus: status.hanaSyncStatus,
           };
           if (updated) {
@@ -161,7 +165,7 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
             } else if (updated.embeddingStatus === 'Ready') {
               setMessage(`Vector indexing complete for ${updated.name}. Full AI search is ready.`);
             } else if (updated.embeddingStatus === 'Error') {
-              setMessage(`Embedding generation encountered an issue; chat is using current source text.`);
+              setMessage(updated.embeddingError || 'Embedding generation encountered an issue; chat is using current source text.');
             }
           }
         }
@@ -238,6 +242,13 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
       setRefreshTrigger(n => n + 1);
     } catch (err) {
       setError(getApiErrorMessage(err, 'Version operation failed.'));
+      if (action === 'reindex') {
+        try {
+          const status = await getDatasetStatus(activeDataset.id, activeDataset.currentVersion);
+          setActiveDataset(previous => previous?.id === activeDataset.id && previous.currentVersion === activeDataset.currentVersion ? { ...previous, ...status } : previous);
+          setDatasets(previous => previous.map(dataset => dataset.id === activeDataset.id ? { ...dataset, ...status } : dataset));
+        } catch { /* Keep the original operation error if status cannot be refreshed. */ }
+      }
     } finally {
       setIsBusy(false);
     }
@@ -247,7 +258,7 @@ export const DatasetIngestion: React.FC<DatasetIngestionProps> = ({ onNavigate }
   const getPipelineStep = () => {
     if (!activeDataset) return 1;
     if (activeDataset.embeddingStatus === 'Ready' && activeDataset.hanaSyncStatus === 'Ready') return 4;
-    if (activeDataset.embeddingStatus === 'Indexing' || activeDataset.hanaSyncStatus === 'Pending') return 3;
+    if (activeDataset.embeddingStatus === 'Indexing' || (activeDataset.hanaSyncStatus === 'Pending' && activeDataset.embeddingStatus !== 'Error')) return 3;
     return 2;
   };
   const activeStep = getPipelineStep();

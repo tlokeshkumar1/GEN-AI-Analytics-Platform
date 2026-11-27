@@ -125,7 +125,7 @@ describe('My Files', () => {
     }
     // Archive/trash remain reachable without eagerly fetching their contents.
     expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Recycle bin' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deleted Files' })).toBeTruthy();
     fireEvent.click(screen.getByText('Add Files'));
     expect(screen.getByRole('dialog', { name: 'Create folder' })).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reports' } });

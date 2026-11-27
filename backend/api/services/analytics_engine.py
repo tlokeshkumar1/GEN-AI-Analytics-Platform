@@ -277,6 +277,10 @@ class AnalyticsEngine:
             if measure.field == "*" and measure.aggregation != "COUNT":
                 raise ValueError("Only COUNT may use the row identifier '*'")
             column = "*" if measure.field == "*" else field(measure.field)
+            if measure.field != "*" and measure.aggregation in ("SUM", "AVG", "MIN", "MAX", "STDDEV", "VAR") and textual(measure.field):
+                # Older uploads may have numeric measures stored as NVARCHAR.
+                # Execute against the typed pinned snapshot without a failed SQL round trip.
+                return None
             aggregate = (
                 f"COUNT(DISTINCT {column})"
                 if measure.aggregation == "COUNT_DISTINCT"

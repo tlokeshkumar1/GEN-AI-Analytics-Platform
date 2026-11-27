@@ -344,10 +344,10 @@ class DatasetTests(unittest.TestCase):
         self.addCleanup(release.set)
         original_index = self.service._index
 
-        def wait_for_release(*args):
+        def wait_for_release(*args, **kwargs):
             if not release.wait(10):
                 raise TimeoutError("The asynchronous test did not release indexing")
-            return original_index(*args)
+            return original_index(*args, **kwargs)
 
         with patch.object(self.service, "_index", side_effect=wait_for_release):
             try:

@@ -512,6 +512,33 @@ MAX_UPLOAD_SIZE_MB=50
 
 ## Local Development Setup
 
+Read performance is measured against the deployment and workload, not a fixed
+sample row count. Current table browsing uses `/api/datasets/{id}/preview`, which
+filters, sorts and pages in HANA. Editing and historical versions keep their
+immutable snapshot paths. SQL-supported executive analytics bind metadata without
+downloading rows. Unsupported in-memory calculations above
+`MAX_IN_MEMORY_ANALYTICS_ROWS` (default 100,000) fail explicitly rather than loading
+millions of rows into API memory; this does not limit HANA table size.
+
+For a real 100-user / 10-million-row preview benchmark, provide a JSON users file
+with one entry per distinct test account, using environment variable names for
+tokens (never tokens in the file):
+
+```json
+[{"token_env":"TEST_USER_001_TOKEN","dataset_id":"your-dataset-id","expected_rows":10000000}]
+```
+
+```powershell
+python scripts/benchmark_reads.py --base-url https://your-staging-app --users-file test-users.json --users 100 --min-dataset-rows 10000000 --p95-ms 2000 --report ci-results/read-load.json
+```
+
+The runner verifies distinct authenticated users, row counts and page bounds, and
+reports failures, throughput and p50/p95/p99 latency. The default workload covers
+pages 1–3 with 50 rows; specify `--max-page` for deeper paging. Include
+`denied_dataset_id` in an account entry to test cross-account denial. A passing
+local/mocked test is not proof of production capacity. Charts, pinned historical
+dashboards, ingestion and mixed workloads require separate deployment benchmarks.
+
 ### 1. Backend (FastAPI API + Job Worker)
 
 ```bash

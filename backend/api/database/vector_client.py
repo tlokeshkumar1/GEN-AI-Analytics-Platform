@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Optional
 import json
 import threading
+import time
 from api.database.hana_client import hana_client
 from api.utils.logger import get_logger
 
@@ -30,15 +31,19 @@ class HANAVectorClient:
             raise ValueError("Every chunk must have a matching embedding")
         from api.database.connection import db_manager
 
+        started = time.monotonic()
         conn = db_manager.get_connection()
         if conn is None:
             raise RuntimeError("HANA vector database is unavailable")
         cursor = None
         try:
+            logger.info("HANA vector sync started | vectors=%s | connection_wait=%.3fs", len(chunks), time.monotonic() - started)
             conn.setautocommit(False)
             cursor = conn.cursor()
             prefix = f"{dataset_id}:v{version}:"
+            stage = time.monotonic()
             cursor.execute("DELETE FROM VECTOR_TABLE WHERE ID LIKE ?", (prefix + "%",))
+            logger.info("HANA vector replacement cleared | elapsed=%.3fs", time.monotonic() - stage)
             metadata = json.dumps(
                 {
                     "dataset_id": dataset_id,
@@ -96,6 +101,7 @@ class HANAVectorClient:
                 total = len(chunks)
                 for start in range(0, total, batch_size):
                     end = min(start + batch_size, total)
+                    stage = time.monotonic()
                     cursor.executemany(
                         sql,
                         [
@@ -103,19 +109,22 @@ class HANAVectorClient:
                             for i in range(start, end)
                         ],
                     )
-                    if end % 2560 == 0 or end == total:
-                        logger.info(
-                            f"HANA sync progress: {end}/{total} vectors inserted into VECTOR_TABLE"
-                        )
+                    logger.info(
+                        "HANA sync progress: %s/%s vectors staged in VECTOR_TABLE | batch_elapsed=%.3fs",
+                        end, total, time.monotonic() - stage,
+                    )
 
+            stage = time.monotonic()
+            logger.info("HANA vector commit started | vectors=%s", len(chunks))
             conn.commit()
+            logger.info("HANA vector sync committed | vectors=%s | commit_elapsed=%.3fs | total_elapsed=%.3fs", len(chunks), time.monotonic() - stage, time.monotonic() - started)
             cursor.close()
             cursor = None
         except Exception:
             try:
                 conn.rollback()
             finally:
-                conn.close()
+                db_manager.discard_connection(conn)
             raise
         else:
             db_manager.return_connection(conn)

@@ -66,8 +66,10 @@ def save_preferences(body: Preferences):
 def tree(deleted: bool = False, archived: bool = False):
     started = time.monotonic()
     workspace = ContentWorkspace()
-    workspace.register()
-    result = workspace.tree(deleted, archived)
+    # Nested metadata reads share one connection and one commit.
+    with workspace.store.transaction():
+        workspace.register()
+        result = workspace.tree(deleted, archived)
     logger.info("File tree loaded | items=%s | deleted=%s | archived=%s | elapsed=%.3fs", len(result), deleted, archived, time.monotonic() - started)
     return result
 

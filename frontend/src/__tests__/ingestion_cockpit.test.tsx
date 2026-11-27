@@ -8,6 +8,7 @@ import { uploadDatasetFileStream } from '../services/uploadService';
 
 vi.mock('../services/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
+  getApiErrorMessage: (error: Error) => error.message,
 }));
 
 beforeEach(() => {
@@ -40,7 +41,8 @@ describe('AIAgentIngestionStepper sequential stages & first-upload publish', () 
     );
     expect(screen.getByText('Storage synchronization failed')).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain('storage synchronization needs a retry');
-    expect((screen.getByRole('button', { name: /Publish on Dashboard/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: /Publish Selected Widgets/i })).toBeNull();
+    expect(screen.getByText(/Complete ingestion and semantic review before approving/)).toBeTruthy();
     expect(api.post).not.toHaveBeenCalled();
   });
 
@@ -73,8 +75,8 @@ describe('AIAgentIngestionStepper sequential stages & first-upload publish', () 
   });
 
   it('selects the uploaded dataset and requires a destination before publishing', async () => {
-    vi.mocked(api.get).mockImplementation(async url => ({ data: url.includes('/recommendations') ? [{ id: 'rec_1', title: 'Total Open Issues', kind: 'kpi', revision: 1, semantic_revision: 1, dataset_id: 'ds-first-upload', version: 1, status: 'approved', reviewer: 'alice' }] : [] }));
-    vi.mocked(api.post).mockResolvedValue({ data: { status: 'success' } });
+    vi.mocked(api.get).mockImplementation(async url => ({ data: url.includes('/recommendations') ? [{ id: 'rec_1', title: 'Total Open Issues', kind: 'kpi', revision: 1, semantic_revision: 1, dataset_id: 'ds-first-upload', version: 1, status: 'approved', reviewer: 'alice', query_plan: { metric: 'OpenIssues', aggregation: 'SUM' } }] : [] }));
+    vi.mocked(api.post).mockResolvedValue({ data: { success: true, data: [{ OpenIssues: 18 }], summary: {}, records_matched: 1, execution_time_ms: 1, execution_backend: 'hana' } });
     const onClose = vi.fn();
     const onNavigateToDashboard = vi.fn();
     const onNavigateToBuildKpi = vi.fn();
@@ -121,10 +123,11 @@ describe('AIAgentIngestionStepper sequential stages & first-upload publish', () 
     });
 
     expect(screen.getByRole('button', { name: /Build Your KPI/i })).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: /Publish on Dashboard \(1\)/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Publish Selected Widgets \(1\)/i })).toHaveProperty('disabled', false));
+    fireEvent.click(screen.getByRole('button', { name: /Publish Selected Widgets \(1\)/i }));
 
     expect(await screen.findByRole('dialog', { name: 'Publish to dashboard' })).toBeTruthy();
-    expect(api.post).not.toHaveBeenCalled();
+    expect(vi.mocked(api.post).mock.calls.every(([url]) => url === '/insights/execute')).toBe(true);
     expect(onClose).not.toHaveBeenCalled();
     expect(onNavigateToDashboard).not.toHaveBeenCalled();
   });

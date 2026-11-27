@@ -89,7 +89,9 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
       return Promise.resolve({ data: [] });
     });
 
-    vi.mocked(api.post).mockImplementation((url: string) => {
+    vi.mocked(api.post).mockImplementation((url: string, body: any) => {
+      if (url === '/insights/definitions') return Promise.resolve({ data: { ...body, revision: 2, status: 'proposed' } });
+      if (url.endsWith('/review')) return Promise.resolve({ data: { revision: 2, status: 'approved', reviewer: 'alice' } });
       if (url === '/insights/execute') {
         return Promise.resolve({
           data: {
@@ -183,9 +185,12 @@ describe('Build Your Dashboards (Combined Visual KPI Builder & Select Drag and D
       expect(screen.getByRole('button', { name: /Publish Selected Widgets/i })).toBeTruthy();
     });
 
-    // 9. Step 5: Publish widget appends to Executive Dashboard (preserves existing widgets)
+    // Review the saved generated revision before choosing a publication destination.
     const publishBtn = screen.getByRole('button', { name: /Publish Selected Widgets/i });
     fireEvent.click(screen.getByRole('checkbox', { name: /for publishing/ }));
+    expect(publishBtn).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('button', { name: /^Approve (?!selected$)/ }));
+    await waitFor(() => expect(publishBtn).toHaveProperty('disabled', false));
     fireEvent.click(publishBtn);
 
     expect(await screen.findByRole('dialog', { name: 'Publish to dashboard' })).toBeTruthy();

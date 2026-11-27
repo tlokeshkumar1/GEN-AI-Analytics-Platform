@@ -198,7 +198,7 @@ export function ContentFiles({
   userKey: string;
 }) {
   const [view, setView] = useState('My Files');
-  const bin = view === 'Recycle bin';
+  const bin = view === 'Deleted Files';
   const archive = view === 'Archive';
   const flat = view !== 'My Files';
   const activeTree = useFiles();
@@ -289,7 +289,7 @@ export function ContentFiles({
     void fold(current.includes(id) ? current.filter((k) => k !== id) : [...current, id]);
   }
   async function trash(f: FileEntry) {
-    if (!bin && !window.confirm('Move ' + f.name + ' and its contents to the recycle bin?')) return;
+    if (!bin && !window.confirm('Move ' + f.name + ' and its contents to Deleted Files?')) return;
     try {
       await api.patch('/content/files/' + f.id, { revision: f.revision, deleted: !bin });
       setMenu('');
@@ -312,7 +312,7 @@ export function ContentFiles({
   function row(f: FileEntry): React.ReactNode {
     return (
       <li key={f.id}>
-        <div className="flex items-center gap-1 min-w-0">
+        <div className="group/file-row flex items-center gap-1 min-w-0">
           <button
             className={sidebarItem(active === 'dashboards/' + f.id)}
             aria-current={active === 'dashboards/' + f.id ? 'page' : undefined}
@@ -323,9 +323,6 @@ export function ContentFiles({
                   setView('My Files');
                   setQuery(f.name);
                 } else toggle(f.id);
-                void api
-                  .post('/content/files/' + f.id + '/opened')
-                  .catch((err) => setMessage(fileError(err)));
               } else navigate('dashboards/' + f.id);
             }}
             disabled={bin || archive}
@@ -347,7 +344,7 @@ export function ContentFiles({
               aria-haspopup="menu"
               aria-expanded={menu === f.id}
               aria-controls={menu === f.id ? 'file-actions-menu-' + f.id : undefined}
-              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md outline-none transition-colors hover:bg-[var(--color-background-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${menu === f.id ? 'bg-[var(--color-primary-soft)] text-[var(--color-primary)]' : 'text-[var(--color-text-muted)]'}`}
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md outline-none transition-[opacity,background-color,color] group-hover/file-row:opacity-100 group-focus-within/file-row:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-[var(--color-background-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] ${menu === f.id ? 'opacity-100 bg-[var(--color-primary-soft)] text-[var(--color-primary)]' : 'opacity-0 text-[var(--color-text-muted)]'}`}
               onClick={event => {
                 menuAnchor.current = event.currentTarget;
                 setMenu(menu === f.id ? '' : f.id);
@@ -432,20 +429,6 @@ export function ContentFiles({
     <section aria-label="Personal files" className="text-xs py-1">
       <SidebarSection label="My Files" icon="folder" active={isActive}
         open={!folded.includes('root')} toggle={() => toggle('root')}>
-          {[
-            ...(activeFiles.some(f => f.permission && f.permission !== 'owner') ? ['Shared with me'] : []),
-            ...(activeFiles.some(f => f.favourite) ? ['Favourites'] : []),
-            ...(activeFiles.some(f => f.last_opened) ? ['Recently viewed'] : []),
-            'Archive',
-            'Recycle bin',
-          ].map(v => <button key={v} className={sidebarItem(view === v)} onClick={() => {
-            setView(v); setQuery(''); setMenu('');
-          }}>{v}</button>)}
-          {flat && (
-            <button className="block" onClick={() => setView('My Files')}>
-              ← {view}
-            </button>
-          )}
           {!!files.length && (
             <div className="relative mx-1 my-2 flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-background-subtle)] text-[var(--color-text-muted)] transition focus-within:border-[var(--color-primary)] focus-within:bg-[var(--color-background-surface)] focus-within:ring-2 focus-within:ring-[var(--color-primary-muted)]">
               <Search aria-hidden="true" size={14} className="pointer-events-none absolute left-2.5" />
@@ -458,6 +441,17 @@ export function ContentFiles({
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
+          )}
+          {[
+            ...(activeFiles.some(f => f.permission && f.permission !== 'owner') ? ['Shared with me'] : []),
+            ...(activeFiles.some(f => f.favourite) ? ['Favourites'] : []),
+          ].map(v => <button key={v} className={sidebarItem(view === v)} onClick={() => {
+            setView(v); setQuery(''); setMenu('');
+          }}>{v}</button>)}
+          {flat && (
+            <button className="block" onClick={() => setView('My Files')}>
+              ← {view}
+            </button>
           )}
           {loading && <p role="status">Loading files…</p>}
           {message && (
@@ -480,14 +474,7 @@ export function ContentFiles({
                   ? f.favourite
                   : view === 'Shared with me'
                     ? f.permission !== 'owner'
-                    : view === 'Recently viewed'
-                      ? f.last_opened
-                      : true,
-              )
-              .sort((a, b) =>
-                view === 'Recently viewed'
-                  ? (b.last_opened || '').localeCompare(a.last_opened || '')
-                  : 0,
+                    : true,
               )
               .filter((f) =>
                 query
@@ -499,6 +486,9 @@ export function ContentFiles({
           <button className={sidebarItem()} onClick={() => {
             setView('My Files'); setForm({ kind: 'folder', parent: null });
           }}><span className="flex items-center gap-2.5"><span aria-hidden className="material-symbols-outlined text-[17px]">add</span><span>Add Files</span></span></button>
+          {['Archive', 'Deleted Files'].map(v => <button key={v} className={sidebarItem(view === v)} onClick={() => {
+            setView(v); setQuery(''); setMenu('');
+          }}>{v}</button>)}
       </SidebarSection>
       {form && (
         <FileForm

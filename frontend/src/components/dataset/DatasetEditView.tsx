@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { DatasetItem, DatasetRow, DatasetColumn } from '../../types/dataset';
 import { getDatasetData, updateDatasetRows } from '../../services/datasetService';
-import { DatasetStatusBadge } from './DatasetStatusBadge';
+import { DatasetIndexStatus } from './DatasetStatusBadge';
 import { agentActivityStore } from '../../services/agentActivityStore';
 
 interface DatasetEditViewProps {
@@ -191,17 +191,7 @@ export const DatasetEditView: React.FC<DatasetEditViewProps> = ({
             {dataset.name} ({dataset.rowCount.toLocaleString()} rows)
           </span>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <DatasetStatusBadge
-            type="embedding"
-            status={dataset.embeddingStatus}
-            chunkCount={dataset.embeddingCount}
-          />
-          <DatasetStatusBadge
-            type="hana"
-            status={dataset.hanaSyncStatus}
-          />
-        </div>
+        <DatasetIndexStatus dataset={dataset} />
       </div>
 
       {/* Editor Action Header */}

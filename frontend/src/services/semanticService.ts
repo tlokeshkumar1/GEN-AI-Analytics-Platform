@@ -30,7 +30,7 @@ export interface SemanticModel {
 }
 
 const path = (id: string, version: number) => `/datasets/${id}/versions/${version}/semantics`;
-export const getSemanticModels = async (id: string, version: number) => (await api.get<SemanticModel[]>(path(id, version))).data;
+export const getSemanticModels = async (id: string, version: number) => (await api.get<SemanticModel[]>(path(id, version), { timeout: 20_000 })).data;
 export const proposeSemanticModel = async (id: string, version: number) => (await api.post<SemanticModel>(`${path(id, version)}/propose`)).data;
 export const saveSemanticModel = async (model: SemanticModel) => (await api.post<SemanticModel>(path(model.dataset_id, model.data_version), model)).data;
 export const reviewSemanticModel = async (model: SemanticModel, decision: 'approved' | 'rejected') =>
@@ -70,8 +70,8 @@ export interface ExecutionResult {
   execution_backend: string;
 }
 
-export const executePlan = async (plan: Record<string, unknown>, contextHeadersOverride?: Record<string, string>) =>
-  (await api.post<ExecutionResult>('/insights/execute', plan, { headers: contextHeadersOverride })).data;
+export const executePlan = async (plan: Record<string, unknown>, contextHeadersOverride?: Record<string, string>, signal?: AbortSignal) =>
+  (await api.post<ExecutionResult>('/insights/execute', plan, { headers: contextHeadersOverride, ...(signal ? { signal, timeout: 90_000 } : {}) })).data;
 
 export const getRecommendations = async (all = false, datasetId?: string) => {
   const params = new URLSearchParams();

@@ -96,7 +96,7 @@ class ProgressiveRefreshTests(TestCase):
         self.addCleanup(current_identity.reset, token)
 
     def widgets(self, count):
-        return [{"id": str(i), "digest": "pinned", "source": {"id": str(i), "dataset_id": "ds", "version": 1, "semantic_revision": 1}} for i in range(count)]
+        return [{"id": str(i), "digest": "pinned", "source": {"id": str(i), "revision": 1, "dataset_id": "ds", "version": 1, "semantic_revision": 1}} for i in range(count)]
 
     def test_four_widgets_run_concurrently_with_request_identity(self):
         barrier = Barrier(4)
